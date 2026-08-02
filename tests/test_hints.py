@@ -140,6 +140,14 @@ class TestGenerator:
         d = Decision(Action.WAIT, 0, 1, None, "r")
         assert gen.generate(d, lin_match(), LIN_REF, Recognition(problem_text=""), []) == ""
 
+    def test_completed_problem_gets_praise(self, db):
+        gen = HintGenerator(EchoLLMClient(), db)
+        text = gen.generate(
+            decision(1, target=3), lin_match(), LIN_REF, Recognition(problem_text="p"), []
+        )
+        assert "훌륭" in text
+        assert not leaks_answer(text, LIN_REF, 3)
+
     def test_llm_fallback_leak_gets_regenerated(self, db):
         # no templates match concepts=[] → LLM path; first phrase leaks, second is clean
         llm = EchoLLMClient(

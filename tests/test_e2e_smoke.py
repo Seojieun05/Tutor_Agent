@@ -42,14 +42,8 @@ STATE_WRONG = {
     "attempt_count": 1,
     "previous_hint_effective": None,
 }
-STATE_PROGRESS = {
-    "current_step": "계수로 나누기",
-    "last_correct_step": 1,
-    "status": "CORRECT",
-    "misconception": None,
-    "attempt_count": 1,
-    "previous_hint_effective": None,
-}
+# (the progressed request needs no scripted estimate: the estimator's
+# symbolic fast path recognizes "3*x = 15" as reference step 1 on its own)
 
 
 class SpyStore(SessionStore):
@@ -83,7 +77,7 @@ def scripted_deps(db):
     llm = EchoLLMClient(
         {
             "recognize": [WRONG, WRONG, PROGRESSED],
-            "estimate": [STATE_WRONG, STATE_PROGRESS],  # 2nd request uses the no-LLM pre-check
+            "estimate": [STATE_WRONG],  # 2nd request: pre-check; 3rd: symbolic fast path
         }
     )
     speaker = NullSpeaker()
@@ -167,5 +161,7 @@ async def test_full_hint_flow(scripted_deps):
             until_append = ops[i + 1 : ops.index("append_hint", i)]
             assert "get_state" in until_append and "get_history" in until_append
 
-    # solver never ran: EXACT tier provided a verified reference (spec rule 2).
+    # solver never ran: EXACT tier provided a verified reference (spec rule 2);
+    # exactly one LLM diagnosis total (pre-check + symbolic fast path covered the rest)
     assert "solve" not in llm.calls
+    assert llm.calls.count("estimate") == 1

@@ -62,6 +62,10 @@ class HintGenerator:
         if decision.action in FIXED_ACTIONS:
             return FIXED_ACTIONS[decision.action]
 
+        if reference is not None and decision.target_step > len(reference.steps):
+            # every reference step is done — nothing left to hint at
+            return "훌륭해요, 문제를 끝까지 풀었네요! 어떻게 구했는지 스스로 설명해 볼까요?"
+
         slots = self._slots(decision, match, reference)
         given = {h.hint_text for h in history if h.hint_text}
 

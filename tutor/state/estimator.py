@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 
+from tutor.knowledge import mathnorm
 from tutor.knowledge.db import KnowledgeDB
 from tutor.knowledge.models import ReferenceSolution
 from tutor.llm.client import LLMClient
@@ -60,6 +61,10 @@ class StudentStateEstimator:
         if pre is not None:
             return pre
 
+        quick = self._rule_based_progress(rec, reference, prev_state)
+        if quick is not None:
+            return self._post_rules(quick, reference, prev_state)
+
         state = self.llm.run_with_tools(
             purpose="estimate",
             system=_SYSTEM,
@@ -103,6 +108,46 @@ class StudentStateEstimator:
                     "attempt_count": prev_state.attempt_count + 1,
                     "previous_hint_effective": False,
                 }
+            )
+        return None
+
+    def _rule_based_progress(
+        self,
+        rec: Recognition,
+        reference: ReferenceSolution,
+        prev_state: StudentState | None,
+    ) -> StudentState | None:
+        """Symbolic fast path: when the newest work line IS a reference step
+        (or just restates the problem), progress is decidable without an LLM.
+        Form comparison, not equivalence — '3*x + 5 = 20', '3*x = 15' and
+        'x = 5' are one equation but DIFFERENT pedagogical steps. Returns None
+        when actual diagnosis is needed."""
+
+        def same(a: str, b: str) -> bool:
+            return mathnorm.equations_same_form(a, b)
+
+        lcs = 0
+        for step in reference.steps:
+            if any(same(line, step.expression) for line in rec.student_work):
+                lcs = max(lcs, step.idx)
+        last = rec.student_work[-1]
+        last_step = next(
+            (s.idx for s in reference.steps if same(last, s.expression)), None
+        )
+        if last_step is not None and last_step == lcs and lcs >= 1:
+            return StudentState(
+                current_step=f"기준 풀이 {lcs}단계까지 완료",
+                last_correct_step=lcs,
+                status="CORRECT",
+                misconception=None,
+            )
+        if last_step is None and any(same(last, eq) for eq in rec.equations):
+            # newest line just restates the problem: no progress, nothing wrong
+            return StudentState(
+                current_step="문제를 옮겨 적음",
+                last_correct_step=lcs,
+                status="STUCK",
+                misconception=prev_state.misconception if prev_state else None,
             )
         return None
 

@@ -102,6 +102,70 @@ class TestPreChecks:
         assert state.status == "CONCEPT_ERROR"
 
 
+class TestRuleBasedProgress:
+    """The symbolic fast path: matching work lines need no LLM diagnosis."""
+
+    def test_progressed_work_is_correct_without_llm(self, db):
+        llm = EchoLLMClient()
+        est = StudentStateEstimator(llm, db)
+        rec = Recognition(
+            problem_text="p", equations=["3*x + 5 = 20"],
+            student_work=["3*x = 15"], confidence=0.9,
+        )
+        state = est.estimate(
+            rec=rec, reference=REFERENCE, prev_state=None, prev_work=None, history=[]
+        )
+        assert llm.calls == []
+        assert state.status == "CORRECT"
+        assert state.last_correct_step == 1
+
+    def test_solved_work_reaches_last_step(self, db):
+        est = StudentStateEstimator(EchoLLMClient(), db)
+        rec = Recognition(
+            problem_text="p", equations=["3*x + 5 = 20"],
+            student_work=["3*x = 15", "x = 5"], confidence=0.9,
+        )
+        state = est.estimate(
+            rec=rec, reference=REFERENCE, prev_state=None, prev_work=None, history=[]
+        )
+        assert (state.status, state.last_correct_step) == ("CORRECT", 2)
+
+    def test_same_solution_set_is_not_the_same_step(self, db):
+        # 'x = 5' as the only line is step 2, never step 1 ('3*x = 15')
+        est = StudentStateEstimator(EchoLLMClient(), db)
+        rec = Recognition(
+            problem_text="p", equations=["3*x + 5 = 20"],
+            student_work=["x = 5"], confidence=0.9,
+        )
+        state = est.estimate(
+            rec=rec, reference=REFERENCE, prev_state=None, prev_work=None, history=[]
+        )
+        assert state.last_correct_step == 2
+
+    def test_restated_problem_is_stuck_without_llm(self, db):
+        llm = EchoLLMClient()
+        est = StudentStateEstimator(llm, db)
+        rec = Recognition(
+            problem_text="p", equations=["3*x + 5 = 20"],
+            student_work=["3*x + 5 = 20"], confidence=0.9,
+        )
+        state = est.estimate(
+            rec=rec, reference=REFERENCE, prev_state=None, prev_work=None, history=[]
+        )
+        assert llm.calls == []
+        assert (state.status, state.last_correct_step) == ("STUCK", 0)
+
+    def test_wrong_work_still_needs_llm(self, db):
+        llm = EchoLLMClient()
+        est = StudentStateEstimator(llm, db)
+        rec = Recognition(
+            problem_text="p", equations=["3*x + 5 = 20"],
+            student_work=["3*x = 20 + 5"], confidence=0.9,
+        )
+        est.estimate(rec=rec, reference=REFERENCE, prev_state=None, prev_work=None, history=[])
+        assert llm.calls == ["estimate"]
+
+
 class TestLLMPath:
     def test_llm_called_and_post_rules_applied(self, db):
         llm = EchoLLMClient(

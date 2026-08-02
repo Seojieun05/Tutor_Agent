@@ -1,6 +1,7 @@
 from tutor.knowledge.mathnorm import (
     compute_answer,
     equations_equivalent,
+    equations_same_form,
     expressions_equivalent,
     instantiate,
     match_template,
@@ -53,6 +54,15 @@ class TestEquivalence:
         assert equations_equivalent(
             "d/dx(x^3) + d/dx(2x)", "Derivative(x**3, x) + Derivative(2*x, x)"
         )
+
+    def test_same_form_distinguishes_rearrangement_steps(self):
+        # equivalent equations, but different written steps
+        assert not equations_same_form("3*x + 5 = 20", "3*x = 15")
+        assert not equations_same_form("3*x = 15", "x = 5")
+        # same step, cosmetic differences
+        assert equations_same_form("3x = 15", "3*x = 15")
+        assert equations_same_form("15 = 3*x", "3*x = 15")
+        assert equations_same_form("x = 5", "x = 5.0")
 
     def test_strict_mode_rejects_scalar_multiple(self):
         assert not equations_equivalent("6*x + 10 = 40", "3*x + 5 = 20", allow_scale=False)

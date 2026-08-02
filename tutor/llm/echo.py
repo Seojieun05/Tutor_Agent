@@ -7,9 +7,18 @@ queues to script multi-turn scenarios.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Sequence
 
 from pydantic import BaseModel
+
+# each DISTINCT image seen by `recognize` advances one stage of this scripted
+# worksheet, so the h → n → h demo shows escalation AND fading offline
+_WORK_STAGES = [
+    ["3*x = 20 + 5"],  # sign_flip_on_move mistake
+    ["3*x = 15"],  # corrected step 1
+    ["3*x = 15", "x = 5"],  # solved
+]
 
 _DEFAULTS: dict[str, dict[str, Any]] = {
     "recognize": {
@@ -46,9 +55,12 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
 class EchoLLMClient:
     def __init__(self, responses: dict[str, list[BaseModel | dict[str, Any]]] | None = None):
         self._queues = {k: list(v) for k, v in (responses or {}).items()}
+        self._image_stage: dict[str, int] = {}  # image hash → progress stage
         self.calls: list[str] = []  # purposes, in order — tests assert on this
 
-    def _next(self, purpose: str, schema: type[BaseModel]) -> BaseModel:
+    def _next(
+        self, purpose: str, schema: type[BaseModel], images: Sequence[bytes] = ()
+    ) -> BaseModel:
         self.calls.append(purpose)
         queue = self._queues.get(purpose)
         if queue:
@@ -56,6 +68,14 @@ class EchoLLMClient:
             if isinstance(item, BaseModel):
                 return schema.model_validate(item.model_dump())
             return schema.model_validate(item)
+        if purpose == "recognize" and images:
+            key = hashlib.sha1(images[0]).hexdigest()
+            stage = self._image_stage.setdefault(
+                key, min(len(self._image_stage), len(_WORK_STAGES) - 1)
+            )
+            return schema.model_validate(
+                dict(_DEFAULTS["recognize"], student_work=_WORK_STAGES[stage])
+            )
         if purpose in _DEFAULTS:
             return schema.model_validate(_DEFAULTS[purpose])
         raise KeyError(f"EchoLLMClient has no canned response for purpose {purpose!r}")
@@ -69,7 +89,7 @@ class EchoLLMClient:
         images: Sequence[bytes] = (),
         schema: type[BaseModel],
     ) -> BaseModel:
-        return self._next(purpose, schema)
+        return self._next(purpose, schema, images)
 
     def run_with_tools(
         self,
@@ -81,4 +101,4 @@ class EchoLLMClient:
         schema: type[BaseModel],
         max_rounds: int = 6,
     ) -> BaseModel:
-        return self._next(purpose, schema)
+        return self._next(purpose, schema, images)

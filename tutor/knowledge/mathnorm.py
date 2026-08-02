@@ -117,6 +117,33 @@ def equations_equivalent(a: str, b: str, allow_scale: bool = True) -> bool:
     return False
 
 
+def equations_same_form(a: str, b: str) -> bool:
+    """Same WRITTEN equation, up to per-side simplification and side swap.
+
+    All correct rearrangements of one equation share a proportional residual,
+    so residual equivalence cannot tell '3*x + 5 = 20' from '3*x = 15'. This
+    compares the two sides structurally: '15 = 3*x' matches '3*x = 15', but
+    '3*x + 5 = 20' does not — they are different pedagogical steps.
+    """
+    try:
+        sa, sb = _split_sides(a), _split_sides(b)
+        if (sa is None) != (sb is None):
+            return False
+        if sa is None:
+            return sympy.simplify(
+                parse_expression(a).doit() - parse_expression(b).doit()
+            ) == 0
+        la, ra = (parse_expression(s) for s in sa)
+        lb, rb = (parse_expression(s) for s in sb)
+
+        def eq(x: sympy.Expr, y: sympy.Expr) -> bool:
+            return sympy.simplify(x - y) == 0
+
+        return (eq(la, lb) and eq(ra, rb)) or (eq(la, rb) and eq(ra, lb))
+    except (ParseError, Exception):
+        return False
+
+
 def _split_sides(s: str) -> tuple[str, str] | None:
     s = _preprocess(s)
     if "=" not in s:
