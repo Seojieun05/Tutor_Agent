@@ -13,7 +13,8 @@ def state(**kw) -> StudentState:
 
 def hint(step=1, level=1, action="SOCRATIC_QUESTION", effective=None, hint_id=1):
     return HintRecord(
-        id=hint_id, step=step, level=level, action=action, hint_text="…", effective=effective
+        id=hint_id, problem_hash="p", step=step, level=level, action=action,
+        hint_text="…", effective=effective,
     )
 
 

@@ -33,6 +33,14 @@ WRONG = {
     "confidence": 0.95,
 }
 PROGRESSED = dict(WRONG, student_work=["3*x = 15"])
+# a DIFFERENT problem (lin_002): its hash differs, so problem A's hint
+# history must not drive escalation here and the state must reset
+OTHER_PROBLEM = {
+    "problem_text": "다음 일차방정식을 푸시오: 2x - 7 = 3",
+    "equations": ["2*x - 7 = 3"],
+    "student_work": [],
+    "confidence": 0.95,
+}
 
 STATE_WRONG = {
     "current_step": "상수항 이항",
@@ -55,9 +63,9 @@ class SpyStore(SessionStore):
         self.ops.append("get_state")
         return super().get_state()
 
-    def get_history(self, step=None):
+    def get_history(self, step=None, problem_hash=None):
         self.ops.append("get_history")
-        return super().get_history(step)
+        return super().get_history(step, problem_hash)
 
     def set_state(self, state):
         self.ops.append("set_state")
@@ -76,8 +84,8 @@ class SpyStore(SessionStore):
 def scripted_deps(db):
     llm = EchoLLMClient(
         {
-            "recognize": [WRONG, WRONG, PROGRESSED],
-            "estimate": [STATE_WRONG],  # 2nd request: pre-check; 3rd: symbolic fast path
+            "recognize": [WRONG, WRONG, PROGRESSED, OTHER_PROBLEM],
+            "estimate": [STATE_WRONG],  # 2nd: pre-check; 3rd: fast path; 4th: empty-work pre-check
         }
     )
     speaker = NullSpeaker()
@@ -152,6 +160,18 @@ async def test_full_hint_flow(scripted_deps):
             history = store.get_history()
             assert history[1].effective is True
             assert history[2].step == 2  # now targeting the next step
+
+            # 4th hint, a DIFFERENT problem: state reset, history scoped by
+            # hash — problem A's L1/L2 records must not escalate problem B.
+            issued = await request_hint(ws)
+            assert issued["level"] == 1
+            history = store.get_history()
+            hashes = {h.problem_hash for h in history}
+            assert len(hashes) == 2  # two distinct problems recorded
+            assert history[3].problem_hash != history[0].problem_hash
+            assert history[3].step == 1
+            assert store.get_state().status == "STUCK"  # fresh state, empty work
+            assert store.get_state().attempt_count == 1  # not carried from problem A
 
     # store discipline: state/history prefetched (via the store) right before
     # each decide — i.e. between set_state and append_hint.

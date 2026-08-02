@@ -199,10 +199,14 @@ class Session:
         jpeg = await self._request_capture()
         state = self.store.get_state() or StudentState()
         if jpeg is None:
-            decision = decide(state, self.store.get_history(), "RECOGNITION_FAILED")
+            cur_hash = self.ctx.hash if self.ctx is not None else ""
+            decision = decide(
+                state, self.store.get_history(problem_hash=cur_hash or None),
+                "RECOGNITION_FAILED",
+            )
             await self._deliver(decision, self.deps.hint_gen.generate(
                 decision, MatchResult(tier=Tier.NEW), None, Recognition(problem_text=""), []
-            ))
+            ), cur_hash)
             return
 
         rec = await asyncio.to_thread(self.deps.recognizer.recognize, jpeg)
@@ -210,8 +214,9 @@ class Session:
 
         # Diagnose before helping (spec rule 4). State/history are prefetched
         # here by the orchestrator — never fetched by the model itself.
+        # History is always scoped to THIS problem's hash.
         prev_state = self.store.get_state()
-        history = self.store.get_history()
+        history = self.store.get_history(problem_hash=ctx.hash)
         new_state = await asyncio.to_thread(
             self.deps.estimator.estimate,
             rec=rec,
@@ -223,8 +228,9 @@ class Session:
         )
         self.prev_work = rec.student_work
 
-        # Orchestrator-owned writes: state, then pending-hint effectiveness.
-        pending = self.store.pending_hint()
+        # Orchestrator-owned writes: state, then pending-hint effectiveness
+        # (only a pending hint of the SAME problem can be resolved).
+        pending = self.store.pending_hint(ctx.hash)
         self.store.set_state(new_state)
         # an UNCERTAIN estimate carries no evidence either way: keep the hint
         # pending rather than resolving its effectiveness on a blurry frame
@@ -235,14 +241,14 @@ class Session:
 
         # Always read state/history through the store right before the policy.
         current = self.store.get_state() or new_state
-        fresh_history = self.store.get_history()
+        fresh_history = self.store.get_history(problem_hash=ctx.hash)
         decision = decide(current, fresh_history, "HINT_REQUEST")
         log.info("decision: %s", decision)
 
         text = await asyncio.to_thread(
             self.deps.hint_gen.generate, decision, ctx.match, ctx.reference, rec, fresh_history
         )
-        await self._deliver(decision, text)
+        await self._deliver(decision, text, ctx.hash)
 
     async def _problem_context(self, rec: Recognition) -> ProblemContext:
         h = problem_hash(rec)
@@ -250,6 +256,13 @@ class Session:
             # Cached problem: reuse match/reference; student work stays fresh.
             self.ctx.recognition = rec
             return self.ctx
+        if self.ctx is not None:
+            # Different problem: the old student state/work/transcript are
+            # meaningless here — start fresh (history stays, scoped by hash).
+            log.info("problem changed (%s -> %s): resetting state", self.ctx.hash[:8], h[:8])
+            self.store.clear_state()
+            self.prev_work = None
+            self.last_transcript = None
         match = await asyncio.to_thread(self.deps.matcher.match, rec)
         reference = match.reference
         if reference is None:  # CONCEPT/NEW → Grok Solver (spec rule 2)
@@ -257,7 +270,7 @@ class Session:
         self.ctx = ProblemContext(hash=h, recognition=rec, match=match, reference=reference)
         return self.ctx
 
-    async def _deliver(self, decision: Decision, text: str) -> None:
+    async def _deliver(self, decision: Decision, text: str, problem_hash: str = "") -> None:
         if text:
             await self.ws.send(make_event("speech_state", {"state": "speaking"}))
             try:
@@ -269,6 +282,7 @@ class Session:
                 except Exception:
                     pass
         self.store.append_hint(
+            problem_hash=problem_hash,
             step=decision.target_step,
             level=decision.level,
             action=decision.action.value,

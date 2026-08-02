@@ -20,7 +20,10 @@ REFERENCE = ReferenceSolution(
 
 
 def pending_hint() -> HintRecord:
-    return HintRecord(id=1, step=1, level=1, action="SOCRATIC_QUESTION", hint_text="힌트", effective=None)
+    return HintRecord(
+        id=1, problem_hash="p", step=1, level=1, action="SOCRATIC_QUESTION",
+        hint_text="힌트", effective=None,
+    )
 
 
 class TestHintWasEffective:
