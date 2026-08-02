@@ -1,0 +1,16 @@
+{
+  "id": "deriv_002",
+  "problem_type": "derivative",
+  "problem_text": "다음 함수를 미분하시오: f(x) = 5x^2",
+  "equations": ["Derivative(5*x**2, x)"],
+  "parameters": {"a": "5", "n": "2"},
+  "answer": {"kind": "EXPRESSION", "value": "10*x"},
+  "source": "교과서 예제",
+  "template_id": "tmpl_deriv_power",
+  "concepts": ["differentiation"],
+  "solution": {
+    "steps": [
+      {"idx": 1, "description": "지수 2를 계수 5에 곱하고 지수를 1 줄인다", "expression": "10*x"}
+    ]
+  }
+}

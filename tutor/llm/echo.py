@@ -1,0 +1,84 @@
+"""EchoLLMClient: deterministic canned outputs, no network.
+
+Powers echo mode (no XAI_API_KEY) so the whole websocket pipeline runs
+end-to-end, and doubles as the test double — tests pass canned per-purpose
+queues to script multi-turn scenarios.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Sequence
+
+from pydantic import BaseModel
+
+_DEFAULTS: dict[str, dict[str, Any]] = {
+    "recognize": {
+        "problem_text": "다음 일차방정식을 푸시오: 3x + 5 = 20",
+        "equations": ["3*x + 5 = 20"],
+        "choices": [],
+        "diagram_conditions": [],
+        "student_work": ["3*x = 20 + 5"],
+        "uncertain_regions": [],
+        "confidence": 0.95,
+    },
+    "solve": {
+        "steps": [
+            {"idx": 1, "description": "양변에서 5를 빼서 x항만 남긴다", "expression": "3*x = 15"},
+            {"idx": 2, "description": "양변을 x의 계수 3으로 나눈다", "expression": "x = 5"},
+        ],
+        "final_answer": {"kind": "SCALAR", "value": "5"},
+        "concepts": ["linear_equation"],
+        "verified": False,
+        "origin": "grok",
+    },
+    "estimate": {
+        "current_step": "상수항 이항",
+        "last_correct_step": 0,
+        "status": "CONCEPT_ERROR",
+        "misconception": "sign_flip_on_move",
+        "attempt_count": 1,
+        "previous_hint_effective": None,
+    },
+    "phrase": {"hint": "지금 단계에서 어떤 등식의 성질을 쓸 수 있을지 생각해 볼까요?"},
+}
+
+
+class EchoLLMClient:
+    def __init__(self, responses: dict[str, list[BaseModel | dict[str, Any]]] | None = None):
+        self._queues = {k: list(v) for k, v in (responses or {}).items()}
+        self.calls: list[str] = []  # purposes, in order — tests assert on this
+
+    def _next(self, purpose: str, schema: type[BaseModel]) -> BaseModel:
+        self.calls.append(purpose)
+        queue = self._queues.get(purpose)
+        if queue:
+            item = queue.pop(0)
+            if isinstance(item, BaseModel):
+                return schema.model_validate(item.model_dump())
+            return schema.model_validate(item)
+        if purpose in _DEFAULTS:
+            return schema.model_validate(_DEFAULTS[purpose])
+        raise KeyError(f"EchoLLMClient has no canned response for purpose {purpose!r}")
+
+    def complete_json(
+        self,
+        *,
+        purpose: str,
+        system: str,
+        user: str,
+        images: Sequence[bytes] = (),
+        schema: type[BaseModel],
+    ) -> BaseModel:
+        return self._next(purpose, schema)
+
+    def run_with_tools(
+        self,
+        *,
+        purpose: str,
+        system: str,
+        user: str,
+        images: Sequence[bytes] = (),
+        schema: type[BaseModel],
+        max_rounds: int = 6,
+    ) -> BaseModel:
+        return self._next(purpose, schema)

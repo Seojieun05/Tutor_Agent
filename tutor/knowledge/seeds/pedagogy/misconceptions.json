@@ -1,0 +1,38 @@
+[
+  {
+    "id": "sign_flip_on_move",
+    "concept_id": "linear_equation",
+    "description": "항을 이항할 때 부호를 바꾸지 않는다",
+    "indicators": ["이항한 항의 부호가 그대로임", "예: 3*x + 5 = 20 에서 3*x = 20 + 5 로 씀"]
+  },
+  {
+    "id": "divide_before_isolate",
+    "concept_id": "linear_equation",
+    "description": "상수항을 정리하기 전에 계수로 나눈다",
+    "indicators": ["x + b/a 형태가 먼저 나타남", "상수항이 남아 있는 채로 나눗셈을 함"]
+  },
+  {
+    "id": "factor_sign_confusion",
+    "concept_id": "quadratic_equation",
+    "description": "인수분해에서 두 수의 부호를 혼동한다",
+    "indicators": ["곱과 합의 부호 조합이 틀림", "예: x**2 - 5*x + 6 을 (x + 2)(x + 3) 으로 씀"]
+  },
+  {
+    "id": "forgot_pm_sqrt",
+    "concept_id": "quadratic_equation",
+    "description": "제곱근을 취할 때 음수 근을 빠뜨린다",
+    "indicators": ["x = 3 만 쓰고 x = -3 누락", "근이 하나만 적혀 있음"]
+  },
+  {
+    "id": "exponent_not_decremented",
+    "concept_id": "differentiation",
+    "description": "미분할 때 지수를 1 줄이지 않는다",
+    "indicators": ["예: x**3 의 미분을 3*x**3 으로 씀", "지수가 그대로 남아 있음"]
+  },
+  {
+    "id": "constant_term_kept",
+    "concept_id": "differentiation",
+    "description": "상수항을 미분해도 0이 되지 않는다고 생각한다",
+    "indicators": ["상수가 결과에 그대로 남음", "예: (x**2 + 3)' 을 2*x + 3 으로 씀"]
+  }
+]

@@ -1,0 +1,17 @@
+{
+  "id": "deriv_001",
+  "problem_type": "derivative",
+  "problem_text": "다음 함수를 미분하시오: f(x) = x^3 + 2x",
+  "equations": ["Derivative(x**3 + 2*x, x)"],
+  "parameters": {},
+  "answer": {"kind": "EXPRESSION", "value": "3*x**2 + 2"},
+  "source": "교과서 예제",
+  "template_id": null,
+  "concepts": ["differentiation"],
+  "solution": {
+    "steps": [
+      {"idx": 1, "description": "x**3을 거듭제곱 법칙으로 미분한다: 지수 3을 내리고 지수를 1 줄인다", "expression": "3*x**2"},
+      {"idx": 2, "description": "2*x의 미분은 2. 두 결과를 더한다", "expression": "3*x**2 + 2"}
+    ]
+  }
+}

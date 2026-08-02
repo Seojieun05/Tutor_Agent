@@ -1,0 +1,17 @@
+{
+  "id": "lin_002",
+  "problem_type": "linear_equation",
+  "problem_text": "다음 일차방정식을 푸시오: 2x - 7 = 3",
+  "equations": ["2*x - 7 = 3"],
+  "parameters": {"a": "2", "b": "-7", "c": "3"},
+  "answer": {"kind": "SCALAR", "value": "5"},
+  "source": "교과서 예제",
+  "template_id": "tmpl_linear_axbc",
+  "concepts": ["linear_equation"],
+  "solution": {
+    "steps": [
+      {"idx": 1, "description": "양변에 7을 더해서 x항만 남긴다", "expression": "2*x = 10"},
+      {"idx": 2, "description": "양변을 x의 계수 2로 나눈다", "expression": "x = 5"}
+    ]
+  }
+}

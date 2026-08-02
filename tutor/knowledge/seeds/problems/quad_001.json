@@ -1,0 +1,17 @@
+{
+  "id": "quad_001",
+  "problem_type": "quadratic_equation",
+  "problem_text": "다음 이차방정식을 푸시오: x^2 - 5x + 6 = 0",
+  "equations": ["x**2 - 5*x + 6 = 0"],
+  "parameters": {"b": "-5", "c": "6"},
+  "answer": {"kind": "ROOT_SET", "value": ["2", "3"]},
+  "source": "교과서 예제",
+  "template_id": "tmpl_quad_monic",
+  "concepts": ["quadratic_equation"],
+  "solution": {
+    "steps": [
+      {"idx": 1, "description": "곱해서 6, 더해서 -5가 되는 두 수(-2, -3)로 좌변을 인수분해한다", "expression": "(x - 2)*(x - 3) = 0"},
+      {"idx": 2, "description": "각 인수가 0이 되는 x값을 구한다", "expression": "x = 2, x = 3"}
+    ]
+  }
+}

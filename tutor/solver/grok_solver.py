@@ -1,0 +1,59 @@
+"""Grok Solver fallback — used only for CONCEPT/NEW tiers (spec rule 2).
+
+Solutions are sympy machine-checked but NEVER marked verified (spec: Grok
+output is not automatically verified); passing candidates are stored in the
+DB as unverified for later human review.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from tutor.knowledge import mathnorm
+from tutor.knowledge.db import KnowledgeDB
+from tutor.knowledge.models import ReferenceSolution
+from tutor.llm.client import LLMClient
+from tutor.vision.recognizer import Recognition
+
+log = logging.getLogger(__name__)
+
+_SYSTEM = """You are a careful math solver. Solve the given problem step by step.
+
+Rules:
+- One atomic operation per step, in order. `expression` is the state AFTER the step,
+  in ASCII sympy syntax (* for multiplication, ** for powers).
+- Write step descriptions in Korean (the student is Korean).
+- final_answer.kind: "SCALAR" for a single value, "ROOT_SET" for multiple roots,
+  "EXPRESSION" for a symbolic result (e.g. a derivative).
+- You may search the domain knowledge base for similar solved problems.
+- concepts: short English snake_case tags like "linear_equation".
+- origin must be "grok" and verified must be false.
+
+Return ONLY the JSON object."""
+
+
+class GrokSolver:
+    def __init__(self, llm: LLMClient, db: KnowledgeDB):
+        self.llm = llm
+        self.db = db
+
+    def solve(self, rec: Recognition, problem_key: str) -> ReferenceSolution:
+        user = (
+            f"문제: {rec.problem_text}\n"
+            f"수식: {rec.equations}\n"
+            f"보기: {rec.choices}\n"
+            f"그림 조건: {rec.diagram_conditions}"
+        )
+        solution = self.llm.run_with_tools(
+            purpose="solve", system=_SYSTEM, user=user, schema=ReferenceSolution
+        )
+        # Spec rule: solver output is never verified, whatever the model claims.
+        solution = solution.model_copy(update={"verified": False, "origin": "grok"})
+
+        machine_checked = mathnorm.verify_answer(
+            rec.equations, solution.final_answer.kind, solution.final_answer.value
+        )
+        log.info("solver machine check for %s: %s", problem_key, machine_checked)
+        if machine_checked:
+            self.db.insert_unverified_solution(problem_key, solution)
+        return solution

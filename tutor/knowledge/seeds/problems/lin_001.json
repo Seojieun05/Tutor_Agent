@@ -1,0 +1,17 @@
+{
+  "id": "lin_001",
+  "problem_type": "linear_equation",
+  "problem_text": "다음 일차방정식을 푸시오: 3x + 5 = 20",
+  "equations": ["3*x + 5 = 20"],
+  "parameters": {"a": "3", "b": "5", "c": "20"},
+  "answer": {"kind": "SCALAR", "value": "5"},
+  "source": "교과서 예제",
+  "template_id": "tmpl_linear_axbc",
+  "concepts": ["linear_equation"],
+  "solution": {
+    "steps": [
+      {"idx": 1, "description": "양변에서 5를 빼서 x항만 남긴다", "expression": "3*x = 15"},
+      {"idx": 2, "description": "양변을 x의 계수 3으로 나눈다", "expression": "x = 5"}
+    ]
+  }
+}

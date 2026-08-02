@@ -1,0 +1,34 @@
+[
+  {
+    "id": "tmpl_linear_axbc",
+    "problem_type": "linear_equation",
+    "pattern": "a*x + b = c",
+    "params": ["a", "b", "c"],
+    "steps": [
+      {"description": "양변에서 {b}을(를) 빼서 x항만 남긴다", "expression": "a*x = c - b"},
+      {"description": "양변을 x의 계수 {a}(으)로 나눈다", "expression": "x = (c - b)/a"}
+    ],
+    "answer_kind": "SCALAR"
+  },
+  {
+    "id": "tmpl_quad_monic",
+    "problem_type": "quadratic_equation",
+    "pattern": "x**2 + b*x + c = 0",
+    "params": ["b", "c"],
+    "steps": [
+      {"description": "곱해서 {c}, 더해서 {b}이(가) 되는 두 수를 찾아 좌변을 인수분해한다", "expression": "x**2 + b*x + c"},
+      {"description": "각 인수가 0이 되는 x값을 구한다", "expression": "x**2 + b*x + c = 0"}
+    ],
+    "answer_kind": "ROOT_SET"
+  },
+  {
+    "id": "tmpl_deriv_power",
+    "problem_type": "derivative",
+    "pattern": "Derivative(a*x**n, x)",
+    "params": ["a", "n"],
+    "steps": [
+      {"description": "거듭제곱 법칙: 지수 {n}을(를) 계수에 곱하고 지수를 1 줄인다", "expression": "a*n*x**(n - 1)"}
+    ],
+    "answer_kind": "EXPRESSION"
+  }
+]
