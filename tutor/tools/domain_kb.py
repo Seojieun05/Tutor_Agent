@@ -6,6 +6,7 @@ from typing import Any
 
 from tutor.knowledge import mathnorm
 from tutor.knowledge.db import KnowledgeDB
+from tutor.retrieval.semantic import SemanticRetriever
 
 KB_KINDS = ("problems", "solutions", "concepts", "misconceptions", "hint_templates")
 
@@ -13,6 +14,7 @@ KB_KINDS = ("problems", "solutions", "concepts", "misconceptions", "hint_templat
 class DomainKBTool:
     def __init__(self, db: KnowledgeDB):
         self.db = db
+        self.semantic = SemanticRetriever(db)
 
     def search(
         self,
@@ -28,25 +30,75 @@ class DomainKBTool:
             return {"concepts": [{"id": k, "name": v} for k, v in self.db.concepts().items()]}
         if kind == "problems":
             needle = mathnorm.normalize_text(query) if query else ""
-            hits = [
+
+            # 1. 기존 lexical 검색
+            lexical_hits = [
                 p
                 for p in self.db.all_problems()
-                if not needle
-                or needle in mathnorm.normalize_text(p.problem_text)
-                or (set(p.concepts) & set(concepts))
+                if needle
+                and needle in mathnorm.normalize_text(p.problem_text)
             ]
-            return {
-                "problems": [
-                    {
-                        "id": p.id,
-                        "problem_type": p.problem_type,
-                        "problem_text": p.problem_text,
-                        "equations": p.equations,
-                        "concepts": p.concepts,
+
+            if lexical_hits:
+                return {
+                    "problems": [
+                        {
+                            "id": p.id,
+                            "problem_type": p.problem_type,
+                            "problem_text": p.problem_text,
+                            "equations": p.equations,
+                            "concepts": p.concepts,
+                            "retrieval": "lexical",
+                        }
+                        for p in lexical_hits[:limit]
+                    ]
+                }
+
+            # 2. concept 검색
+            if concepts:
+                concept_hits = self.db.problems_by_concepts(
+                    set(concepts)
+            )
+
+                if concept_hits:
+                    return {
+                        "problems": [
+                            {
+                                "id": p.id,
+                                "problem_type": p.problem_type,
+                                "problem_text": p.problem_text,
+                                "equations": p.equations,
+                                "concepts": p.concepts,
+                                "retrieval": "concept",
+                                "score": score,
+                            }
+                            for p, score in concept_hits[:limit]
+                        ]
                     }
-                    for p in hits[:limit]
-                ]
-            }
+
+            # 3. semantic fallback
+            if query:
+                semantic_hits = self.semantic.search(
+                    query,
+                    limit=limit,
+                )
+
+                return {
+                    "problems": [
+                        {
+                            "id": p.id,
+                            "problem_type": p.problem_type,
+                            "problem_text": p.problem_text,
+                            "equations": p.equations,
+                            "concepts": p.concepts,
+                            "retrieval": "semantic",
+                            "score": score,
+                        }
+                        for p, score in semantic_hits
+                    ]
+                }
+
+            return {"problems": []}
         if kind == "solutions":
             if not query:
                 return {"error": "solutions search needs query=<problem_id>"}
