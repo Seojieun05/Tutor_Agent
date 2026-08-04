@@ -15,6 +15,11 @@ class Recognition(BaseModel):
     student_work: list[str] = []  # ordered lines as written
     uncertain_regions: list[str] = []
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    # Filled by tutor.knowledge.tagger.ConceptTagger AFTER recognition, never
+    # by the VLM: reading the paper and classifying the maths are separate jobs
+    # (and separately debuggable). Both come from the whitelists.
+    problem_type: str = "unknown"
+    concepts: list[str] = []
 
 
 _SYSTEM = """You read a photo of a math worksheet. Transcribe exactly what is written.

@@ -236,14 +236,18 @@ class KnowledgeDB:
         ]
         return matched + generic
 
-    def problems_by_concepts(
-        self, concepts: set[str], limit: int = 50
-    ) -> list[tuple[Problem, float]]:
-        """Verified problems with Jaccard overlap of concept tags, best first.
+    PROBLEM_TYPE_BONUS = 0.1
 
-        The join does the filtering: only problems that share at least one tag
-        are deserialized, so an imported dataset does not turn this into a
-        full-table scan."""
+    def problems_by_concepts(
+        self, concepts: set[str], limit: int = 50, problem_type: str | None = None
+    ) -> list[tuple[Problem, float]]:
+        """Verified problems scored by concept overlap, best first.
+
+        Concept overlap (Jaccard) is the score; sharing the coarse
+        problem_type adds a small bonus, so two problems needing the same
+        ideas rank above one that merely shares a tag. The join does the
+        filtering: only problems that share at least one tag are deserialized,
+        so an imported dataset does not turn this into a full-table scan."""
         if not concepts:
             return []
         placeholders = ",".join("?" * len(concepts))
@@ -264,8 +268,13 @@ class KnowledgeDB:
         scored = []
         for body, shared, total in rows:
             union = total + len(concepts) - shared
-            if union > 0:
-                scored.append((Problem.model_validate_json(body), shared / union))
+            if union <= 0:
+                continue
+            problem = Problem.model_validate_json(body)
+            score = shared / union
+            if problem_type and problem_type != "unknown" and problem.problem_type == problem_type:
+                score += self.PROBLEM_TYPE_BONUS
+            scored.append((problem, score))
         return sorted(scored, key=lambda t: -t[1])
 
     def close(self) -> None:

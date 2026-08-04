@@ -2,8 +2,13 @@ from tutor.knowledge.models import ReferenceSolution, SolutionStep, Answer
 
 
 def test_seeded_content(db):
+    from tutor.knowledge.concepts import ALLOWED_CONCEPT_IDS
+
     assert len(db.all_problems()) == 6
-    assert set(db.concepts()) == {"linear_equation", "quadratic_equation", "differentiation"}
+    # seeds/concepts.json is the concept whitelist: all of it lands in the DB,
+    # so retrieval and the tagger agree on the same vocabulary
+    assert set(db.concepts()) == set(ALLOWED_CONCEPT_IDS)
+    assert {"linear_equation", "quadratic_equation", "differentiation"} <= set(db.concepts())
     assert len(db.templates()) == 3
 
 

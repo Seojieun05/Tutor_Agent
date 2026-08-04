@@ -77,7 +77,7 @@ class HintGenerator:
         # 1) Verified DB pedagogy first (spec rule 1) — concept/misconception
         # specific templates only; fully-generic ones stay the last resort.
         for template in self.db.hint_templates_for(
-            match.concepts, decision.misconception, decision.level
+            self._concepts_for(match, rec), decision.misconception, decision.level
         ):
             if template.concept_id is None and template.misconception_id is None:
                 continue
@@ -92,10 +92,12 @@ class HintGenerator:
             return text
 
         # 2) LLM phrasing fallback with minimal context.
-        text = self._phrase(decision, match, slots, history)
+        text = self._phrase(decision, match, slots, history, rec, reference)
         if reference is not None and leaks_answer(text, reference, decision.target_step):
             log.warning("hint leaked answer; regenerating once")
-            text = self._phrase(decision, match, slots, history, stronger=True)
+            text = self._phrase(
+                decision, match, slots, history, rec, reference, stronger=True
+            )
             if leaks_answer(text, reference, decision.target_step):
                 return self._generic_fallback(decision, slots)
         return text
@@ -129,12 +131,23 @@ class HintGenerator:
         match: MatchResult,
         slots: dict[str, str],
         history: list[HintRecord],
+        rec: Recognition | None = None,
+        reference: ReferenceSolution | None = None,
         stronger: bool = False,
     ) -> str:
-        parts = [
-            f"힌트 레벨: L{decision.level} ({decision.action.value})",
-            f"개념: {', '.join(match.concepts) or '알 수 없음'}",
-        ]
+        """Context = what the tutor may talk about: the problem itself, its
+        tags, and the CURRENT target step. Never the answer, never a later
+        step — those are filtered here and re-checked by the leak guard."""
+        concepts = ", ".join(match.concepts) or "알 수 없음"
+        parts = [f"힌트 레벨: L{decision.level} ({decision.action.value})"]
+        if rec is not None:
+            parts.append(f"문제: {rec.problem_text}")
+            if rec.choices:
+                parts.append(f"보기: {rec.choices}")
+            if rec.problem_type and rec.problem_type != "unknown":
+                parts.append(f"문제 유형: {rec.problem_type}")
+            concepts = ", ".join(rec.concepts) or concepts
+        parts.append(f"필요한 개념: {concepts}")
         if decision.misconception:
             m = self.db.get_misconception(decision.misconception)
             parts.append(
@@ -164,6 +177,12 @@ class HintGenerator:
             purpose="phrase", system=_PHRASE_SYSTEM, user="\n".join(parts), schema=PhrasedHint
         )
         return result.hint.strip()
+
+    def _concepts_for(self, match: MatchResult, rec: Recognition | None) -> list[str]:
+        """Whitelisted concepts of the problem, tagger first, matcher second."""
+        if rec is not None and rec.concepts:
+            return rec.concepts
+        return match.concepts
 
     def _generic_fallback(self, decision: Decision, slots: dict[str, str]) -> str:
         for template in self.db.hint_templates_for([], None, decision.level):

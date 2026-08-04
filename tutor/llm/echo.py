@@ -49,6 +49,7 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
         "previous_hint_effective": None,
     },
     "phrase": {"hint": "지금 단계에서 어떤 등식의 성질을 쓸 수 있을지 생각해 볼까요?"},
+    "tag": {"problem_type": "linear_equation", "concepts": ["linear_equation"]},
     # echo mode cannot judge an answer: stay neutral so the tutor re-asks the
     # same level instead of pretending the student was right or wrong
     "evaluate": {

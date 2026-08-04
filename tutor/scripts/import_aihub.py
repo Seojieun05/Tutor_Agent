@@ -44,6 +44,7 @@ from tutor.knowledge import mathnorm
 from tutor.knowledge.db import KnowledgeDB
 from tutor.knowledge.models import Answer, Problem, ReferenceSolution, SolutionStep
 from tutor.knowledge.matching import problem_hash
+from tutor.knowledge.taxonomy import UNKNOWN_PROBLEM_TYPE, normalize_problem_type
 from tutor.vision.recognizer import Recognition
 
 log = logging.getLogger(__name__)
@@ -178,8 +179,8 @@ def _infer_problem_type(problem_text: str, standards: list[AchievementStandard])
         (("방정식",), "equation"),
         (("부등식",), "inequality"),
         (("함수",), "function"),
-        (("미분", "도함수"), "differentiation"),
-        (("적분",), "integration"),
+        (("미분", "도함수"), "derivative"),
+        (("적분",), "integral"),
         (("확률",), "probability"),
         (("통계", "자료", "막대그래프", "그림그래프"), "data_handling"),
         (("삼각형", "사각형", "다각형", "원", "각", "도형", "평행", "수직"), "geometry"),
@@ -187,8 +188,10 @@ def _infer_problem_type(problem_text: str, standards: list[AchievementStandard])
     )
     for keywords, problem_type in rules:
         if any(k in text for k in keywords):
-            return problem_type
-    return "math_problem"
+            # same whitelist the ConceptTagger is held to, so imported rows and
+            # camera-tagged problems share one problem_type vocabulary
+            return normalize_problem_type(problem_type)
+    return UNKNOWN_PROBLEM_TYPE
 
 
 def _replace_simple_latex_fraction(text: str) -> str:

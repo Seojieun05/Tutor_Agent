@@ -75,6 +75,7 @@ class Tier(str, Enum):
     EXACT = "EXACT"
     TEMPLATE = "TEMPLATE"
     CONCEPT = "CONCEPT"
+    SEMANTIC = "SEMANTIC"  # nearest by text embedding; no verified solution
     NEW = "NEW"
 
 

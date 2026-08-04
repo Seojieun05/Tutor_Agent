@@ -20,6 +20,9 @@ KB_KINDS_BY_PURPOSE: dict[str, frozenset[str]] = {
     # answer grading: the orchestrator hands it the reference solution and the
     # misconception list directly, so it needs no tools (and no extra round trip)
     "evaluate": frozenset(),
+    # concept tagging: the whitelists are in the prompt, so there is nothing
+    # to look up — and a KB lookup could only tempt it to invent ids
+    "tag": frozenset(),
     "solve": frozenset({"problems", "solutions", "concepts"}),
     "estimate": frozenset({"misconceptions"}),
     "phrase": frozenset({"hint_templates", "misconceptions"}),

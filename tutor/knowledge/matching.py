@@ -1,13 +1,19 @@
-"""Matching cascade: EXACT → TEMPLATE → CONCEPT → NEW.
+"""Matching cascade: EXACT → TEMPLATE → CONCEPT → SEMANTIC → NEW.
 
-Equivalence is symbolic (sympy), never embedding-based. TEMPLATE hits are
-recomputed and sympy-verified before being treated as verified knowledge.
+Equivalence is symbolic (sympy), never embedding-based — embeddings only enter
+at the SEMANTIC tier, after the exact/structural ones have had their say, and
+they never produce a "verified" solution. TEMPLATE hits are recomputed and
+sympy-verified before being treated as verified knowledge.
+
+The problem's tags (`rec.problem_type`, `rec.concepts`) come from the Grok
+ConceptTagger and are whitelisted; this module no longer guesses them from
+regexes over the problem text.
 """
 
 from __future__ import annotations
 
 import hashlib
-import re
+import logging
 
 from tutor.knowledge import mathnorm
 from tutor.knowledge.db import KnowledgeDB
@@ -20,6 +26,8 @@ from tutor.knowledge.models import (
     Tier,
 )
 from tutor.vision.recognizer import Recognition
+
+log = logging.getLogger(__name__)
 
 
 def problem_hash(rec: Recognition) -> str:
@@ -37,44 +45,17 @@ def problem_hash(rec: Recognition) -> str:
     return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()
 
 
-def tag_concepts(rec: Recognition) -> tuple[str, set[str]]:
-    """Rule-based tagger: infer problem_type + concept tags from equations/text."""
-    text = rec.problem_text
-    for eq in rec.equations:
-        pre = eq.replace(" ", "")
-        if "Derivative" in pre or re.search(r"d/d[a-zA-Z]", pre):
-            return "derivative", {"differentiation"}
-        try:
-            residual, is_eq = mathnorm.parse_equation(eq)
-        except mathnorm.ParseError:
-            continue
-        if residual.has(*[s for s in residual.free_symbols]):
-            try:
-                var = next(iter(residual.free_symbols))
-                degree = residual.as_poly(var).degree() if residual.as_poly(var) else 0
-            except Exception:
-                continue
-            if is_eq and degree == 2:
-                return "quadratic_equation", {"quadratic_equation"}
-            if is_eq and degree == 1:
-                return "linear_equation", {"linear_equation"}
-    if "미분" in text or "도함수" in text:
-        return "derivative", {"differentiation"}
-    if "이차방정식" in text:
-        return "quadratic_equation", {"quadratic_equation"}
-    if "방정식" in text:
-        return "linear_equation", {"linear_equation"}
-    return "unknown", set()
-
-
 class Matcher:
     CONCEPT_OVERLAP_THRESHOLD = 0.5
+    SEMANTIC_THRESHOLD = 0.85  # cosine on multilingual-e5; below this is noise
 
-    def __init__(self, db: KnowledgeDB):
+    def __init__(self, db: KnowledgeDB, semantic=None):
         self.db = db
+        self.semantic = semantic  # SemanticRetriever | None (index optional)
 
     def match(self, rec: Recognition) -> MatchResult:
-        ptype, concepts = tag_concepts(rec)
+        ptype = rec.problem_type or "unknown"
+        concepts = set(rec.concepts)
 
         exact = self._match_exact(rec)
         if exact is not None:
@@ -84,9 +65,13 @@ class Matcher:
         if template is not None:
             return template
 
-        concept = self._match_concept(rec, concepts)
+        concept = self._match_concept(rec, ptype, concepts)
         if concept is not None:
             return concept
+
+        semantic = self._match_semantic(rec, concepts)
+        if semantic is not None:
+            return semantic
 
         return MatchResult(tier=Tier.NEW, concepts=sorted(concepts))
 
@@ -126,8 +111,14 @@ class Matcher:
     def _match_template(
         self, rec: Recognition, ptype: str, concepts: set[str]
     ) -> MatchResult | None:
+        # problem_type narrows the candidates: a quadratic pattern cannot be
+        # the right template for a counting problem even if the algebra fits.
+        templates = self.db.templates()
+        if ptype != "unknown":
+            preferred = [t for t in templates if t.problem_type == ptype]
+            templates = preferred or templates
         for eq in rec.equations:
-            for template in self.db.templates():
+            for template in templates:
                 bindings = mathnorm.match_template(eq, template.pattern, template.params)
                 if bindings is None:
                     continue
@@ -169,15 +160,45 @@ class Matcher:
 
     # --- CONCEPT -------------------------------------------------------------
 
-    def _match_concept(self, rec: Recognition, concepts: set[str]) -> MatchResult | None:
+    def _match_concept(
+        self, rec: Recognition, ptype: str, concepts: set[str]
+    ) -> MatchResult | None:
         if not concepts:
             return None
-        scored = self.db.problems_by_concepts(concepts)
+        # concept overlap is the score; sharing the problem_type is a bonus
+        scored = self.db.problems_by_concepts(concepts, problem_type=ptype)
         if not scored or scored[0][1] < self.CONCEPT_OVERLAP_THRESHOLD:
             return None
         return MatchResult(
             tier=Tier.CONCEPT,
             problem=scored[0][0],
             concepts=sorted(concepts),
+            reference=None,  # solver fills it, unverified
+        )
+
+    # --- SEMANTIC ------------------------------------------------------------
+
+    def _match_semantic(self, rec: Recognition, concepts: set[str]) -> MatchResult | None:
+        """Last resort before NEW: the nearest problem by text embedding.
+
+        Reaches the imported corpus, whose tags predate the whitelist, so
+        concept overlap cannot find it. Similar wording is weak evidence, so
+        this never carries a solution — the solver still runs.
+        """
+        if self.semantic is None or not rec.problem_text:
+            return None
+        try:
+            hits = self.semantic.search(rec.problem_text, limit=1)
+        except Exception:
+            log.exception("semantic retrieval failed; falling through to NEW")
+            return None
+        if not hits or hits[0][1] < self.SEMANTIC_THRESHOLD:
+            return None
+        problem, score = hits[0]
+        log.info("semantic match %s (score %.3f)", problem.id, score)
+        return MatchResult(
+            tier=Tier.SEMANTIC,
+            problem=problem,
+            concepts=sorted(concepts) or problem.concepts,
             reference=None,  # solver fills it, unverified
         )

@@ -21,6 +21,7 @@ from tutor.config import Settings
 from tutor.hints.generator import HintGenerator
 from tutor.knowledge.db import KnowledgeDB
 from tutor.knowledge.matching import Matcher
+from tutor.knowledge.tagger import ConceptTagger
 from tutor.llm.echo import EchoLLMClient
 from tutor.server.session import Deps, Session
 from tutor.solver.grok_solver import GrokSolver
@@ -93,31 +94,35 @@ def build_shared(settings: Settings):
         llm = GrokClient(settings, registry)
         transcriber = XaiTranscriber(settings)
         speaker = XaiSpeaker(settings)
-    return db, llm, transcriber, speaker
+    # the KB tool already loaded the embedding index: share that one instance
+    # with the matcher's SEMANTIC tier instead of loading the model twice
+    semantic = getattr(getattr(registry, "kb", None), "semantic", None)
+    return db, llm, transcriber, speaker, semantic
 
 
-def make_deps(settings: Settings, db, llm, transcriber, speaker) -> Deps:
+def make_deps(settings: Settings, db, llm, transcriber, speaker, semantic=None) -> Deps:
     """Per-connection dependencies (fresh SessionStore each time)."""
     return Deps(
         settings=settings,
         recognizer=Recognizer(llm),
-        matcher=Matcher(db),
+        matcher=Matcher(db, semantic=semantic),
         solver=GrokSolver(llm, db),
         estimator=StudentStateEstimator(llm, db, settings.recog_conf_threshold),
         hint_gen=HintGenerator(llm, db),
         transcriber=transcriber,
         speaker=speaker,
         evaluator=AnswerEvaluator(llm, db),
+        tagger=ConceptTagger(llm),
         store=SessionStore(),
     )
 
 
 async def amain(settings: Settings) -> None:
-    db, llm, transcriber, speaker = build_shared(settings)
+    db, llm, transcriber, speaker, semantic = build_shared(settings)
 
     async def handler(ws):
         path = ws.request.path.split("?", 1)[0]
-        deps = make_deps(settings, db, llm, transcriber, speaker)
+        deps = make_deps(settings, db, llm, transcriber, speaker, semantic)
         if path.rstrip("/") == "/browser":
             from tutor.server.browser import BrowserSession
 
@@ -138,6 +143,8 @@ async def amain(settings: Settings) -> None:
         settings.ws_port,
         max_size=16 * 1024 * 1024,
         process_request=serve_static,
+        ping_interval=20,
+        ping_timeout=120,
     ):
         mode = "ECHO (no XAI_API_KEY: canned hints, no API calls)" if settings.echo_mode else "LIVE"
         print(f"Visual Socratic Tutor server on ws://{settings.ws_host}:{settings.ws_port} [{mode}]")

@@ -29,6 +29,7 @@ from tutor.hints.generator import HintGenerator
 from tutor.hints.guard import leaks_answer
 from tutor.knowledge import mathnorm
 from tutor.knowledge.matching import Matcher, problem_hash
+from tutor.knowledge.tagger import ConceptTagger
 from tutor.knowledge.models import MatchResult, ReferenceSolution, Tier
 from tutor.policy.engine import Action, Decision, Trigger, decide
 from tutor.protocol.events import make_event, parse_event
@@ -63,6 +64,7 @@ class Deps:
     transcriber: object  # .transcribe(pcm, sample_rate) -> Transcript
     speaker: object  # .speak(text) -> None
     evaluator: AnswerEvaluator | None = None  # None → answers fall back to a hint request
+    tagger: ConceptTagger | None = None  # None → Recognition keeps "unknown"/[]
     store: SessionStore = field(default_factory=SessionStore)
 
 
@@ -414,7 +416,11 @@ class Session:
     async def _problem_context(self, rec: Recognition) -> ProblemContext:
         h = problem_hash(rec)
         if self.ctx is not None and (self.ctx.hash == h or self._same_problem(rec)):
-            # Cached problem: reuse match/reference; student work stays fresh.
+            # Cached problem: reuse match/reference and the tags (the problem
+            # did not change, only the student's work). Re-tagging here would
+            # pay for an LLM call per hint and let the tags drift mid-problem.
+            rec.problem_type = self.ctx.recognition.problem_type
+            rec.concepts = list(self.ctx.recognition.concepts)
             self.ctx.recognition = rec
             return self.ctx
         if self.ctx is not None:
@@ -424,6 +430,12 @@ class Session:
             self.store.clear_state()
             self.prev_work = None
             self.last_transcript = None
+        # A new problem: classify it once, then everything downstream (matching,
+        # RAG, hint phrasing) reads the tags off the Recognition.
+        if self.deps.tagger is not None:
+            tags = await asyncio.to_thread(self.deps.tagger.tag, rec)
+            rec.problem_type = tags.problem_type
+            rec.concepts = tags.concepts
         match = await asyncio.to_thread(self.deps.matcher.match, rec)
         reference = match.reference
         if reference is None:  # CONCEPT/NEW → Grok Solver (spec rule 2)

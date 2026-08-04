@@ -1,5 +1,1106 @@
 [
-  {"id": "linear_equation", "name": "일차방정식"},
-  {"id": "quadratic_equation", "name": "이차방정식"},
-  {"id": "differentiation", "name": "다항함수의 미분"}
+  {
+    "id": "natural_number",
+    "name": "자연수",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "place_value",
+    "name": "자릿값과 수의 크기",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "addition",
+    "name": "덧셈",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "subtraction",
+    "name": "뺄셈",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "multiplication",
+    "name": "곱셈",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "division",
+    "name": "나눗셈",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "mixed_operations",
+    "name": "혼합 계산",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "factors_multiples",
+    "name": "약수와 배수",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "greatest_common_divisor",
+    "name": "최대공약수",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "least_common_multiple",
+    "name": "최소공배수",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "prime_factorization",
+    "name": "소인수분해",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "fraction",
+    "name": "분수",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "fraction_operations",
+    "name": "분수의 계산",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "decimal",
+    "name": "소수",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "decimal_operations",
+    "name": "소수의 계산",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "ratio",
+    "name": "비",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "rate",
+    "name": "비율",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "proportion",
+    "name": "비례식",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "proportional_distribution",
+    "name": "비례배분",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "integer",
+    "name": "정수",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "rational_number",
+    "name": "유리수",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "irrational_number",
+    "name": "무리수",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "real_number",
+    "name": "실수",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "square_root",
+    "name": "제곱근",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "recurring_decimal",
+    "name": "순환소수",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "complex_number",
+    "name": "복소수",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "exponent",
+    "name": "지수",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "logarithm",
+    "name": "로그",
+    "category": "number_operations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "pattern",
+    "name": "규칙",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "correspondence",
+    "name": "대응 관계",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "equality_equivalence",
+    "name": "등호와 동치 관계",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "algebraic_expression",
+    "name": "문자와 식",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "polynomial",
+    "name": "다항식",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "polynomial_operations",
+    "name": "다항식의 연산",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "polynomial_identity",
+    "name": "항등식",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "remainder_theorem",
+    "name": "나머지정리",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "factor_theorem",
+    "name": "인수정리",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "factorization",
+    "name": "인수분해",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "linear_equation",
+    "name": "일차방정식",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "simultaneous_linear_equations",
+    "name": "연립일차방정식",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "linear_inequality",
+    "name": "일차부등식",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "quadratic_equation",
+    "name": "이차방정식",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "quadratic_inequality",
+    "name": "이차부등식",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "higher_degree_equation",
+    "name": "고차방정식",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "equation_system",
+    "name": "여러 방정식의 연립",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "inequality_system",
+    "name": "여러 부등식의 연립",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "absolute_value",
+    "name": "절댓값",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "direct_proportion",
+    "name": "정비례",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "inverse_proportion",
+    "name": "반비례",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "function",
+    "name": "함수",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "linear_function",
+    "name": "일차함수",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "quadratic_function",
+    "name": "이차함수",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "composite_function",
+    "name": "합성함수",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "inverse_function",
+    "name": "역함수",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "rational_function",
+    "name": "유리함수",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "radical_function",
+    "name": "무리함수",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "exponential_function",
+    "name": "지수함수",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "logarithmic_function",
+    "name": "로그함수",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "trigonometric_function",
+    "name": "삼각함수",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "sequence",
+    "name": "수열",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "arithmetic_sequence",
+    "name": "등차수열",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "geometric_sequence",
+    "name": "등비수열",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "sequence_sum",
+    "name": "수열의 합",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "sigma_notation",
+    "name": "합의 기호 시그마",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "mathematical_induction",
+    "name": "수학적 귀납법",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "set",
+    "name": "집합",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "set_operations",
+    "name": "집합의 연산",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "proposition",
+    "name": "명제",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "necessary_sufficient_condition",
+    "name": "필요조건과 충분조건",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "proof",
+    "name": "증명",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "proof_by_contradiction",
+    "name": "귀류법",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "matrix",
+    "name": "행렬",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "matrix_operations",
+    "name": "행렬의 연산",
+    "category": "change_relations",
+    "curriculum": "2022"
+  },
+  {
+    "id": "point_line_plane",
+    "name": "점·직선·평면",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "line_segment_ray",
+    "name": "선분·직선·반직선",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "angle",
+    "name": "각",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "perpendicular_parallel",
+    "name": "수직과 평행",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "triangle",
+    "name": "삼각형",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "triangle_properties",
+    "name": "삼각형의 성질",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "quadrilateral",
+    "name": "사각형",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "quadrilateral_properties",
+    "name": "사각형의 성질",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "polygon",
+    "name": "다각형",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "circle",
+    "name": "원",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "circle_properties",
+    "name": "원의 성질",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "congruence",
+    "name": "합동",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "symmetry",
+    "name": "대칭",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "geometric_construction",
+    "name": "작도",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "similarity",
+    "name": "닮음",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "pythagorean_theorem",
+    "name": "피타고라스 정리",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "trigonometric_ratio",
+    "name": "삼각비",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "sine_rule",
+    "name": "사인법칙",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "cosine_rule",
+    "name": "코사인법칙",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "coordinate_plane",
+    "name": "좌표평면",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "distance_between_points",
+    "name": "두 점 사이의 거리",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "internal_division",
+    "name": "내분",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "coordinate_geometry",
+    "name": "좌표기하",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "circle_equation",
+    "name": "원의 방정식",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "geometric_translation",
+    "name": "도형의 이동",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "length",
+    "name": "길이",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "time",
+    "name": "시간",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "mass",
+    "name": "무게",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "capacity",
+    "name": "들이",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "angle_measure",
+    "name": "각도",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "perimeter",
+    "name": "둘레",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "area",
+    "name": "넓이",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "circle_circumference",
+    "name": "원주",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "circle_area",
+    "name": "원의 넓이",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "surface_area",
+    "name": "겉넓이",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "volume",
+    "name": "부피",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "prism_pyramid",
+    "name": "각기둥과 각뿔",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "cylinder_cone_sphere",
+    "name": "원기둥·원뿔·구",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "conic_section",
+    "name": "이차곡선",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "parabola",
+    "name": "포물선",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "ellipse",
+    "name": "타원",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "hyperbola",
+    "name": "쌍곡선",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "vector",
+    "name": "벡터",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "vector_operations",
+    "name": "벡터의 연산",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "vector_components",
+    "name": "벡터의 성분",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "dot_product",
+    "name": "벡터의 내적",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "space_geometry",
+    "name": "공간도형",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "space_coordinates",
+    "name": "공간좌표",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "line_plane_relationships",
+    "name": "공간에서 직선과 평면의 관계",
+    "category": "geometry_measurement",
+    "curriculum": "2022"
+  },
+  {
+    "id": "data_classification",
+    "name": "자료의 분류",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "table",
+    "name": "표",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "pictograph_reading",
+    "name": "그림그래프 읽기",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "bar_graph",
+    "name": "막대그래프",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "line_graph",
+    "name": "꺾은선그래프",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "strip_graph",
+    "name": "띠그래프",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "pie_chart",
+    "name": "원그래프",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "mean",
+    "name": "평균",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "possibility",
+    "name": "가능성",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "frequency_distribution",
+    "name": "도수분포",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "relative_frequency",
+    "name": "상대도수",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "representative_value",
+    "name": "대푯값",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "dispersion",
+    "name": "산포도",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "variance_standard_deviation",
+    "name": "분산과 표준편차",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "box_plot",
+    "name": "상자그림",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "scatter_plot",
+    "name": "산점도",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "correlation",
+    "name": "상관관계",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "counting_principle",
+    "name": "경우의 수와 합·곱의 법칙",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "permutation",
+    "name": "순열",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "combination",
+    "name": "조합",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "permutation_with_identical_elements",
+    "name": "같은 것이 있는 순열",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "repeated_permutation",
+    "name": "중복순열",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "repeated_combination",
+    "name": "중복조합",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "binomial_theorem",
+    "name": "이항정리",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "probability",
+    "name": "확률",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "complementary_event",
+    "name": "여사건",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "mutually_exclusive_events",
+    "name": "배반사건",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "conditional_probability",
+    "name": "조건부확률",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "independent_events",
+    "name": "사건의 독립",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "independent_trials",
+    "name": "독립시행",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "random_variable",
+    "name": "확률변수",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "discrete_random_variable",
+    "name": "이산확률변수",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "continuous_random_variable",
+    "name": "연속확률변수",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "probability_distribution",
+    "name": "확률분포",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "binomial_distribution",
+    "name": "이항분포",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "normal_distribution",
+    "name": "정규분포",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "population_sample",
+    "name": "모집단과 표본",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "sample_mean",
+    "name": "표본평균",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "statistical_estimation",
+    "name": "통계적 추정",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "confidence_interval",
+    "name": "신뢰구간",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "population_proportion_estimation",
+    "name": "모비율의 추정",
+    "category": "data_chance",
+    "curriculum": "2022"
+  },
+  {
+    "id": "function_limit",
+    "name": "함수의 극한",
+    "category": "calculus",
+    "curriculum": "2022"
+  },
+  {
+    "id": "continuity",
+    "name": "함수의 연속",
+    "category": "calculus",
+    "curriculum": "2022"
+  },
+  {
+    "id": "sequence_limit",
+    "name": "수열의 극한",
+    "category": "calculus",
+    "curriculum": "2022"
+  },
+  {
+    "id": "infinite_series",
+    "name": "급수",
+    "category": "calculus",
+    "curriculum": "2022"
+  },
+  {
+    "id": "differentiation",
+    "name": "미분",
+    "category": "calculus",
+    "curriculum": "2022"
+  },
+  {
+    "id": "derivative_rules",
+    "name": "미분법",
+    "category": "calculus",
+    "curriculum": "2022"
+  },
+  {
+    "id": "derivative_applications",
+    "name": "미분의 활용",
+    "category": "calculus",
+    "curriculum": "2022"
+  },
+  {
+    "id": "indefinite_integral",
+    "name": "부정적분",
+    "category": "calculus",
+    "curriculum": "2022"
+  },
+  {
+    "id": "definite_integral",
+    "name": "정적분",
+    "category": "calculus",
+    "curriculum": "2022"
+  },
+  {
+    "id": "integral_techniques",
+    "name": "적분법",
+    "category": "calculus",
+    "curriculum": "2022"
+  },
+  {
+    "id": "integral_applications",
+    "name": "적분의 활용",
+    "category": "calculus",
+    "curriculum": "2022"
+  },
+  {
+    "id": "fundamental_theorem_of_calculus",
+    "name": "미분과 적분의 관계",
+    "category": "calculus",
+    "curriculum": "2022"
+  },
+  {
+    "id": "fraction_properties",
+    "name": "분수의 성질 활용",
+    "category": "legacy_2015",
+    "curriculum": "2015_legacy"
+  },
+  {
+    "id": "pictograph_drawing",
+    "name": "그림그래프 나타내기",
+    "category": "legacy_2015",
+    "curriculum": "2015_legacy"
+  },
+  {
+    "id": "pentagon_hexagon_classification",
+    "name": "오각형·육각형 구별",
+    "category": "legacy_2015",
+    "curriculum": "2015_legacy"
+  },
+  {
+    "id": "construct_equal_angle",
+    "name": "주어진 각과 같은 크기의 각 그리기",
+    "category": "legacy_2015",
+    "curriculum": "2015_legacy"
+  },
+  {
+    "id": "gcd_lcm_properties",
+    "name": "최대공약수·최소공배수의 성질과 활용",
+    "category": "legacy_2015",
+    "curriculum": "2015_legacy"
+  },
+  {
+    "id": "external_division",
+    "name": "외분",
+    "category": "legacy_2015",
+    "curriculum": "2015_legacy"
+  },
+  {
+    "id": "line_equation",
+    "name": "직선의 방정식",
+    "category": "legacy_2015",
+    "curriculum": "2015_legacy"
+  },
+  {
+    "id": "circular_permutation",
+    "name": "원순열",
+    "category": "legacy_2015",
+    "curriculum": "2015_legacy"
+  },
+  {
+    "id": "continuous_random_variable_integral_relation",
+    "name": "연속확률변수와 적분의 관계",
+    "category": "legacy_2015",
+    "curriculum": "2015_legacy"
+  }
 ]
