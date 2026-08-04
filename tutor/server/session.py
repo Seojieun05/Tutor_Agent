@@ -347,6 +347,7 @@ class Session:
             ctx.reference,
             ctx.recognition,
             history,
+            transcript,
         )
         await self._deliver(decision, self._with_feedback(verdict, text, decision), ctx.hash)
 

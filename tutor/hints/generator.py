@@ -39,6 +39,9 @@ Hard rules:
 - Korean 존댓말(해요체), friendly, spoken style — never 반말.
 - Never repeat an earlier hint: the ones already given are listed, and the student
   may have moved on to a later step since then.
+- The student's latest answer may be provided.
+- Do not ask about information the student already stated correctly.
+- Acknowledge or build directly on that answer, then ask only the next missing piece.
 - You may look up hint templates and misconceptions in the knowledge base.
 
 Return ONLY JSON: {"hint": "..."}"""
@@ -60,6 +63,7 @@ class HintGenerator:
         reference: ReferenceSolution | None,
         rec: Recognition,
         history: list[HintRecord],
+        student_answer: str | None = None,
     ) -> str:
         if decision.action in FIXED_ACTIONS:
             return FIXED_ACTIONS[decision.action]
@@ -92,11 +96,14 @@ class HintGenerator:
             return text
 
         # 2) LLM phrasing fallback with minimal context.
-        text = self._phrase(decision, match, slots, history, rec, reference)
+        text = self._phrase(
+            decision, match, slots, history, rec, reference, student_answer=student_answer
+        )
         if reference is not None and leaks_answer(text, reference, decision.target_step):
             log.warning("hint leaked answer; regenerating once")
             text = self._phrase(
-                decision, match, slots, history, rec, reference, stronger=True
+                decision, match, slots, history, rec, reference,
+                stronger=True, student_answer=student_answer,
             )
             if leaks_answer(text, reference, decision.target_step):
                 return self._generic_fallback(decision, slots)
@@ -134,10 +141,12 @@ class HintGenerator:
         rec: Recognition | None = None,
         reference: ReferenceSolution | None = None,
         stronger: bool = False,
+        student_answer: str | None = None,
     ) -> str:
         """Context = what the tutor may talk about: the problem itself, its
-        tags, and the CURRENT target step. Never the answer, never a later
-        step — those are filtered here and re-checked by the leak guard."""
+        tags, the CURRENT target step, and what the student just said. Never
+        the answer, never a later step — those are filtered here and
+        re-checked by the leak guard."""
         concepts = ", ".join(match.concepts) or "알 수 없음"
         parts = [f"힌트 레벨: L{decision.level} ({decision.action.value})"]
         if rec is not None:
@@ -148,6 +157,13 @@ class HintGenerator:
                 parts.append(f"문제 유형: {rec.problem_type}")
             concepts = ", ".join(rec.concepts) or concepts
         parts.append(f"필요한 개념: {concepts}")
+        if student_answer:
+            parts.append(
+                f"학생의 방금 답변: {student_answer}\n"
+                "학생이 이미 올바르게 말한 내용은 다시 묻지 마세요. "
+                "학생의 답변을 자연스럽게 이어받아 다음에 필요한 내용만 질문하세요."
+            )
+
         if decision.misconception:
             m = self.db.get_misconception(decision.misconception)
             parts.append(

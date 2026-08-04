@@ -158,3 +158,62 @@ class TestGenerator:
         text = gen.generate(decision(1), match, LIN_REF, Recognition(problem_text="p"), [])
         assert llm.calls == ["phrase", "phrase"]
         assert not leaks_answer(text, LIN_REF, 1)
+
+
+class TestStudentAnswerInThePrompt:
+    """Hints build on what the student just said, at every call site."""
+
+    class RecordingLLM(EchoLLMClient):
+        """Captures the phrase prompt so we can assert on what the model sees."""
+
+        def __init__(self, responses=None):
+            super().__init__(responses)
+            self.prompts: list[str] = []
+
+        def run_with_tools(self, *, purpose, system, user, images=(), schema, max_rounds=6):
+            if purpose == "phrase":
+                self.prompts.append(user)
+            return super().run_with_tools(
+                purpose=purpose, system=system, user=user, images=images,
+                schema=schema, max_rounds=max_rounds,
+            )
+
+    def _llm_path_match(self):
+        # concepts with no seeded templates → the LLM phrasing path
+        return MatchResult(tier=Tier.NEW, concepts=["unknown_concept"], reference=LIN_REF)
+
+    def test_hint_without_an_answer_still_works(self, db):
+        """Regression: _phrase() lacked the parameter, so EVERY phrased hint
+        raised TypeError — including plain hint requests that pass nothing."""
+        gen = HintGenerator(self.RecordingLLM(), db)
+        text = gen.generate(
+            decision(1), self._llm_path_match(), LIN_REF, Recognition(problem_text="p"), []
+        )
+        assert text
+
+    def test_the_answer_reaches_the_model(self, db):
+        llm = self.RecordingLLM()
+        gen = HintGenerator(llm, db)
+        gen.generate(
+            decision(1),
+            self._llm_path_match(),
+            LIN_REF,
+            Recognition(problem_text="3x + 5 = 20"),
+            [],
+            student_answer="5를 빼면 되는 거 아니에요?",
+        )
+        assert llm.prompts, "the phrase call never happened"
+        assert "5를 빼면 되는 거 아니에요?" in llm.prompts[0]
+
+    def test_a_leaking_hint_is_regenerated_with_the_answer_intact(self, db):
+        llm = self.RecordingLLM(
+            {"phrase": [{"hint": "정답은 x = 5!"}, {"hint": "그다음은 무엇을 할까요?"}]}
+        )
+        gen = HintGenerator(llm, db)
+        text = gen.generate(
+            decision(1), self._llm_path_match(), LIN_REF, Recognition(problem_text="p"), [],
+            student_answer="5를 빼요",
+        )
+        assert len(llm.prompts) == 2  # first leaked, second is the retry
+        assert all("5를 빼요" in p for p in llm.prompts)
+        assert not leaks_answer(text, LIN_REF, 1)
