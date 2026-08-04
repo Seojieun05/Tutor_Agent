@@ -147,8 +147,21 @@ async def amain(settings: Settings) -> None:
         ping_timeout=120,
     ):
         mode = "ECHO (no XAI_API_KEY: canned hints, no API calls)" if settings.echo_mode else "LIVE"
-        print(f"Visual Socratic Tutor server on ws://{settings.ws_host}:{settings.ws_port} [{mode}]")
-        print(f"  hands-free browser client: http://localhost:{settings.ws_port}/")
+        # flush: redirected to a log file this banner would otherwise sit in the
+        # buffer, and it is the one thing the operator is waiting to read.
+        say = lambda line: print(line, flush=True)  # noqa: E731
+        say(f"Visual Socratic Tutor server on ws://{settings.ws_host}:{settings.ws_port} [{mode}]")
+        say(f"  hands-free browser client: http://localhost:{settings.ws_port}/")
+        # Say where the tutor's voice will come out, before anyone waits for it.
+        from tutor.speech.tts import has_local_audio_output
+
+        if has_local_audio_output():
+            say("  audio: plays on THIS machine (and in the browser client)")
+        else:
+            say("  audio: no sound device here — the browser client plays it on your laptop:")
+            say(f"         ssh -N -L {settings.ws_port}:localhost:{settings.ws_port} "
+                f"<user>@<this-host>")
+            say(f"         then open http://localhost:{settings.ws_port}/ and press 시작")
         await asyncio.Future()
 
 

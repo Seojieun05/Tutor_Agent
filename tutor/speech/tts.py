@@ -10,8 +10,10 @@ SSH host nobody is sitting at). Speakers with no audio return None.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -21,13 +23,46 @@ from tutor.config import Settings
 
 log = logging.getLogger(__name__)
 
+NO_AUDIO_HINT = (
+    "이 서버에는 재생할 오디오 장치가 없습니다 (헤드리스/SSH 호스트). "
+    "노트북에서 소리를 들으려면 브라우저 클라이언트를 쓰세요: "
+    "ssh -N -L 8765:localhost:8765 <user>@<host> 후 http://localhost:8765/ 접속"
+)
+
+
+def has_local_audio_output() -> bool:
+    """Can this machine actually make a sound?
+
+    ffplay exits 0 even when ALSA has no card, so a failed playback is
+    indistinguishable from a successful one — the tutor would appear to speak
+    while the student hears nothing. Check for a device up front instead.
+    """
+    if sys.platform != "linux":
+        return True  # macOS/Windows: assume the default device works
+    if os.environ.get("PULSE_SERVER"):
+        return True
+    try:
+        if Path(f"/run/user/{os.getuid()}/pulse/native").exists():
+            return True
+    except OSError:
+        pass
+    try:
+        cards = Path("/proc/asound/cards").read_text()
+    except OSError:
+        return False  # no /proc/asound at all: no ALSA card
+    return any(line.strip() and "no soundcards" not in line.lower()
+               for line in cards.splitlines())
+
 
 class XaiSpeaker:
     def __init__(self, settings: Settings):
         self.settings = settings
         self._player = shutil.which("ffplay")
+        self._can_play = self._player is not None and has_local_audio_output()
         if self._player is None:
-            log.warning("ffplay not found: TTS audio will not play")
+            log.warning("ffplay not found: TTS audio cannot play here. %s", NO_AUDIO_HINT)
+        elif not self._can_play:
+            log.warning("no audio output device. %s", NO_AUDIO_HINT)
 
     audio_format = "mp3"
 
@@ -53,7 +88,10 @@ class XaiSpeaker:
             self._play(audio)
 
     def _play(self, mp3: bytes) -> None:
-        if self._player is None:
+        if not self._can_play:
+            # Say so every time: silence with no explanation is the worst
+            # failure mode this system has.
+            log.error("TTS audio was generated but cannot be played. %s", NO_AUDIO_HINT)
             return
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
             f.write(mp3)

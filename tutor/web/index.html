@@ -143,11 +143,15 @@ async function start() {
   ctx.createMediaStreamSource(stream).connect(capture);
   capture.port.onmessage = (e) => onSamples(e.data);
 
-  $("player").play().catch(() => {});   // unlock autoplay inside this click
+  const speakerReady = await unlockAudio();   // must happen inside this click
   connect();
 
   $("orb").disabled = true;             // from here on the orb is a status light
-  setStatus("핸즈프리로 대화하세요. 말이 끝나면 자동으로 인식합니다.");
+  setStatus(
+    speakerReady
+      ? "핸즈프리로 대화하세요. 튜터 목소리는 이 기기에서 나옵니다."
+      : "마이크는 열렸지만 스피커가 차단되었습니다 — 페이지를 한 번 클릭해 주세요."
+  );
 }
 
 let pending = new Float32Array(0);
@@ -213,6 +217,33 @@ function setState(s) {
 }
 
 // --- 3. playback: the tutor's audio, then tell the server we are done ------
+
+// 50 ms of silence. Browsers only grant an <audio> element permission to play
+// programmatically once it has played inside a user gesture — and play() on a
+// SOURCELESS element rejects, which grants nothing. So play real (silent)
+// audio during the 시작 click; every later hint then plays on its own.
+const SILENCE =
+  "data:audio/wav;base64,UklGRrQBAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YZ" +
+  "ABAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC" +
+  "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA" +
+  "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg" +
+  "ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI" +
+  "CAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIC" +
+  "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA" +
+  "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg" +
+  "ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA=";
+
+async function unlockAudio() {
+  const player = $("player");
+  try {
+    player.src = SILENCE;
+    await player.play();
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 function play(bytes) {
   const player = $("player");
   const url = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
