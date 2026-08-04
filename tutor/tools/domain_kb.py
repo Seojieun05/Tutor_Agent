@@ -4,17 +4,44 @@ from __future__ import annotations
 
 from typing import Any
 
+import logging
+
 from tutor.knowledge import mathnorm
 from tutor.knowledge.db import KnowledgeDB
-from tutor.retrieval.semantic import SemanticRetriever
+
+log = logging.getLogger(__name__)
 
 KB_KINDS = ("problems", "solutions", "concepts", "misconceptions", "hint_templates")
+
+
+def load_semantic_retriever(db: KnowledgeDB):
+    """Semantic search if this machine has it, None if it does not.
+
+    The embedding index (data/problem_embeddings.npz) and sentence-transformers
+    are an optional extra: a laptop running the server for a demo should not
+    have to download torch and copy a 22 MB index before the tutor will start.
+    Everything except the SEMANTIC retrieval tier works without them.
+    """
+    try:
+        from tutor.retrieval.semantic import SemanticRetriever
+
+        return SemanticRetriever(db)
+    except ImportError as e:
+        log.warning("semantic search off (pip install -e '.[rag]' to enable): %s", e)
+    except FileNotFoundError as e:
+        log.warning(
+            "semantic search off (no embedding index; "
+            "build it with python -m tutor.scripts.build_embeddings): %s", e
+        )
+    except Exception:
+        log.exception("semantic search off: the index could not be loaded")
+    return None
 
 
 class DomainKBTool:
     def __init__(self, db: KnowledgeDB):
         self.db = db
-        self.semantic = SemanticRetriever(db)
+        self.semantic = load_semantic_retriever(db)
 
     def search(
         self,
@@ -76,8 +103,8 @@ class DomainKBTool:
                         ]
                     }
 
-            # 3. semantic fallback
-            if query:
+            # 3. semantic fallback (only where the index is installed)
+            if query and self.semantic is not None:
                 semantic_hits = self.semantic.search(
                     query,
                     limit=limit,

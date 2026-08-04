@@ -62,20 +62,49 @@ Flash, then open Serial Monitor at 115200. A healthy boot looks like:
 
 and the server logs `camera connected: xiao-1`.
 
-## 4. Reaching the server
+## 4. Reaching the server (server on the laptop)
 
-The board must be able to open a TCP connection to the server, which is the
-part that usually bites:
+The board opens a TCP connection to the laptop, so all three pieces sit on one
+Wi-Fi network:
 
-- **Server on the same LAN** — use its LAN IP. Nothing else to do.
-- **Server on a remote/cloud host** (this project's usual setup) — the XIAO
-  cannot use your SSH tunnel; a tunnel only exists on the laptop. Either open
-  the port to the board's network (Azure NSG / security group inbound rule for
-  8765), or run the server on the laptop instead, or put a small relay on the
-  LAN. Check reachability first:
-  `nc -vz <server-ip> 8765` from a laptop on the *same Wi-Fi as the board*.
-- The XIAO and the phone/laptop hotspot must be on **2.4 GHz**. A 5 GHz-only
-  SSID is invisible to this chip.
+```text
+        same 2.4 GHz Wi-Fi
+XIAO ───────────────────────► laptop:8765 ── server.py
+                                   └── browser at http://localhost:8765/
+```
+
+1. **Get the address and the settings block** — this prints your laptop's LAN
+   IP already filled into the sketch defines:
+
+   ```bash
+   python -m tutor.scripts.live_demo
+   ```
+
+   The server prints it too, on startup: `camera device (XIAO): ws://<ip>:8765/camera`.
+
+2. **Allow the port through the laptop firewall.** This is the usual reason a
+   correctly-flashed board never connects — Windows blocks inbound by default.
+   In an **administrator** PowerShell, once:
+
+   ```powershell
+   New-NetFirewallRule -DisplayName "Tutor 8765" -Direction Inbound -Protocol TCP -LocalPort 8765 -Action Allow
+   ```
+
+3. **Check reachability** from a phone or another laptop on the same Wi-Fi
+   before blaming the board: `nc -vz <laptop-ip> 8765` (or open
+   `http://<laptop-ip>:8765/` in a browser — the tutor page should load).
+
+Notes that cost the most time when missed:
+
+- The XIAO and the laptop must be on **2.4 GHz**. A 5 GHz-only SSID is
+  invisible to this chip, and many phone hotspots default to 5 GHz.
+- The laptop's IP changes when it rejoins a network. If the board stops
+  connecting, re-run the preflight and re-flash with the new `SERVER_HOST`.
+- **Guest / school Wi-Fi with client isolation** blocks device-to-device
+  traffic entirely. A phone hotspot (2.4 GHz) is the reliable fallback.
+- If the server runs on a remote host instead, the board cannot use your SSH
+  tunnel — a tunnel only exists on the laptop. You would have to open the port
+  on that host's firewall.
 
 ## 5. Test without hardware
 

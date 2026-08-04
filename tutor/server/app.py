@@ -182,15 +182,19 @@ async def amain(settings: Settings) -> None:
         say(f"Visual Socratic Tutor server on ws://{settings.ws_host}:{settings.ws_port} [{mode}]")
         say(f"  hands-free browser client: http://localhost:{settings.ws_port}/")
         # Say where the tutor's voice will come out, before anyone waits for it.
-        from tutor.speech.tts import has_local_audio_output
+        from tutor.speech.tts import can_play_locally
 
-        if has_local_audio_output():
+        if can_play_locally():
             say("  audio: plays on THIS machine (and in the browser client)")
         else:
-            say("  audio: no sound device here — the browser client plays it on your laptop:")
-            say(f"         ssh -N -L {settings.ws_port}:localhost:{settings.ws_port} "
-                f"<user>@<this-host>")
-            say(f"         then open http://localhost:{settings.ws_port}/ and press 시작")
+            say("  audio: cannot play here — open the browser client and it plays there:")
+            say(f"         http://localhost:{settings.ws_port}/  (press 시작)")
+            say(f"         remote server? ssh -N -L {settings.ws_port}:localhost:"
+                f"{settings.ws_port} <user>@<this-host> first")
+        # The board needs a routable address, not localhost.
+        from tutor.scripts.live_demo import lan_ip
+
+        say(f"  camera device (XIAO): ws://{lan_ip()}:{settings.ws_port}/camera")
         await asyncio.Future()
 
 

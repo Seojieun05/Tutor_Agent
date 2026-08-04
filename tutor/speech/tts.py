@@ -24,9 +24,9 @@ from tutor.config import Settings
 log = logging.getLogger(__name__)
 
 NO_AUDIO_HINT = (
-    "이 서버에는 재생할 오디오 장치가 없습니다 (헤드리스/SSH 호스트). "
-    "노트북에서 소리를 들으려면 브라우저 클라이언트를 쓰세요: "
-    "ssh -N -L 8765:localhost:8765 <user>@<host> 후 http://localhost:8765/ 접속"
+    "이 기기에서는 튜터 음성을 재생할 수 없습니다. "
+    "브라우저 클라이언트를 열면 그 기기의 스피커로 나옵니다: http://localhost:8765/ "
+    "(서버가 원격이면 ssh -N -L 8765:localhost:8765 <user>@<host> 로 터널을 먼저 여세요)"
 )
 
 
@@ -52,6 +52,11 @@ def has_local_audio_output() -> bool:
         return False  # no /proc/asound at all: no ALSA card
     return any(line.strip() and "no soundcards" not in line.lower()
                for line in cards.splitlines())
+
+
+def can_play_locally() -> bool:
+    """Both halves are needed: a player binary AND somewhere to play it."""
+    return shutil.which("ffplay") is not None and has_local_audio_output()
 
 
 class XaiSpeaker:

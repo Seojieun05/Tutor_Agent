@@ -119,10 +119,22 @@ the same room (the XIAO setup). `--list-devices` lists microphones,
 ## XIAO camera
 
 The board is the eyes only — mic and speaker stay on the laptop, where the
-sound comes out. It connects to `ws://<server>:8765/camera` and answers each
+sound comes out. It connects to `ws://<laptop>:8765/camera` and answers each
 `capture_request` with one JPEG; the voice session borrows it whenever it has
 no camera of its own. Flashing, wiring and network notes:
 [firmware/README.md](firmware/README.md).
+
+Running the server on the laptop (the demo setup — no tunnel, sound just works):
+
+```bash
+python -m tutor.scripts.live_demo
+```
+
+prints what is missing plus the sketch's `SERVER_HOST` / `SERVER_PORT` with
+this machine's LAN IP filled in, and the firewall rule the board needs. On
+Windows use `.venv\Scripts\python` in place of `.venv/bin/python`, and skip the
+`[rag]` extra unless you want semantic retrieval — the tutor runs without it
+(that extra pulls torch).
 
 Try the pairing without hardware:
 

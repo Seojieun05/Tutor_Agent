@@ -15,11 +15,13 @@ dependencies = [
     "pydantic>=2.7",
     "python-dotenv>=1.0",
     "numpy>=1.26",
-    "sentence-transformers>=3.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+# SEMANTIC retrieval tier. Optional on purpose: it pulls torch, and a laptop
+# running the server for a demo should not need a 2 GB download to start.
+rag = ["sentence-transformers>=3.0"]
 sim = ["pillow>=10"]
 mic = ["sounddevice>=0.4"]
 # server-side VAD: needed by the browser client (tutor/server/browser.py)
