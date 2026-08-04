@@ -63,6 +63,10 @@ class DeviceSim:
             ev = parse_event(raw)
             if ev.event == "capture_request":
                 capture_id = ev.data.get("capture_id", "cap-?")
+                if not self.images:  # no camera on this device variant
+                    await ws.send(make_event("capture_failed", {"capture_id": capture_id}))
+                    print(f"  -> no image available for {capture_id}")
+                    continue
                 jpeg = self.current_image.read_bytes()
                 await ws.send(
                     encode_image(jpeg, ImageHeader(capture_id=capture_id, format="jpeg"))
@@ -75,8 +79,15 @@ class DeviceSim:
                 print(f"  [hint] level L{ev.data.get('level')} action {ev.data.get('action')}")
             elif ev.event == "hello_ack":
                 print("  connected (hello_ack)")
+            elif ev.event == "transcript":
+                print(f"  [heard] {ev.data.get('text')!r}")
             elif ev.event == "error":
                 print(f"  [server error] {ev.data}")
+            self.on_server_event(ev)
+
+    def on_server_event(self, ev) -> None:
+        """Hook for device variants that react to server events (see
+        simulator/voice_device.py, which drives turn taking from them)."""
 
     async def _repl(self, ws) -> None:
         loop = asyncio.get_running_loop()
@@ -94,8 +105,10 @@ class DeviceSim:
             elif cmd == "q":
                 return
 
-    async def _send_audio(self, ws) -> None:
-        pcm, rate = self._get_audio()
+    async def _send_audio(self, ws, pcm: bytes | None = None, rate: int | None = None) -> None:
+        if pcm is None:
+            pcm, rate = self._get_audio()
+        rate = rate or 16000
         if not pcm:
             print("  no audio source (--wav or --mic)")
             return

@@ -14,7 +14,16 @@ from pydantic import BaseModel, ValidationError
 from tutor.protocol.frames import ProtocolError
 
 DEVICE_EVENTS = {"hello", "hint_request", "capture_failed", "error"}
-SERVER_EVENTS = {"hello_ack", "capture_request", "speech_state", "hint_issued", "error"}
+SERVER_EVENTS = {
+    "hello_ack",
+    "capture_request",
+    "speech_state",
+    # what STT heard, and whether it starts a hint flow — a hands-free device
+    # needs this to know an utterance produced no response and it may listen again
+    "transcript",
+    "hint_issued",
+    "error",
+}
 
 
 class Event(BaseModel):

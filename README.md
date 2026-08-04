@@ -6,7 +6,8 @@ necessary Socratic hint — never the answer** — through the laptop speaker.
 Spec: [CLAUDE.md](CLAUDE.md).
 
 ```text
-Device (camera/mic) → WebSocket → server.py
+Device (camera/mic, or the laptop's own mic) → WebSocket → server.py
+  → Silero VAD turn detection (hands-free) → STT
   → Grok VLM recognition → Domain KB (EXACT/TEMPLATE/CONCEPT/NEW)
   → Grok Solver fallback → Student State Estimator
   → Pedagogical Policy (L0–L4) → Hint Generator (+ answer-leak guard)
@@ -51,16 +52,47 @@ Demo: press `h` (L1 Socratic question) → `h` again with unchanged work
 (escalates to L2) → `n` then `h` (progress detected → back to L1).
 Preflight: `.venv/bin/python -m tutor.scripts.live_demo`.
 
+## Hands-free voice (laptop mic + speaker)
+
+No buttons, no keys: talk, stop talking, the tutor answers, it listens again.
+
+```bash
+.venv/bin/pip install -e ".[voice]"
+.venv/bin/python -m simulator.voice_device --server ws://localhost:8765 --images simulator/assets/lin_001_wrong_sign.jpg
+```
+
+The laptop mic is just another device on the existing wire protocol: 16 kHz mono
+PCM → Silero VAD turn detection → the same `AUDIO` frames the XIAO sends → the
+unchanged server pipeline (STT → hint → TTS on the laptop speaker). Only the
+endpointed utterance is sent, so STT and Grok never see room noise. `--images`
+is optional (it replays a worksheet on `capture_request`); `--list-devices`
+picks a microphone, `--input-device` selects one.
+
+```text
+LISTENING --onset--> USER_SPEAKING --800ms silence--> PROCESSING
+    ^                                                     |
+    +---- tail guard <---- AGENT_SPEAKING <---- TTS starts (speech_state)
+```
+
+The VAD only runs in the first two states, so the tutor cannot transcribe its
+own voice; `tail_guard_ms` covers room decay after playback. Tuning (`.env`):
+`VAD_PREFIX_MS` 300, `VAD_MIN_SPEECH_MS` 250, `VAD_SILENCE_MS` 800,
+`VAD_THRESHOLD` 0.5, `VAD_TAIL_GUARD_MS` 250 — the endpointing lives in
+[tutor/speech/turn.py](tutor/speech/turn.py) and is unit-tested with a scripted
+VAD (no mic, no torch).
+
 ## Tests
 
 ```bash
 .venv/bin/python -m pytest
 ```
 
-Fully offline: LLM calls are mocked (`EchoLLMClient`), audio is a `NullSpeaker`.
-Covers the wire protocol, sympy matching (EXACT/TEMPLATE/CONCEPT/NEW), the
-policy rule table, hint-effectiveness lifecycle, per-purpose tool allowlists,
-the answer-leak guard, and an end-to-end websocket smoke test.
+Fully offline: LLM calls are mocked (`EchoLLMClient`), audio is a `NullSpeaker`,
+the VAD is a scripted stub. Covers the wire protocol, sympy matching
+(EXACT/TEMPLATE/CONCEPT/NEW), the policy rule table, hint-effectiveness
+lifecycle, per-purpose tool allowlists, the answer-leak guard, turn taking
+(prefix padding, onset debounce, endpointing, the four-state gate), and
+end-to-end websocket smoke tests including a full hands-free voice turn.
 
 ## Design highlights
 

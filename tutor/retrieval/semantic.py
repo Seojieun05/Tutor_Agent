@@ -1,10 +1,14 @@
 from pathlib import Path
+from functools import lru_cache
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
 from tutor.knowledge.db import KnowledgeDB
 
+@lru_cache(maxsize=1)
+def get_embedding_model(model_name: str) -> SentenceTransformer:
+    return SentenceTransformer(model_name, device="cpu")
 
 MODEL_NAME = "intfloat/multilingual-e5-small"
 
@@ -25,10 +29,7 @@ class SemanticRetriever:
         self.ids = data["ids"].astype(str)
         self.embeddings = data["embeddings"].astype(np.float32)
 
-        self.model = SentenceTransformer(
-            MODEL_NAME,
-            device="cpu",
-        )
+        self.model = get_embedding_model(MODEL_NAME)
 
         # DB 문제를 id로 바로 찾기 위한 map
         self.problems = {

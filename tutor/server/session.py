@@ -151,11 +151,23 @@ class Session:
             )
         except Exception:
             log.exception("STT failed; utterance dropped")
+            # tell the device anyway: a hands-free one is muted until it hears back
+            await self._send_transcript("", False)
             return
         log.info("utterance: %r", transcript.text)
         self.last_transcript = transcript.text
-        if wants_hint(transcript.text):
+        asks_hint = wants_hint(transcript.text)
+        await self._send_transcript(transcript.text, asks_hint)
+        if asks_hint:
             await self.handle_hint_request()
+
+    async def _send_transcript(self, text: str, asks_hint: bool) -> None:
+        try:
+            await self.ws.send(
+                make_event("transcript", {"text": text, "wants_hint": asks_hint})
+            )
+        except Exception:
+            log.debug("could not send transcript event (connection gone)")
 
     # --- capture --------------------------------------------------------------
 
