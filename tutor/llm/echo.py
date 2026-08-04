@@ -52,7 +52,9 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
     "tag": {"problem_type": "linear_equation", "concepts": ["linear_equation"]},
     # echo mode cannot judge an answer: stay neutral so the tutor re-asks the
     # same level instead of pretending the student was right or wrong
+    "explain": {"hint": "그렇게 하면 양쪽이 똑같이 유지되기 때문이에요. 다시 한번 해 볼까요?"},
     "evaluate": {
+        "intent": "ANSWER",
         "verdict": "UNCLEAR",
         "feedback": "잘 못 들었어요.",
         "misconception": None,

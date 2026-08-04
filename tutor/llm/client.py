@@ -25,7 +25,7 @@ M = TypeVar("M", bound=BaseModel)
 # Purposes the student waits on mid-conversation. `solve` and `recognize` are
 # excluded: a wrong reference solution or a misread worksheet costs far more
 # than the seconds saved.
-FAST_PURPOSES = frozenset({"evaluate", "phrase", "estimate", "tag"})
+FAST_PURPOSES = frozenset({"evaluate", "phrase", "estimate", "tag", "explain"})
 
 
 class LLMError(Exception):

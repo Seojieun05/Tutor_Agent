@@ -26,6 +26,9 @@ KB_KINDS_BY_PURPOSE: dict[str, frozenset[str]] = {
     "solve": frozenset({"problems", "solutions", "concepts"}),
     "estimate": frozenset({"misconceptions"}),
     "phrase": frozenset({"hint_templates", "misconceptions"}),
+    # answering a student's "why?": same reach as phrasing a hint — concepts and
+    # misconceptions, never solutions
+    "explain": frozenset({"hint_templates", "misconceptions"}),
 }
 
 

@@ -254,3 +254,87 @@ class TestProblemCompletion:
         graded = llm.calls.count("evaluate")
         await session._handle_utterance(b"\x00\x00" * 100, 16000)
         assert llm.calls.count("evaluate") == graded  # nothing left to answer
+
+
+class TestOneAcknowledgementPerTurn:
+    """The evaluator reacts; the hint must not react again."""
+
+    def test_strip_only_removes_a_real_opener(self):
+        from tutor.hints.generator import strip_leading_acknowledgement as strip
+
+        assert strip("네, 그렇게 하면 돼요.") == "그렇게 하면 돼요."
+        assert strip("맞아요! 이제 3을 어떻게 할까요?") == "이제 3을 어떻게 할까요?"
+        assert strip("네, 맞아요! 다음은요?") == "다음은요?"   # doubled openers
+        assert strip("음... 어떤 항을 옮길까요?") == "어떤 항을 옮길까요?"
+        # words that merely start with an ack syllable must survive
+        assert strip("네 번째 항을 보세요.") == "네 번째 항을 보세요."
+        assert strip("아래쪽 식을 보세요.") == "아래쪽 식을 보세요."
+        assert strip("오른쪽으로 옮겨 볼까요?") == "오른쪽으로 옮겨 볼까요?"
+        assert strip("맞아요!") == "맞아요!"  # never returns empty
+
+    async def test_the_tutor_says_it_once(self, db):
+        session, llm, speaker = build_session(
+            db,
+            [{"verdict": "CORRECT", "feedback": "맞아요, 그렇게 하면 돼요!",
+              "misconception": None, "status": "CORRECT"}],
+        )
+        # force the LLM phrasing path and have it echo an acknowledgement back
+        llm._queues["phrase"] = [{"hint": "네, GOOD 글자들은 그렇게 하면 돼요. 다음은 무엇일까요?"}]
+        session.ctx.match = MatchResult(tier=Tier.NEW, concepts=["nothing_seeded"],
+                                        reference=REFERENCE)
+        session.ctx.recognition = Recognition(problem_text="문제")
+        ask_l1(session, step=1)
+
+        await session.handle_answer("5를 빼요", session.store.pending_hint("p1"))
+
+        spoken = speaker.spoken[0]
+        assert spoken.startswith("맞아요, 그렇게 하면 돼요!")
+        assert "네, GOOD" not in spoken
+        assert "GOOD 글자들은 그렇게 하면 돼요" in spoken  # the content is kept
+
+
+class TestStudentQuestions:
+    """'왜 그렇게 해요?' is a question, not a wrong answer."""
+
+    def _asking(self, feedback="", verdict="UNCLEAR"):
+        return {"intent": "QUESTION", "verdict": verdict, "feedback": feedback,
+                "misconception": None, "status": None}
+
+    async def test_a_question_is_explained_not_graded(self, db):
+        session, llm, speaker = build_session(db, [self._asking()])
+        hint_id = ask_l1(session, step=1)
+        before = session.store.get_state()
+
+        await session.handle_answer("왜 5를 빼야 해요?", session.store.pending_hint("p1"))
+
+        assert llm.calls == ["evaluate", "explain"]
+        assert speaker.spoken and speaker.spoken[0]
+        # nothing was proven: the question is still open at the same level
+        history = session.store.get_history(problem_hash="p1")
+        assert len(history) == 1 and history[0].id == hint_id
+        assert history[0].effective is None
+        assert session.store.pending_hint("p1") is not None
+        assert session.store.get_state() == before  # no state change
+        assert "hint_issued" not in session.ws.event_names()
+
+    async def test_the_explanation_does_not_double_up_on_feedback(self, db):
+        session, llm, speaker = build_session(db, [self._asking(feedback="네, 궁금하시죠?")])
+        ask_l1(session, step=1)
+        await session.handle_answer("왜 나눠요?", session.store.pending_hint("p1"))
+        # a question turn speaks the explanation only — no evaluator reaction
+        assert not speaker.spoken[0].startswith("네, 궁금하시죠?")
+
+    async def test_answering_after_the_explanation_still_lands(self, db):
+        session, llm, _ = build_session(
+            db,
+            [self._asking(),
+             {"intent": "ANSWER", "verdict": "CORRECT", "feedback": "맞아요!",
+              "misconception": None, "status": "CORRECT"}],
+        )
+        ask_l1(session, step=1)
+        await session.handle_answer("왜 5를 빼요?", session.store.pending_hint("p1"))
+        await session.handle_answer("5를 빼면 돼요", session.store.pending_hint("p1"))
+
+        history = session.store.get_history(problem_hash="p1")
+        assert history[0].effective is True      # the original question resolved
+        assert history[-1].step == 2             # and we moved on

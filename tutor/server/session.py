@@ -25,7 +25,7 @@ import logging
 from dataclasses import dataclass, field
 
 from tutor.config import Settings
-from tutor.hints.generator import HintGenerator
+from tutor.hints.generator import HintGenerator, strip_leading_acknowledgement
 from tutor.hints.guard import leaks_answer
 from tutor.knowledge import mathnorm
 from tutor.knowledge.matching import Matcher, problem_hash
@@ -298,6 +298,13 @@ class Session:
         )
         self.last_transcript = None  # graded; not evidence for the next turn
 
+        if verdict.intent == "QUESTION":
+            # They asked, they did not attempt. Explain and leave the hint
+            # pending: nothing was proven, so nothing escalates, nothing
+            # advances, and their real answer still lands on this question.
+            await self._answer_question(ctx, pending, transcript)
+            return
+
         # Orchestrator-owned writes. The policy needs no new rules: resolving
         # the pending hint IS the signal that moves it up, down or nowhere.
         prev = self.store.get_state() or StudentState()
@@ -351,6 +358,26 @@ class Session:
         )
         await self._deliver(decision, self._with_feedback(verdict, text, decision), ctx.hash)
 
+    async def _answer_question(
+        self, ctx: ProblemContext, pending: HintRecord, question: str
+    ) -> None:
+        """The student asked why. Answer that, then hand the turn back.
+
+        No store writes and no hint record: an explanation is not a hint, so
+        it must not move the L1-L4 ladder or resolve the pending question.
+        """
+        text = await asyncio.to_thread(
+            self.deps.hint_gen.explain,
+            student_question=question,
+            tutor_question=pending.hint_text,
+            match=ctx.match,
+            reference=ctx.reference,
+            rec=ctx.recognition,
+            target_step=pending.step,
+        )
+        log.info("explained a student question at step %d", pending.step)
+        await self._speak(text)
+
     async def _finish_problem(self, ctx: ProblemContext, verdict, target_step: int) -> None:
         """The last step was answered correctly: congratulate and close.
 
@@ -376,7 +403,9 @@ class Session:
         feedback = (verdict.feedback or "").strip()
         if not feedback or not hint:
             return feedback or hint
-        combined = f"{feedback} {hint}"
+        # The feedback IS this turn's reaction; a hint that opens with its own
+        # "네," makes the tutor say it twice in one breath.
+        combined = f"{feedback} {strip_leading_acknowledgement(hint)}"
         reference = self.ctx.reference if self.ctx is not None else None
         if reference is not None and leaks_answer(combined, reference, decision.target_step):
             log.warning("answer feedback leaked; dropping it")

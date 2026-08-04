@@ -27,6 +27,7 @@ from tutor.state.models import Status
 log = logging.getLogger(__name__)
 
 Verdict = Literal["CORRECT", "INCORRECT", "UNCLEAR"]
+Intent = Literal["ANSWER", "QUESTION"]
 
 _SYSTEM = """You grade a student's SPOKEN answer to a tutor's Socratic question.
 
@@ -44,10 +45,22 @@ verdict:
 - "UNCLEAR"   — off-topic, unintelligible, or too vague to judge either way.
                 Use this only when you genuinely cannot tell; prefer the others.
 
+intent — decide this FIRST, it matters more than the verdict:
+- "ANSWER"   — the student attempts an answer, says they do not know, or asks
+               for more help / what to do next ("모르겠어요", "힌트 더 주세요").
+- "QUESTION" — the student asks WHY something is done, or what a concept or
+               method means ("왜 나눠요?", "이항이 뭐예요?", "왜 그렇게 해야 해요?").
+               They are asking for an explanation, not attempting the step.
+               Set intent "QUESTION" even if their words also contain a guess;
+               a question that is not answered will be asked again.
+For "QUESTION" the verdict is ignored — use "UNCLEAR" and leave feedback empty.
+
 feedback: ONE short spoken Korean sentence reacting to the answer (친근한 반말체
 금지, 존댓말). For CORRECT confirm briefly ("맞아요, 그렇게 하면 돼요!").
 For INCORRECT do NOT correct it and do NOT give the next step — just acknowledge
 warmly ("음, 조금 달라요."). For UNCLEAR say you did not catch it.
+This is the ONLY reaction the student hears — what follows it is written
+separately, so keep feedback to one clause and never continue into a hint.
 NEVER state the final answer, a later step, or the result of the current step.
 
 misconception: an id from the given list if the wrong answer matches one, else null.
@@ -58,6 +71,9 @@ Return ONLY the JSON object."""
 
 
 class AnswerVerdict(BaseModel):
+    # default ANSWER: a model that omits the field must not break the turn —
+    # grading a question as an answer is recoverable, crashing is not
+    intent: Intent = "ANSWER"
     verdict: Verdict
     feedback: str = ""
     misconception: str | None = None
@@ -85,7 +101,8 @@ class AnswerEvaluator:
             schema=AnswerVerdict,
         )
         log.info(
-            "answer verdict=%s target_step=%d transcript=%r",
+            "answer intent=%s verdict=%s target_step=%d transcript=%r",
+            verdict.intent,
             verdict.verdict,
             target_step,
             transcript[:60],

@@ -9,6 +9,7 @@ Hint history arrives prefetched from the orchestrator.
 from __future__ import annotations
 
 import logging
+import re
 
 from pydantic import BaseModel
 
@@ -39,12 +40,51 @@ Hard rules:
 - Korean 존댓말(해요체), friendly, spoken style — never 반말.
 - Never repeat an earlier hint: the ones already given are listed, and the student
   may have moved on to a later step since then.
-- The student's latest answer may be provided.
-- Do not ask about information the student already stated correctly.
-- Acknowledge or build directly on that answer, then ask only the next missing piece.
+- The student's latest answer may be given. Build on what they already said
+  correctly — never ask for it again — but do NOT judge it a second time:
+  the reaction ("맞아요", "음, 조금 달라요") is written separately and spoken first.
+- So never begin with 네 / 맞아요 / 좋아요 / 그렇죠 / 음. Start straight at the
+  next question or idea.
 - You may look up hint templates and misconceptions in the knowledge base.
 
 Return ONLY JSON: {"hint": "..."}"""
+
+_EXPLAIN_SYSTEM = """You are a Socratic math tutor speaking Korean to a student.
+
+The student did NOT attempt your question — they asked one of their own, usually
+"why do we do it this way?". Answer THEIR question, then hand the turn back.
+
+Hard rules:
+- Explain the reason or the principle in 1-2 short spoken sentences.
+- NEVER state the final answer, the result of the current step, or a later step.
+  Explain WHY the step works; do not carry it out for them.
+- End by inviting them back to the question you had asked.
+- Korean 존댓말(해요체), spoken, friendly. Never 반말.
+- Do not open with a filler acknowledgement (네 / 맞아요 / 궁금하시죠). Answer directly.
+
+Return ONLY JSON: {"hint": "..."}"""
+
+# One acknowledgement per turn. The evaluator already reacted ("맞아요, 그렇게
+# 하면 돼요!"), so a hint that opens with its own "네," produces the doubled
+# "맞아요, 그렇게 하면 돼요! 네, 그렇게 하면 돼요." Prompts alone do not hold
+# this line reliably, so it is also enforced here.
+_ACK_WORDS = (
+    r"네+|예|맞아요|맞습니다|맞아|좋아요|좋습니다|그렇죠|그렇습니다|그래요|"
+    r"훌륭해요|훌륭합니다|잘했어요|잘하셨어요|정확해요|정확합니다|음+|아+|오+|와+"
+)
+# Punctuation after the word is required, so "네 번째", "아래", "오른쪽" survive.
+_ACK_PREFIX_RE = re.compile(rf"^\s*(?:{_ACK_WORDS})\s*[,!.…~·]+\s*")
+
+
+def strip_leading_acknowledgement(text: str, rounds: int = 2) -> str:
+    """Drop a leading '네,' / '맞아요!' — someone else already said it."""
+    out = text
+    for _ in range(rounds):
+        stripped = _ACK_PREFIX_RE.sub("", out, count=1).lstrip()
+        if stripped == out or not stripped:
+            break
+        out = stripped
+    return out or text
 
 
 class PhrasedHint(BaseModel):
@@ -107,6 +147,50 @@ class HintGenerator:
             )
             if leaks_answer(text, reference, decision.target_step):
                 return self._generic_fallback(decision, slots)
+        return text
+
+    def explain(
+        self,
+        *,
+        student_question: str,
+        tutor_question: str,
+        match: MatchResult,
+        reference: ReferenceSolution | None,
+        rec: Recognition | None,
+        target_step: int,
+    ) -> str:
+        """Answer a student's "왜 그렇게 해요?" instead of grading it.
+
+        Same guard rails as a hint: the target step may be motivated, but its
+        result, the final answer and every later step stay out.
+        """
+        concepts = ", ".join((rec.concepts if rec else []) or match.concepts) or "알 수 없음"
+        parts = [
+            f"문제: {rec.problem_text if rec else ''}",
+            f"필요한 개념: {concepts}",
+            f"튜터가 했던 질문: {tutor_question}",
+            f"학생의 질문: {student_question}",
+        ]
+        if reference is not None:
+            step = next((s for s in reference.steps if s.idx == target_step), None)
+            if step is not None:
+                parts.append(
+                    f"지금 다루는 단계 (계산 결과는 말하지 말 것): {step.description}"
+                )
+        text = strip_leading_acknowledgement(
+            self.llm.run_with_tools(
+                purpose="explain",
+                system=_EXPLAIN_SYSTEM,
+                user="\n".join(parts),
+                schema=PhrasedHint,
+            ).hint.strip()
+        )
+        if reference is not None and leaks_answer(text, reference, target_step):
+            log.warning("explanation leaked the answer; falling back")
+            return (
+                "좋은 질문이에요. 지금 단계에서 왜 그렇게 하는지 먼저 같이 생각해 볼까요? "
+                + tutor_question
+            )
         return text
 
     def _slots(
