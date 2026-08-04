@@ -46,7 +46,7 @@ class XaiTranscriber:
         resp = httpx.post(
             f"{self.settings.xai_base_url.rstrip('/')}/stt",
             headers={"Authorization": f"Bearer {self.settings.xai_api_key}"},
-            data={"language": self.settings.tutor_language},
+            data={"language": "ko"},
             files={"file": ("utterance.wav", wav, "audio/wav")},
             timeout=60,
         )

@@ -95,7 +95,10 @@ class Matcher:
     def _match_exact(self, rec: Recognition) -> MatchResult | None:
         candidate = self.db.find_by_text_hash(problem_hash(rec))
         if candidate is None and rec.equations:
-            for p in self.db.all_problems():
+            # Indexed candidates only: same numbers and variables, which is a
+            # necessary condition for the strict equivalence checked below.
+            signature = mathnorm.equations_signature(rec.equations)
+            for p in self.db.problems_by_signature(signature):
                 if len(p.equations) != len(rec.equations):
                     continue
                 # strict: a scalar multiple is a DIFFERENT problem — its

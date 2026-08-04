@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS solutions (
     body TEXT NOT NULL, verified INTEGER NOT NULL DEFAULT 0, origin TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS problem_concepts (problem_id TEXT NOT NULL, concept_id TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_problem_concepts ON problem_concepts(concept_id);
 CREATE TABLE IF NOT EXISTS misconceptions (id TEXT PRIMARY KEY, concept_id TEXT NOT NULL, body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS hint_templates (
     id TEXT PRIMARY KEY, concept_id TEXT, misconception_id TEXT,
@@ -49,6 +50,33 @@ class KnowledgeDB:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._conn.executescript(_SCHEMA)
+        self._conn.commit()
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Backfill equations_sig for DBs written before it existed.
+
+        Pure string work (no sympy), so even a 16k-problem import is a second
+        of startup, once."""
+        columns = {r[1] for r in self._conn.execute("PRAGMA table_info(problems)")}
+        if "equations_sig" not in columns:
+            self._conn.execute("ALTER TABLE problems ADD COLUMN equations_sig TEXT")
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_problems_eqsig ON problems(equations_sig)"
+        )
+        rows = self._conn.execute(
+            "SELECT id, body FROM problems WHERE equations_sig IS NULL"
+        ).fetchall()
+        if rows:
+            from tutor.knowledge.mathnorm import equations_signature
+
+            self._conn.executemany(
+                "UPDATE problems SET equations_sig = ? WHERE id = ?",
+                [
+                    (equations_signature(json.loads(body).get("equations", [])), pid)
+                    for pid, body in rows
+                ],
+            )
         self._conn.commit()
 
     # --- inserts (used by the seeder and the solver candidate store) ---------
@@ -67,8 +95,12 @@ class KnowledgeDB:
     def insert_problem(
         self, problem: Problem, normalized_text: str, text_hash: str, verified: bool
     ) -> None:
+        from tutor.knowledge.mathnorm import equations_signature
+
         self._conn.execute(
-            "INSERT OR REPLACE INTO problems VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO problems "
+            "(id, problem_type, problem_text, normalized_text, text_hash, body, "
+            " verified, template_id, equations_sig) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 problem.id,
                 problem.problem_type,
@@ -78,6 +110,7 @@ class KnowledgeDB:
                 problem.model_dump_json(),
                 int(verified),
                 problem.template_id,
+                equations_signature(problem.equations),
             ),
         )
         self._conn.execute("DELETE FROM problem_concepts WHERE problem_id = ?", (problem.id,))
@@ -125,6 +158,26 @@ class KnowledgeDB:
     def all_problems(self, verified_only: bool = True) -> list[Problem]:
         q = "SELECT body FROM problems" + (" WHERE verified = 1" if verified_only else "")
         return [Problem.model_validate_json(r[0]) for r in self._conn.execute(q)]
+
+    def problems_by_signature(self, signature: str, limit: int = 20) -> list[Problem]:
+        """Verified problems whose equations use the same numbers/variables.
+
+        The EXACT tier's candidate set: an indexed lookup instead of a scan
+        over every stored problem (which cost ~6.5s once a dataset was imported).
+        """
+        if not signature:
+            return []
+        rows = self._conn.execute(
+            "SELECT body FROM problems WHERE equations_sig = ? AND verified = 1 LIMIT ?",
+            (signature, limit),
+        )
+        return [Problem.model_validate_json(r[0]) for r in rows]
+
+    def has_pedagogy(self) -> bool:
+        """Does the DB carry the hint templates the tutor speaks from?"""
+        return bool(
+            self._conn.execute("SELECT 1 FROM hint_templates LIMIT 1").fetchone()
+        )
 
     def templates(self) -> list[Template]:
         return [
@@ -183,17 +236,36 @@ class KnowledgeDB:
         ]
         return matched + generic
 
-    def problems_by_concepts(self, concepts: set[str]) -> list[tuple[Problem, float]]:
-        """Verified problems with Jaccard overlap of concept tags, best first."""
+    def problems_by_concepts(
+        self, concepts: set[str], limit: int = 50
+    ) -> list[tuple[Problem, float]]:
+        """Verified problems with Jaccard overlap of concept tags, best first.
+
+        The join does the filtering: only problems that share at least one tag
+        are deserialized, so an imported dataset does not turn this into a
+        full-table scan."""
+        if not concepts:
+            return []
+        placeholders = ",".join("?" * len(concepts))
+        rows = self._conn.execute(
+            f"""
+            SELECT p.body,
+                   COUNT(*) AS shared,
+                   (SELECT COUNT(*) FROM problem_concepts a WHERE a.problem_id = p.id) AS total
+            FROM problems p
+            JOIN problem_concepts pc ON pc.problem_id = p.id
+            WHERE pc.concept_id IN ({placeholders}) AND p.verified = 1
+            GROUP BY p.id
+            ORDER BY shared DESC
+            LIMIT ?
+            """,
+            (*concepts, limit),
+        ).fetchall()
         scored = []
-        for p in self.all_problems():
-            tags = set(p.concepts)
-            union = tags | concepts
-            if not union:
-                continue
-            overlap = len(tags & concepts) / len(union)
-            if overlap > 0:
-                scored.append((p, overlap))
+        for body, shared, total in rows:
+            union = total + len(concepts) - shared
+            if union > 0:
+                scored.append((Problem.model_validate_json(body), shared / union))
         return sorted(scored, key=lambda t: -t[1])
 
     def close(self) -> None:

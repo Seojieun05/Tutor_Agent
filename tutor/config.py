@@ -24,6 +24,9 @@ class Settings:
     recog_conf_threshold: float = 0.6
     capture_timeout_s: float = 5.0
     audio_sample_rate: int = 16000
+    # Reasoning effort for the conversational LLM calls (see llm.client
+    # FAST_PURPOSES). Empty string = the model's default.
+    llm_reasoning_effort: str = "low"
     # Hands-free turn taking (laptop mic; see tutor/speech/turn.py)
     vad_threshold: float = 0.5
     vad_prefix_ms: int = 300
@@ -48,6 +51,9 @@ def load_settings(env_file: Path | None = None) -> Settings:
     s.db_path = Path(os.getenv("DB_PATH", str(s.db_path)))
     s.tutor_language = os.getenv("TUTOR_LANGUAGE", s.tutor_language).strip() or s.tutor_language
     s.recog_conf_threshold = float(os.getenv("RECOG_CONF_THRESHOLD", str(s.recog_conf_threshold)))
+    s.llm_reasoning_effort = os.getenv(
+        "LLM_REASONING_EFFORT", s.llm_reasoning_effort
+    ).strip()
     s.vad_threshold = float(os.getenv("VAD_THRESHOLD", str(s.vad_threshold)))
     s.vad_prefix_ms = int(os.getenv("VAD_PREFIX_MS", str(s.vad_prefix_ms)))
     s.vad_min_speech_ms = int(os.getenv("VAD_MIN_SPEECH_MS", str(s.vad_min_speech_ms)))

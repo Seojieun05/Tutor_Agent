@@ -24,6 +24,7 @@ from tutor.knowledge.matching import Matcher
 from tutor.llm.echo import EchoLLMClient
 from tutor.server.session import Deps, Session
 from tutor.solver.grok_solver import GrokSolver
+from tutor.state.answer import AnswerEvaluator
 from tutor.state.estimator import StudentStateEstimator
 from tutor.store.session_store import SessionStore
 from tutor.tools.registry import ToolRegistry
@@ -67,10 +68,13 @@ def serve_static(connection, request):
 def build_shared(settings: Settings):
     """Build the per-server (shared) dependencies."""
     db = KnowledgeDB(settings.db_path)
-    if not db.all_problems(verified_only=False):
+    # Pedagogy, not problems, is the thing the tutor cannot work without: an
+    # imported dataset fills `problems` but leaves hint templates empty, and
+    # every hint then costs an LLM call. Seeding is idempotent (INSERT OR REPLACE).
+    if not db.has_pedagogy():
         from tutor.scripts.seed_db import seed_database
 
-        log.info("empty knowledge DB: seeding from bundled seeds")
+        log.info("no hint templates in the knowledge DB: seeding bundled pedagogy")
         seed_database(db)
 
     registry = ToolRegistry(db)
@@ -103,6 +107,7 @@ def make_deps(settings: Settings, db, llm, transcriber, speaker) -> Deps:
         hint_gen=HintGenerator(llm, db),
         transcriber=transcriber,
         speaker=speaker,
+        evaluator=AnswerEvaluator(llm, db),
         store=SessionStore(),
     )
 

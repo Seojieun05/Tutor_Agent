@@ -117,6 +117,29 @@ def equations_equivalent(a: str, b: str, allow_scale: bool = True) -> bool:
     return False
 
 
+_NUMBER_TOKEN_RE = re.compile(r"\d+(?:\.\d+)?")
+
+
+def equations_signature(equations: list[str]) -> str:
+    """Cheap index key: the numbers and variables an equation is made of.
+
+    A *necessary* condition for strict equivalence — two equations whose
+    residuals are equal (or negated: a swapped side) are built from the same
+    literals and variables, in any order. Lets the EXACT tier pull a handful of
+    candidates out of SQL instead of running sympy over every stored problem.
+    Purely lexical, so it never parses and never fails.
+    """
+    parts = []
+    for eq in equations:
+        text = _preprocess(eq)
+        numbers = sorted(
+            {n.rstrip("0").rstrip(".") if "." in n else n for n in _NUMBER_TOKEN_RE.findall(text)}
+        )
+        variables = sorted(set(re.findall(r"(?<![A-Za-z_])[a-zA-Z](?![A-Za-z_])", text)))
+        parts.append(",".join(numbers) + "#" + ",".join(variables))
+    return "|".join(parts)
+
+
 def equations_same_form(a: str, b: str) -> bool:
     """Same WRITTEN equation, up to per-side simplification and side swap.
 

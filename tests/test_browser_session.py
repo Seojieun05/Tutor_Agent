@@ -75,6 +75,7 @@ class FakeBrowser:
         self.heard: list[str] = []
         self.tutor_said: list[str] = []
         self.audio: list[TtsAudioFrame] = []
+        self.captures = 0
         self.gated = True  # like the page: stop sending unless LISTENING/USER_SPEAKING
         self.state = ""
         self._listening = asyncio.Event()
@@ -113,6 +114,7 @@ class FakeBrowser:
             elif ev.event == "tutor_says":
                 self.tutor_said.append(ev.data["text"])
             elif ev.event == "capture_request":
+                self.captures += 1
                 capture_id = ev.data["capture_id"]
                 if self.worksheet is None:
                     await self._ws.send(make_event("capture_failed", {"capture_id": capture_id}))
@@ -307,3 +309,63 @@ async def test_wrong_sample_rate_is_rejected(deps):
             await browser.speak_a_turn()  # and still works
 
     assert len(browser.audio) == 1
+
+
+class ScriptedTranscriber:
+    """STT that says something different each turn."""
+
+    def __init__(self, texts: list[str]):
+        self.texts = list(texts)
+
+    def transcribe(self, pcm, sample_rate=16000):
+        from tutor.speech.stt import Transcript
+
+        return Transcript(text=self.texts.pop(0) if self.texts else "", language="ko")
+
+
+async def test_spoken_answer_advances_without_a_second_capture(db):
+    """The reported flow: ask → answer out loud → next step's L1.
+
+    The answer turn must not re-open the camera or re-run recognition; that
+    round trip is what made a reply take ~30s and re-recognition noise is what
+    reset the state back to L1 every time.
+    """
+    from tutor.state.answer import AnswerEvaluator
+
+    llm = EchoLLMClient(
+        {
+            "recognize": [WORKSHEET] * 5,
+            "evaluate": [
+                {"verdict": "CORRECT", "feedback": "맞아요!", "misconception": None,
+                 "status": "CORRECT"}
+            ],
+        }
+    )
+    deps = Deps(
+        settings=SETTINGS,
+        recognizer=Recognizer(llm),
+        matcher=Matcher(db),
+        solver=GrokSolver(llm, db),
+        estimator=StudentStateEstimator(llm, db),
+        hint_gen=HintGenerator(llm, db),
+        transcriber=ScriptedTranscriber(["힌트 주세요", "양변에서 5를 빼요"]),
+        speaker=NullSpeaker(audio=MP3),
+        evaluator=AnswerEvaluator(llm, db),
+        store=SessionStore(),
+    )
+    vad = ScriptedVAD()
+    async with await browser_server(deps, vad) as server:
+        port = server.sockets[0].getsockname()[1]
+        async with FakeBrowser(f"ws://127.0.0.1:{port}/browser", vad, JPEG) as browser:
+            await browser.speak_a_turn()  # "힌트 주세요"  → L1 at step 1
+            first_captures = browser.captures
+            await browser.speak_a_turn()  # answers it     → L1 at step 2
+
+    history = deps.store.get_history()
+    assert [(h.step, h.level) for h in history] == [(1, 1), (2, 1)]
+    assert history[0].effective is True  # the answer proved the hint worked
+    assert browser.captures == first_captures == 1  # camera used once, not twice
+    assert llm.calls.count("recognize") == 1
+    assert llm.calls.count("evaluate") == 1
+    assert "맞아요!" in browser.tutor_said[1]
+    assert browser.tutor_said[1] != browser.tutor_said[0]  # not the same question again

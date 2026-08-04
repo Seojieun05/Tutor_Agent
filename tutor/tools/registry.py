@@ -17,6 +17,9 @@ log = logging.getLogger(__name__)
 
 KB_KINDS_BY_PURPOSE: dict[str, frozenset[str]] = {
     "recognize": frozenset(),
+    # answer grading: the orchestrator hands it the reference solution and the
+    # misconception list directly, so it needs no tools (and no extra round trip)
+    "evaluate": frozenset(),
     "solve": frozenset({"problems", "solutions", "concepts"}),
     "estimate": frozenset({"misconceptions"}),
     "phrase": frozenset({"hint_templates", "misconceptions"}),

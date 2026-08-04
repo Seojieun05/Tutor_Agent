@@ -36,7 +36,9 @@ L4 = reveal only the given next step.
 Hard rules:
 - NEVER state the final answer or any result beyond the given step.
 - NEVER solve the problem. Guide with questions and concepts.
-- Korean, friendly, spoken style (existing hints are provided so you don't repeat them).
+- Korean 존댓말(해요체), friendly, spoken style — never 반말.
+- Never repeat an earlier hint: the ones already given are listed, and the student
+  may have moved on to a later step since then.
 - You may look up hint templates and misconceptions in the knowledge base.
 
 Return ONLY JSON: {"hint": "..."}"""
@@ -67,6 +69,9 @@ class HintGenerator:
             return "훌륭해요, 문제를 끝까지 풀었네요! 어떻게 구했는지 스스로 설명해 볼까요?"
 
         slots = self._slots(decision, match, reference)
+        # Anything already said this problem is off the table: a concept-level
+        # template fits every step, so reusing it verbatim is how the tutor
+        # ends up asking the same question after the student has progressed.
         given = {h.hint_text for h in history if h.hint_text}
 
         # 1) Verified DB pedagogy first (spec rule 1) — concept/misconception
@@ -135,8 +140,17 @@ class HintGenerator:
             parts.append(
                 f"진단된 오개념: {m.description if m else decision.misconception}"
             )
-        if decision.level >= 4 and "step" in slots:
-            parts.append(f"알려줘도 되는 다음 단계: {slots['step']}")
+        if "step" in slots:
+            # Every level is aimed at the SAME target step; only L4 may say it
+            # out loud. Without this the tutor asks about step 1 forever, even
+            # after the student has moved on.
+            if decision.level >= 4:
+                parts.append(f"알려줘도 되는 다음 단계: {slots['step']}")
+            else:
+                parts.append(
+                    f"학생이 지금 해내야 하는 단계 (절대 그대로 말하지 말 것): {slots['step']}\n"
+                    "이 단계를 학생이 스스로 떠올리도록 이끄는 내용만 말하세요."
+                )
         if history:
             parts.append(
                 "이미 준 힌트 (반복 금지): "

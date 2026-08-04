@@ -23,6 +23,8 @@ _SYSTEM = """You diagnose where a student is stuck by comparing their handwritte
 to a reference solution. Be conservative: use "UNCERTAIN" when unsure, never guess.
 
 Rules:
+- Treat the student's latest spoken response as valid evidence of understanding,
+  even when the handwritten work is empty or unchanged.
 - last_correct_step: highest reference step index the student has completed correctly (0 = none).
 - status: CORRECT | CALCULATION_ERROR | CONCEPT_ERROR | PROCEDURAL_ERROR | MISREAD | STUCK | UNCERTAIN.
 - misconception: prefer an id from the provided misconception list when the student's
@@ -57,7 +59,13 @@ class StudentStateEstimator:
         history: list[HintRecord],
         transcript: str | None = None,
     ) -> StudentState:
-        pre = self._pre_check(rec, prev_state, prev_work, history)
+        pre = self._pre_check(
+            rec,
+            prev_state,
+            prev_work,
+            history,
+            transcript,
+        )
         if pre is not None:
             return pre
 
@@ -81,11 +89,12 @@ class StudentStateEstimator:
         prev_state: StudentState | None,
         prev_work: list[str] | None,
         history: list[HintRecord],
+        transcript: str | None = None,
     ) -> StudentState | None:
         if rec.confidence < self.conf_threshold or self._last_line_illegible(rec):
             base = prev_state or StudentState()
             return base.model_copy(update={"status": "UNCERTAIN"})
-        if not rec.student_work:
+        if not rec.student_work and not transcript:
             attempts = prev_state.attempt_count + 1 if prev_state else 1
             return StudentState(
                 current_step="아직 풀이를 시작하지 않음",
@@ -101,6 +110,7 @@ class StudentStateEstimator:
             and prev_work is not None
             and rec.student_work == prev_work
             and self._hint_pending(history)
+            and not transcript
         ):
             # Nothing changed since the last hint: it did not help. No LLM needed.
             return prev_state.model_copy(
@@ -122,6 +132,8 @@ class StudentStateEstimator:
         Form comparison, not equivalence — '3*x + 5 = 20', '3*x = 15' and
         'x = 5' are one equation but DIFFERENT pedagogical steps. Returns None
         when actual diagnosis is needed."""
+        if not rec.student_work:
+            return None
 
         def same(a: str, b: str) -> bool:
             return mathnorm.equations_same_form(a, b)

@@ -1,9 +1,21 @@
 """Per-connection session orchestrator.
 
-Owns ALL SessionStore writes. Flow on a hint request (spec rules 4-6):
-capture → recognize → match (cache by problem_hash) → solver if needed →
-estimate → set_state + resolve pending hint effectiveness → prefetch
-state/history → policy.decide → generate hint (leak-guarded) → speak.
+Owns ALL SessionStore writes. Two turns, deliberately asymmetric:
+
+HINT REQUEST (the student wants help, their work is the evidence)
+    capture → recognize → match (cached by problem_hash) → solver if needed →
+    estimate → set_state + resolve pending hint effectiveness → prefetch
+    state/history → policy.decide → generate hint (leak-guarded) → speak.
+
+ANSWER (the student is replying to the question the tutor just asked)
+    evaluate transcript against the reference solution → resolve the pending
+    hint → prefetch state/history → policy.decide → speak.
+    No capture, no VLM, no matching: the student spoke, they did not write, so
+    re-reading the worksheet only adds latency and re-recognition noise.
+
+The verdict feeds the unchanged policy rules through the store, which is what
+produces the intended ladder: correct → next step L1, wrong → same step L2,
+unclear → same step, same level, re-asked.
 """
 
 from __future__ import annotations
@@ -14,6 +26,8 @@ from dataclasses import dataclass, field
 
 from tutor.config import Settings
 from tutor.hints.generator import HintGenerator
+from tutor.hints.guard import leaks_answer
+from tutor.knowledge import mathnorm
 from tutor.knowledge.matching import Matcher, problem_hash
 from tutor.knowledge.models import MatchResult, ReferenceSolution, Tier
 from tutor.policy.engine import Action, Decision, Trigger, decide
@@ -21,9 +35,10 @@ from tutor.protocol.events import make_event, parse_event
 from tutor.protocol.frames import AudioFrame, ImageFrame, ProtocolError, decode
 from tutor.solver.grok_solver import GrokSolver
 from tutor.speech.stt import wants_hint
+from tutor.state.answer import AnswerEvaluator
 from tutor.state.estimator import StudentStateEstimator, hint_was_effective
 from tutor.state.models import StudentState
-from tutor.store.session_store import SessionStore
+from tutor.store.session_store import HintRecord, SessionStore
 from tutor.vision.recognizer import Recognition, Recognizer
 
 log = logging.getLogger(__name__)
@@ -47,6 +62,7 @@ class Deps:
     hint_gen: HintGenerator
     transcriber: object  # .transcribe(pcm, sample_rate) -> Transcript
     speaker: object  # .speak(text) -> None
+    evaluator: AnswerEvaluator | None = None  # None → answers fall back to a hint request
     store: SessionStore = field(default_factory=SessionStore)
 
 
@@ -157,14 +173,29 @@ class Session:
         log.info("utterance: %r", transcript.text)
         self.last_transcript = transcript.text
         asks_hint = wants_hint(transcript.text)
-        await self._send_transcript(transcript.text, asks_hint)
-        if asks_hint:
+        pending = (
+            self.store.pending_hint(self.ctx.hash) if self.ctx is not None else None
+        )
+        # A question is on the table: whatever the student said is their answer
+        # to it — including "모르겠어요", which the evaluator reads as "escalate".
+        answering = (
+            pending is not None
+            and self.deps.evaluator is not None
+            and bool(transcript.text.strip())
+        )
+        await self._send_transcript(transcript.text, answering or asks_hint)
+
+        if answering:
+            await self.handle_answer(transcript.text, pending)
+        elif asks_hint or pending is not None:
             await self.handle_hint_request()
 
-    async def _send_transcript(self, text: str, asks_hint: bool) -> None:
+    async def _send_transcript(self, text: str, responding: bool) -> None:
         try:
             await self.ws.send(
-                make_event("transcript", {"text": text, "wants_hint": asks_hint})
+                # `wants_hint` is the device's "a reply is coming, stay muted"
+                # flag; it means responding, not literally the word "힌트"
+                make_event("transcript", {"text": text, "wants_hint": responding})
             )
         except Exception:
             log.debug("could not send transcript event (connection gone)")
@@ -207,6 +238,102 @@ class Session:
         finally:
             self._busy = False
 
+    async def handle_answer(self, transcript: str, pending: HintRecord) -> None:
+        """The student answered the tutor's question out loud."""
+        if self._busy:
+            log.info("answer ignored: a turn is already running")
+            return
+        self._busy = True
+        try:
+            await self._handle_answer(transcript, pending)
+        except Exception:
+            log.exception("answer handling failed")
+            try:
+                await self._deliver(
+                    Decision(Action.PROBE, 0, pending.step, None, "internal error"),
+                    "잠깐 문제가 생겼어요. 다시 한번 말해 줄래요?",
+                    pending.problem_hash,
+                )
+            except Exception:
+                log.exception("recovery delivery failed (connection likely gone)")
+        finally:
+            self._busy = False
+
+    async def _handle_answer(self, transcript: str, pending: HintRecord) -> None:
+        ctx = self.ctx
+        assert ctx is not None  # a pending hint implies a problem context
+
+        verdict = await asyncio.to_thread(
+            self.deps.evaluator.evaluate,
+            problem_text=ctx.recognition.problem_text,
+            reference=ctx.reference,
+            question=pending.hint_text,
+            target_step=pending.step,
+            transcript=transcript,
+        )
+        self.last_transcript = None  # graded; not evidence for the next turn
+
+        # Orchestrator-owned writes. The policy needs no new rules: resolving
+        # the pending hint IS the signal that moves it up, down or nowhere.
+        prev = self.store.get_state() or StudentState()
+        if verdict.verdict == "CORRECT":
+            self.store.set_state(
+                prev.model_copy(
+                    update={
+                        "current_step": f"{pending.step}단계를 말로 설명함",
+                        "last_correct_step": max(prev.last_correct_step, pending.step),
+                        "status": "CORRECT",
+                        "misconception": None,
+                        "attempt_count": 1,
+                        "previous_hint_effective": True,
+                    }
+                )
+            )
+            self.store.mark_hint_effective(pending.id, True)
+        elif verdict.verdict == "INCORRECT":
+            self.store.set_state(
+                prev.model_copy(
+                    update={
+                        "status": verdict.status or "CONCEPT_ERROR",
+                        "misconception": verdict.misconception or prev.misconception,
+                        "attempt_count": prev.attempt_count + 1,
+                        "previous_hint_effective": False,
+                    }
+                )
+            )
+            self.store.mark_hint_effective(pending.id, False)
+        else:
+            # UNCLEAR: no evidence either way. Leaving the hint unresolved is
+            # what makes the policy re-ask at the same level (R9).
+            log.info("answer unclear: re-asking L%d at step %d", pending.level, pending.step)
+
+        state = self.store.get_state() or prev
+        history = self.store.get_history(problem_hash=ctx.hash)
+        decision = decide(state, history, "HINT_REQUEST")
+        log.info("decision after answer (%s): %s", verdict.verdict, decision)
+
+        text = await asyncio.to_thread(
+            self.deps.hint_gen.generate,
+            decision,
+            ctx.match,
+            ctx.reference,
+            ctx.recognition,
+            history,
+        )
+        await self._deliver(decision, self._with_feedback(verdict, text, decision), ctx.hash)
+
+    def _with_feedback(self, verdict, hint: str, decision: Decision) -> str:
+        """Prefix the tutor's reaction to the answer, if it leaks nothing."""
+        feedback = (verdict.feedback or "").strip()
+        if not feedback or not hint:
+            return feedback or hint
+        combined = f"{feedback} {hint}"
+        reference = self.ctx.reference if self.ctx is not None else None
+        if reference is not None and leaks_answer(combined, reference, decision.target_step):
+            log.warning("answer feedback leaked; dropping it")
+            return hint
+        return combined
+
     async def _handle_hint_request(self) -> None:
         jpeg = await self._request_capture()
         state = self.store.get_state() or StudentState()
@@ -239,6 +366,8 @@ class Session:
             transcript=self.last_transcript,
         )
         self.prev_work = rec.student_work
+        # consumed: an old utterance must not be re-read as evidence next turn
+        self.last_transcript = None
 
         # Orchestrator-owned writes: state, then pending-hint effectiveness
         # (only a pending hint of the SAME problem can be resolved).
@@ -262,9 +391,29 @@ class Session:
         )
         await self._deliver(decision, text, ctx.hash)
 
+    def _same_problem(self, rec: Recognition) -> bool:
+        """Is this the worksheet we are already working on?
+
+        The hash is exact by design, but the VLM re-reads the same photo with
+        small wording differences, and a hash miss would reset the student's
+        state — which is why a hint could loop at L1 forever. Equivalent
+        equations (or identical normalized text) mean the same problem.
+        """
+        if self.ctx is None:
+            return False
+        cached = self.ctx.recognition
+        if rec.equations and len(rec.equations) == len(cached.equations):
+            return all(
+                mathnorm.equations_equivalent(a, b, allow_scale=False)
+                for a, b in zip(rec.equations, cached.equations)
+            )
+        return bool(rec.problem_text) and mathnorm.normalize_text(
+            rec.problem_text
+        ) == mathnorm.normalize_text(cached.problem_text)
+
     async def _problem_context(self, rec: Recognition) -> ProblemContext:
         h = problem_hash(rec)
-        if self.ctx is not None and self.ctx.hash == h:
+        if self.ctx is not None and (self.ctx.hash == h or self._same_problem(rec)):
             # Cached problem: reuse match/reference; student work stays fresh.
             self.ctx.recognition = rec
             return self.ctx
