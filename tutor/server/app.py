@@ -10,7 +10,10 @@ Two device kinds share the port (and, over SSH, a single forwarded tunnel):
 from __future__ import annotations
 
 import asyncio
+import errno
 import logging
+import socket
+import sys
 from pathlib import Path
 
 from websockets.asyncio.server import serve
@@ -117,7 +120,22 @@ def make_deps(settings: Settings, db, llm, transcriber, speaker, semantic=None) 
     )
 
 
+def port_is_free(host: str, port: int) -> bool:
+    """Ask the OS before spending 40s loading models we would then throw away."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # as serve() does
+        try:
+            probe.bind((host, port))
+        except OSError as e:
+            if e.errno == errno.EADDRINUSE:
+                return False
+            raise
+    return True
+
+
 async def amain(settings: Settings) -> None:
+    if not port_is_free(settings.ws_host, settings.ws_port):
+        raise OSError(errno.EADDRINUSE, "address already in use")
     db, llm, transcriber, speaker, semantic = build_shared(settings)
 
     async def handler(ws):
@@ -165,6 +183,19 @@ async def amain(settings: Settings) -> None:
         await asyncio.Future()
 
 
+def port_in_use_help(settings: Settings) -> str:
+    """The commonest restart mistake: the previous server is still running."""
+    return "\n".join(
+        [
+            f"포트 {settings.ws_port}이(가) 이미 사용 중입니다 — 이전 서버가 아직 떠 있어요.",
+            "",
+            f"  누가 쓰는지 확인:  ss -ltnp | grep {settings.ws_port}",
+            "  이전 서버 종료:    pkill -f 'python server.py'",
+            f"  또는 다른 포트로:  WS_PORT={settings.ws_port + 1} python server.py",
+        ]
+    )
+
+
 def main(settings: Settings) -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s"
@@ -173,3 +204,9 @@ def main(settings: Settings) -> None:
         asyncio.run(amain(settings))
     except KeyboardInterrupt:
         print("\nbye")
+    except OSError as e:
+        # a traceback here says nothing an operator can act on
+        if e.errno != errno.EADDRINUSE:
+            raise
+        print(port_in_use_help(settings), file=sys.stderr, flush=True)
+        raise SystemExit(1) from None

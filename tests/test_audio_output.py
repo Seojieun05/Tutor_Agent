@@ -100,3 +100,29 @@ class TestBrowserPage:
         # inside the click handler, and before connect(): a later unlock would
         # be outside the user gesture and the browser would refuse to play
         assert html.index("unlockAudio()") < html.index("connect();")
+
+
+class TestPortPreflight:
+    """A busy port is the commonest restart mistake — say so, do not traceback."""
+
+    def test_a_busy_port_is_detected(self):
+        import socket
+
+        from tutor.server.app import port_is_free
+
+        with socket.socket() as taken:
+            taken.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            taken.bind(("127.0.0.1", 0))
+            taken.listen(1)
+            port = taken.getsockname()[1]
+            assert port_is_free("127.0.0.1", port) is False
+        assert port_is_free("127.0.0.1", port) is True
+
+    def test_the_message_names_the_way_out(self):
+        from tutor.config import Settings
+        from tutor.server.app import port_in_use_help
+
+        help_text = port_in_use_help(Settings(ws_port=8765))
+        assert "8765" in help_text
+        assert "pkill" in help_text          # how to stop the old one
+        assert "WS_PORT=8766" in help_text   # or how to avoid it

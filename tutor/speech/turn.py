@@ -1,24 +1,3 @@
-"""Hands-free turn taking: endpointing + the four-state conversation gate.
-
-``TurnDetector`` follows the week-3 course structure (prefix padding, debounced
-onset, silence endpointing, min-speech discard) with Silero VAD in place of
-webrtcvad, and counts milliseconds instead of frames so the tuning knobs stay
-readable at Silero's 32 ms frame size.
-
-``TurnTaker`` wraps it in the conversation state machine::
-
-    LISTENING --speech onset--> USER_SPEAKING --endpoint--> PROCESSING
-        ^                                                       |
-        |                                                    TTS starts
-        +-------- tail guard <-- AGENT_SPEAKING <----------------+
-
-VAD runs only in LISTENING/USER_SPEAKING: while the tutor speaks, frames are
-dropped without ever reaching the model, so the agent cannot hear itself.
-
-Both classes are pure logic — the VAD is injected, so the state machine is
-testable with a scripted stub and no audio hardware.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -164,14 +143,6 @@ class TurnState(str, Enum):
 
 
 class TurnTaker:
-    """The conversation gate around a TurnDetector.
-
-    The audio side is driven by ``feed()``; the pipeline side by
-    ``agent_speaking()`` / ``agent_finished()`` / ``listen()``, which the caller
-    wires to whatever its transport reports (here: the server's ``speech_state``
-    and ``hint_issued`` events).
-    """
-
     def __init__(
         self,
         detector: TurnDetector,
