@@ -189,3 +189,68 @@ async def test_utterance_without_pending_hint_is_not_an_answer(db):
     session.store.set_state(StudentState(status="STUCK"))
     await session._handle_utterance(b"\x00\x00" * 100, 16000)
     assert llm.calls.count("evaluate") == 0
+
+
+class TestProblemCompletion:
+    """Getting the LAST step right ends the problem, it does not hint again."""
+
+    async def test_last_step_correct_closes_the_problem(self, db):
+        session, llm, speaker = build_session(
+            db,
+            [{"verdict": "CORRECT", "feedback": "맞아요, 그렇게 하면 돼요!",
+              "misconception": None, "status": "CORRECT"}],
+        )
+        ask_l1(session, step=2)  # REFERENCE has 2 steps: this is the last one
+        before = len(session.store.get_history(problem_hash="p1"))
+
+        await session.handle_answer("양변을 3으로 나눠요", session.store.pending_hint("p1"))
+
+        assert speaker.spoken == [
+            "맞아요, 그렇게 하면 돼요! 문제를 끝까지 풀었네요! 또 모르는 문제가 있으면 알려주세요."
+        ]
+        # no _deliver(): no new hint record and no hint_issued event
+        history = session.store.get_history(problem_hash="p1")
+        assert len(history) == before
+        assert "hint_issued" not in session.ws.event_names()
+        assert history[-1].effective is True  # the hint that got them there worked
+        # the problem is over
+        assert session.ctx is None
+        assert session.store.get_state() is None
+        assert session.prev_work is None
+
+    async def test_a_middle_step_still_continues_the_dialogue(self, db):
+        session, _, speaker = build_session(
+            db, [{"verdict": "CORRECT", "feedback": "맞아요!", "misconception": None,
+                  "status": "CORRECT"}]
+        )
+        ask_l1(session, step=1)  # not the last step
+        await session.handle_answer("5를 빼요", session.store.pending_hint("p1"))
+
+        assert session.ctx is not None  # still working on it
+        assert "hint_issued" in session.ws.event_names()
+        assert session.store.get_history(problem_hash="p1")[-1].step == 2
+        assert "또 모르는 문제가 있으면" not in speaker.spoken[0]
+
+    async def test_completion_feedback_that_leaks_is_dropped(self, db):
+        session, _, speaker = build_session(
+            db,
+            [{"verdict": "CORRECT", "feedback": "맞아요, 답은 x = 5예요!",
+              "misconception": None, "status": "CORRECT"}],
+        )
+        ask_l1(session, step=2)
+        await session.handle_answer("나누면 돼요", session.store.pending_hint("p1"))
+
+        assert speaker.spoken == ["문제를 끝까지 풀었네요! 또 모르는 문제가 있으면 알려주세요."]
+
+    async def test_after_completion_speech_is_not_graded_as_an_answer(self, db):
+        session, llm, _ = build_session(
+            db,
+            [{"verdict": "CORRECT", "feedback": "맞아요!", "misconception": None,
+              "status": "CORRECT"}],
+        )
+        ask_l1(session, step=2)
+        await session.handle_answer("나누면 돼요", session.store.pending_hint("p1"))
+
+        graded = llm.calls.count("evaluate")
+        await session._handle_utterance(b"\x00\x00" * 100, 16000)
+        assert llm.calls.count("evaluate") == graded  # nothing left to answer

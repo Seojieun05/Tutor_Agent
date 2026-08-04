@@ -51,6 +51,9 @@ RETRY_PROMPTS = {
     "filler_only": "괜찮아요, 이어서 말해 줄래요?",
 }
 
+# Said after the evaluator's own "맞아요!" when the last step lands.
+PROBLEM_DONE = "문제를 끝까지 풀었네요! 또 모르는 문제가 있으면 알려주세요."
+
 
 @dataclass
 class ProblemContext:
@@ -312,6 +315,9 @@ class Session:
                 )
             )
             self.store.mark_hint_effective(pending.id, True)
+            if pending.step >= len(ctx.reference.steps):
+                await self._finish_problem(ctx, verdict, pending.step)
+                return
         elif verdict.verdict == "INCORRECT":
             self.store.set_state(
                 prev.model_copy(
@@ -343,6 +349,26 @@ class Session:
             history,
         )
         await self._deliver(decision, self._with_feedback(verdict, text, decision), ctx.hash)
+
+    async def _finish_problem(self, ctx: ProblemContext, verdict, target_step: int) -> None:
+        """The last step was answered correctly: congratulate and close.
+
+        Deliberately not _deliver(): there is no next step to hint at, so a
+        hint record here would sit unresolved forever and the policy would
+        keep planning for a problem that is over. Speak, then drop the
+        context — the next capture starts a fresh problem.
+        """
+        feedback = (verdict.feedback or "").strip()
+        if feedback and leaks_answer(feedback, ctx.reference, target_step):
+            feedback = ""
+        try:
+            await self._speak(" ".join(part for part in (feedback, PROBLEM_DONE) if part))
+        finally:
+            log.info("problem %s solved; context closed", ctx.hash[:8])
+            self.ctx = None
+            self.prev_work = None
+            self.last_transcript = None
+            self.store.clear_state()
 
     def _with_feedback(self, verdict, hint: str, decision: Decision) -> str:
         """Prefix the tutor's reaction to the answer, if it leaks nothing."""
