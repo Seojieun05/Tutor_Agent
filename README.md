@@ -6,7 +6,8 @@ necessary Socratic hint — never the answer** — through the laptop speaker.
 Spec: [CLAUDE.md](CLAUDE.md).
 
 ```text
-Device (XIAO camera/mic · laptop mic · browser) → WebSocket → server.py
+XIAO camera (ws /camera) ─┐
+Device (laptop mic · browser) → WebSocket → server.py
   → Silero VAD turn detection (hands-free) → STT
   → Grok VLM recognition → Grok ConceptTagger (problem_type + concepts)
   → Domain KB (EXACT/TEMPLATE/CONCEPT/SEMANTIC/NEW)
@@ -114,6 +115,20 @@ Here the mic is just another device on the existing wire protocol: VAD runs
 client-side and TTS plays on the machine running the server, so both must be
 the same room (the XIAO setup). `--list-devices` lists microphones,
 `--input-device` selects one, `--images` replays a worksheet.
+
+## XIAO camera
+
+The board is the eyes only — mic and speaker stay on the laptop, where the
+sound comes out. It connects to `ws://<server>:8765/camera` and answers each
+`capture_request` with one JPEG; the voice session borrows it whenever it has
+no camera of its own. Flashing, wiring and network notes:
+[firmware/README.md](firmware/README.md).
+
+Try the pairing without hardware:
+
+```bash
+.venv/bin/python -m simulator.camera_device --server ws://localhost:8765 --images simulator/assets/lin_001_wrong_sign.jpg
+```
 
 ## Tests
 

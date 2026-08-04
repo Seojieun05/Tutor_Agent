@@ -202,3 +202,63 @@ async def test_the_newest_camera_is_asked_first(deps):
             await laptop.ask_for_a_hint()
 
     assert (new.requests, old.requests) == (1, 0)  # the one just plugged in
+
+
+class TestFirmwareWireContract:
+    """The board builds frames by hand in C; the server must keep accepting them.
+
+    These bytes are the layout tutor_xiao_camera.ino::sendImage() writes:
+        [0x01][uint32 BE header length][JSON header][JPEG]
+    Verified once by compiling those exact C lines and decoding the output with
+    tutor.protocol.frames; kept here so a change to the framing breaks loudly
+    instead of bricking a flashed board.
+    """
+
+    @staticmethod
+    def firmware_frame(capture_id: str, jpeg: bytes, width=1600, height=1200) -> bytes:
+        header = (
+            f'{{"capture_id":"{capture_id}","format":"jpeg",'
+            f'"width":{width},"height":{height},"seq":0}}'
+        ).encode()
+        n = len(header)
+        return (
+            bytes([0x01, (n >> 24) & 0xFF, (n >> 16) & 0xFF, (n >> 8) & 0xFF, n & 0xFF])
+            + header
+            + jpeg
+        )
+
+    def test_the_server_decodes_what_the_board_writes(self):
+        from tutor.protocol.frames import ImageFrame, decode
+
+        frame = decode(self.firmware_frame("cam-7", XIAO_JPEG))
+        assert isinstance(frame, ImageFrame)
+        assert frame.header.capture_id == "cam-7"
+        assert (frame.header.width, frame.header.height) == (1600, 1200)
+        assert frame.jpeg == XIAO_JPEG
+
+    async def test_a_board_shaped_frame_serves_a_real_hint(self, deps):
+        """End to end with bytes laid out exactly as the firmware lays them."""
+
+        class RawCamera(FakeCamera):
+            async def _run(self):
+                async for raw in self._ws:
+                    if not isinstance(raw, str):
+                        continue
+                    ev = parse_event(raw)
+                    if ev.event == "hello_ack":
+                        self.ready.set()
+                    elif ev.event == "capture_request":
+                        self.requests += 1
+                        await self._ws.send(
+                            TestFirmwareWireContract.firmware_frame(
+                                ev.data["capture_id"], XIAO_JPEG
+                            )
+                        )
+
+        async with await tutor_server(deps) as server:
+            url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+            async with RawCamera(url) as camera, VoiceClient(url) as laptop:
+                await laptop.ask_for_a_hint()
+
+        assert camera.requests == 1
+        assert laptop.hints[0]["level"] == 1
