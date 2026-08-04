@@ -13,7 +13,14 @@ from pydantic import BaseModel, ValidationError
 
 from tutor.protocol.frames import ProtocolError
 
-DEVICE_EVENTS = {"hello", "hint_request", "capture_failed", "error"}
+DEVICE_EVENTS = {
+    "hello",
+    "hint_request",
+    "capture_failed",
+    # the device finished playing a TTS_AUDIO frame — its mic may open again
+    "playback_done",
+    "error",
+}
 SERVER_EVENTS = {
     "hello_ack",
     "capture_request",
@@ -21,6 +28,10 @@ SERVER_EVENTS = {
     # what STT heard, and whether it starts a hint flow — a hands-free device
     # needs this to know an utterance produced no response and it may listen again
     "transcript",
+    # what the tutor says, and the turn-taking state, for devices whose VAD runs
+    # on the server (browser client): LISTENING/USER_SPEAKING/PROCESSING/AGENT_SPEAKING
+    "tutor_says",
+    "turn_state",
     "hint_issued",
     "error",
 }

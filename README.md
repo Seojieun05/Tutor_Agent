@@ -6,12 +6,12 @@ necessary Socratic hint — never the answer** — through the laptop speaker.
 Spec: [CLAUDE.md](CLAUDE.md).
 
 ```text
-Device (camera/mic, or the laptop's own mic) → WebSocket → server.py
+Device (XIAO camera/mic · laptop mic · browser) → WebSocket → server.py
   → Silero VAD turn detection (hands-free) → STT
   → Grok VLM recognition → Domain KB (EXACT/TEMPLATE/CONCEPT/NEW)
   → Grok Solver fallback → Student State Estimator
   → Pedagogical Policy (L0–L4) → Hint Generator (+ answer-leak guard)
-  → xAI TTS → laptop speaker
+  → xAI TTS → laptop speaker (or streamed back to the browser)
 ```
 
 ## Setup
@@ -52,34 +52,67 @@ Demo: press `h` (L1 Socratic question) → `h` again with unchanged work
 (escalates to L2) → `n` then `h` (progress detected → back to L1).
 Preflight: `.venv/bin/python -m tutor.scripts.live_demo`.
 
-## Hands-free voice (laptop mic + speaker)
+## Hands-free voice
 
 No buttons, no keys: talk, stop talking, the tutor answers, it listens again.
+Two front ends share one turn-taking implementation
+([tutor/speech/turn.py](tutor/speech/turn.py)) — they differ only in *where*
+the VAD runs.
+
+```text
+LISTENING --onset--> USER_SPEAKING --800ms silence--> PROCESSING
+    ^                                                     |
+    +---- tail guard <---- AGENT_SPEAKING <---- TTS starts
+```
+
+The VAD only runs in the first two states, so the tutor cannot transcribe its
+own voice (barge-in is deliberately not implemented); `tail_guard_ms` covers
+room decay after playback. Tuning (`.env`): `VAD_PREFIX_MS` 300,
+`VAD_MIN_SPEECH_MS` 250, `VAD_SILENCE_MS` 800, `VAD_THRESHOLD` 0.5,
+`VAD_TAIL_GUARD_MS` 250.
+
+### A. Browser client — works over SSH (recommended)
+
+The laptop only captures and plays; the VAD, STT, pipeline and TTS all stay on
+the server, which is what makes this work on a headless SSH host.
+
+```text
+browser mic → AudioWorklet → 16 kHz mono int16 PCM → AUDIO frames
+  → Silero VAD on the server → utterance → STT → RAG/hint pipeline
+  → TTS bytes → TTS_AUDIO frame → browser speaker → playback_done
+```
+
+On the server:
+
+```bash
+.venv/bin/pip install -e ".[dev,vad]"
+.venv/bin/python server.py
+```
+
+On the Windows laptop — forward the port, then open the page:
+
+```bash
+ssh -N -L 8765:localhost:8765 user@ssh-server
+```
+
+Open <http://localhost:8765/> in Chrome/Edge, press 시작 once (browsers require
+a gesture for mic access), and talk. **Use the tunnel, not the server's IP**:
+`getUserMedia` only works in a secure context, and `localhost` counts as one
+without any TLS setup. HTTP and WebSocket share the port, so one tunnel is
+enough. Optionally attach a worksheet photo with the file picker — it is sent
+on `capture_request`; without one the tutor asks to see the problem.
+
+### B. Local laptop mic device (no browser)
 
 ```bash
 .venv/bin/pip install -e ".[voice]"
 .venv/bin/python -m simulator.voice_device --server ws://localhost:8765 --images simulator/assets/lin_001_wrong_sign.jpg
 ```
 
-The laptop mic is just another device on the existing wire protocol: 16 kHz mono
-PCM → Silero VAD turn detection → the same `AUDIO` frames the XIAO sends → the
-unchanged server pipeline (STT → hint → TTS on the laptop speaker). Only the
-endpointed utterance is sent, so STT and Grok never see room noise. `--images`
-is optional (it replays a worksheet on `capture_request`); `--list-devices`
-picks a microphone, `--input-device` selects one.
-
-```text
-LISTENING --onset--> USER_SPEAKING --800ms silence--> PROCESSING
-    ^                                                     |
-    +---- tail guard <---- AGENT_SPEAKING <---- TTS starts (speech_state)
-```
-
-The VAD only runs in the first two states, so the tutor cannot transcribe its
-own voice; `tail_guard_ms` covers room decay after playback. Tuning (`.env`):
-`VAD_PREFIX_MS` 300, `VAD_MIN_SPEECH_MS` 250, `VAD_SILENCE_MS` 800,
-`VAD_THRESHOLD` 0.5, `VAD_TAIL_GUARD_MS` 250 — the endpointing lives in
-[tutor/speech/turn.py](tutor/speech/turn.py) and is unit-tested with a scripted
-VAD (no mic, no torch).
+Here the mic is just another device on the existing wire protocol: VAD runs
+client-side and TTS plays on the machine running the server, so both must be
+the same room (the XIAO setup). `--list-devices` lists microphones,
+`--input-device` selects one, `--images` replays a worksheet.
 
 ## Tests
 
@@ -92,7 +125,8 @@ the VAD is a scripted stub. Covers the wire protocol, sympy matching
 (EXACT/TEMPLATE/CONCEPT/NEW), the policy rule table, hint-effectiveness
 lifecycle, per-purpose tool allowlists, the answer-leak guard, turn taking
 (prefix padding, onset debounce, endpointing, the four-state gate), and
-end-to-end websocket smoke tests including a full hands-free voice turn.
+end-to-end websocket smoke tests including full hands-free voice turns on both
+the local-mic device and the browser client.
 
 ## Design highlights
 

@@ -1,7 +1,9 @@
 """Binary framing for the single device WebSocket.
 
 Layout: [1 type byte][uint32 BE header length][UTF-8 JSON header][payload]
-Type 0x01 = IMAGE (payload: one JPEG), 0x02 = AUDIO (payload: raw 16-bit LE mono PCM).
+Type 0x01 = IMAGE (payload: one JPEG), 0x02 = AUDIO (payload: raw 16-bit LE mono PCM),
+0x03 = TTS_AUDIO (server → device, payload: encoded speech for a device that has
+the speaker — the browser client; the XIAO path plays through the laptop instead).
 Text frames are EVENT JSON and never pass through this module.
 """
 
@@ -15,6 +17,7 @@ from pydantic import BaseModel, ValidationError
 
 IMAGE_TYPE = 0x01
 AUDIO_TYPE = 0x02
+TTS_AUDIO_TYPE = 0x03
 
 _HEADER_LEN_STRUCT = struct.Struct(">I")
 
@@ -52,7 +55,18 @@ class AudioFrame:
     pcm: bytes
 
 
-Frame = ImageFrame | AudioFrame
+class TtsAudioHeader(BaseModel):
+    utterance_id: str = ""
+    format: str = "mp3"  # what the tutor's TTS returned; the device plays it as-is
+
+
+@dataclass(frozen=True)
+class TtsAudioFrame:
+    header: TtsAudioHeader
+    audio: bytes
+
+
+Frame = ImageFrame | AudioFrame | TtsAudioFrame
 
 
 def _encode(frame_type: int, header: BaseModel, payload: bytes) -> bytes:
@@ -68,6 +82,10 @@ def encode_image(jpeg: bytes, header: ImageHeader) -> bytes:
 
 def encode_audio(pcm: bytes, header: AudioHeader) -> bytes:
     return _encode(AUDIO_TYPE, header, pcm)
+
+
+def encode_tts_audio(audio: bytes, header: TtsAudioHeader) -> bytes:
+    return _encode(TTS_AUDIO_TYPE, header, audio)
 
 
 def decode(frame: bytes) -> Frame:
@@ -90,6 +108,10 @@ def decode(frame: bytes) -> Frame:
             return ImageFrame(header=header, jpeg=payload)
         if frame_type == AUDIO_TYPE:
             return AudioFrame(header=AudioHeader.model_validate(header_json), pcm=payload)
+        if frame_type == TTS_AUDIO_TYPE:
+            return TtsAudioFrame(
+                header=TtsAudioHeader.model_validate(header_json), audio=payload
+            )
     except ValidationError as e:
         raise ProtocolError(f"invalid frame header: {e}") from e
     raise ProtocolError(f"unknown frame type 0x{frame_type:02x}")

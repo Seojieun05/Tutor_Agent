@@ -1,0 +1,271 @@
+<!doctype html>
+<!--
+  Hands-free browser client for the Visual Socratic Tutor.
+
+  The laptop only captures and plays; the VAD, STT, tutor pipeline and TTS all
+  run on the server (that is the point of this page: over SSH the server has no
+  microphone and nobody is listening to its speaker).
+
+    IN:  getUserMedia → AudioWorklet → float32 @16 kHz → int16 → 512-sample
+         frames → binary AUDIO frames on ONE WebSocket (the same framing the
+         XIAO device uses, so the server code is unchanged)
+    OUT: turn_state / transcript / tutor_says events + a TTS_AUDIO frame with
+         the tutor's speech → <audio> → "playback_done" back to the server
+
+  The one line that keeps the tutor from hearing itself:
+      if (!micOpen()) return;   in onSamples()
+  The server drops those frames as well — barge-in is deliberately not
+  implemented, so both sides stay muted until playback is over.
+
+  Chrome/Edge recommended (AudioWorklet at a 16 kHz AudioContext).
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visual Socratic Tutor — 음성 튜터</title>
+<style>
+  :root {
+    --bg:#0f1117; --panel:#181b24; --line:#2a2f3c; --text:#e8eaf0; --dim:#8b90a0;
+    --you:#4e9af1; --think:#b17ce8; --tutor:#4ecf8a; --warn:#ff7a6b;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; min-height:100vh; display:flex; flex-direction:column; align-items:center;
+    background:var(--bg); color:var(--text); font:16px/1.6 system-ui, sans-serif; padding:2rem 1rem;
+  }
+  h1 { font-size:1.15rem; font-weight:600; margin:0 0 .25rem; }
+  #status { color:var(--dim); min-height:1.5em; margin-bottom:1.5rem; text-align:center; }
+  #orb {
+    width:9rem; height:9rem; border-radius:50%; border:none; color:#fff;
+    font:600 .9rem system-ui; cursor:pointer; background:#3a3f4e;
+    transition:background .2s, box-shadow .2s;
+  }
+  #orb.LISTENING     { background:#2e3442; box-shadow:0 0 0 10px rgba(139,144,160,.10); }
+  #orb.USER_SPEAKING { background:var(--you);   box-shadow:0 0 0 14px rgba(78,154,241,.22); }
+  #orb.PROCESSING    { background:var(--think); box-shadow:0 0 0 8px  rgba(177,124,232,.22); }
+  #orb.AGENT_SPEAKING{ background:var(--tutor); box-shadow:0 0 0 14px rgba(78,207,138,.22); }
+  @keyframes breathe { 50% { box-shadow:0 0 0 20px rgba(78,154,241,.10); } }
+  #orb.USER_SPEAKING { animation:breathe 1.2s ease-in-out infinite; }
+  #tools { margin-top:1.2rem; display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; justify-content:center; }
+  #tools label, #tools button {
+    background:none; border:1px solid var(--line); color:var(--dim); border-radius:8px;
+    padding:.35rem .9rem; font:500 .85rem system-ui; cursor:pointer;
+  }
+  #tools label:hover, #tools button:hover { color:var(--text); border-color:var(--dim); }
+  #sheet { display:none; }
+  #log { width:100%; max-width:38rem; margin-top:2rem; }
+  .turn { background:var(--panel); border-radius:10px; padding:.7rem 1rem; margin-bottom:.7rem; }
+  .who { font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); }
+  .you .who { color:var(--you); } .tutor .who { color:var(--tutor); } .err .who { color:var(--warn); }
+  .txt { white-space:pre-wrap; }
+  .meta { font-size:.75rem; color:var(--dim); margin-top:.3rem; }
+</style>
+</head>
+<body>
+  <h1>Visual Socratic Tutor</h1>
+  <div id="status">시작을 누르고 마이크를 허용한 뒤, 그냥 말하면 됩니다.</div>
+
+  <button id="orb">시작</button>
+
+  <div id="tools">
+    <label for="sheet">📄 문제 사진 선택 (선택)</label>
+    <input type="file" id="sheet" accept="image/*">
+    <span id="sheetname" class="meta"></span>
+  </div>
+
+  <div id="log"></div>
+  <audio id="player"></audio>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const setStatus = (m) => { $("status").textContent = m; };
+
+const SAMPLE_RATE = 16000;
+const FRAME_SAMPLES = 512;          // Silero's window at 16 kHz (32 ms)
+
+const IMAGE_FRAME = 0x01, AUDIO_FRAME = 0x02, TTS_FRAME = 0x03;
+
+let ws = null;
+let turnState = "";                 // LISTENING | USER_SPEAKING | PROCESSING | AGENT_SPEAKING
+let streamSeq = 0;
+let worksheet = null;               // optional jpeg bytes for capture_request
+
+const micOpen = () => turnState === "LISTENING" || turnState === "USER_SPEAKING";
+
+// --- the project's binary framing, in ~15 lines ----------------------------
+function encodeFrame(type, header, payload) {
+  const head = new TextEncoder().encode(JSON.stringify(header));
+  const out = new Uint8Array(5 + head.length + payload.length);
+  new DataView(out.buffer).setUint32(1, head.length, false);  // big endian
+  out[0] = type;
+  out.set(head, 5);
+  out.set(payload, 5 + head.length);
+  return out;
+}
+
+function decodeFrame(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const headLen = new DataView(buffer).getUint32(1, false);
+  return {
+    type: bytes[0],
+    header: JSON.parse(new TextDecoder().decode(bytes.subarray(5, 5 + headLen))),
+    payload: bytes.subarray(5 + headLen),
+  };
+}
+
+const sendEvent = (event, data = {}) => {
+  if (ws && ws.readyState === WebSocket.OPEN)
+    ws.send(JSON.stringify({ type: "EVENT", event, data, ts: Date.now() }));
+};
+
+// --- 1. capture: mic → worklet → 512-sample int16 frames → server ----------
+async function start() {
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+               channelCount: 1 },
+    });
+  } catch (e) {
+    setStatus("마이크 권한이 필요합니다 (localhost 또는 HTTPS에서 열어주세요): " + e.message);
+    return;
+  }
+
+  // Ask for 16 kHz so the browser resamples for us — the server's VAD needs it.
+  const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
+  if (ctx.sampleRate !== SAMPLE_RATE) {
+    setStatus(`브라우저가 ${ctx.sampleRate} Hz를 반환했습니다. Chrome/Edge를 사용해 주세요.`);
+    return;
+  }
+  await ctx.audioWorklet.addModule("worklet.js");
+  const capture = new AudioWorkletNode(ctx, "pcm-capture");
+  ctx.createMediaStreamSource(stream).connect(capture);
+  capture.port.onmessage = (e) => onSamples(e.data);
+
+  $("player").play().catch(() => {});   // unlock autoplay inside this click
+  connect();
+
+  $("orb").disabled = true;             // from here on the orb is a status light
+  setStatus("핸즈프리로 대화하세요. 말이 끝나면 자동으로 인식합니다.");
+}
+
+let pending = new Float32Array(0);
+function onSamples(block) {
+  if (!micOpen()) return;               // muted while the tutor thinks or speaks
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  const joined = new Float32Array(pending.length + block.length);
+  joined.set(pending);
+  joined.set(block, pending.length);
+  pending = joined;
+
+  while (pending.length >= FRAME_SAMPLES) {
+    const frame = pending.subarray(0, FRAME_SAMPLES);
+    pending = pending.slice(FRAME_SAMPLES);
+    const pcm = new Int16Array(FRAME_SAMPLES);
+    for (let i = 0; i < FRAME_SAMPLES; i++) {
+      const s = Math.max(-1, Math.min(1, frame[i]));   // clamp: overflow screeches
+      pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;        // float32 → int16 LE
+    }
+    ws.send(encodeFrame(AUDIO_FRAME, {
+      stream_id: "browser", sample_rate: SAMPLE_RATE, bits: 16, channels: 1,
+      seq: ++streamSeq, last: false,
+    }, new Uint8Array(pcm.buffer)));
+  }
+}
+
+// --- 2. one socket, both directions ---------------------------------------
+function connect() {
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${scheme}://${location.host}/browser`);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => sendEvent("hello", { device_id: "browser", proto: 1, caps: ["mic", "speaker"] });
+  ws.onclose = () => { setState(""); setStatus("연결이 끊어졌습니다 — 새로고침 해주세요."); };
+  ws.onmessage = (e) => (typeof e.data === "string" ? onEvent(JSON.parse(e.data)) : onBinary(e.data));
+}
+
+function onEvent(msg) {
+  const d = msg.data || {};
+  switch (msg.event) {
+    case "hello_ack":   setStatus("연결됨. 말을 시작하세요."); break;
+    case "turn_state":  setState(d.state); break;
+    case "transcript":  addTurn("you", d.text || "(인식 실패)"); break;
+    case "tutor_says":  addTurn("tutor", d.text); break;
+    case "hint_issued": note(`힌트 L${d.level} · ${d.action}`); break;
+    case "capture_request": sendWorksheet(d.capture_id); break;
+    case "error":       addTurn("err", d.message || JSON.stringify(d)); break;
+  }
+}
+
+function onBinary(buffer) {
+  const { type, payload } = decodeFrame(buffer);
+  if (type === TTS_FRAME) play(payload);
+}
+
+function setState(s) {
+  turnState = s;
+  $("orb").className = s;
+  $("orb").textContent = {
+    LISTENING: "듣는 중", USER_SPEAKING: "말하는 중",
+    PROCESSING: "생각 중", AGENT_SPEAKING: "튜터 발화 중",
+  }[s] || "대기";
+}
+
+// --- 3. playback: the tutor's audio, then tell the server we are done ------
+function play(bytes) {
+  const player = $("player");
+  const url = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+  const done = () => {
+    URL.revokeObjectURL(url);
+    sendEvent("playback_done");   // the server reopens the mic after its tail guard
+  };
+  player.onended = done;
+  player.onerror = done;          // never leave the server waiting
+  player.src = url;
+  player.play().catch(() => {
+    setStatus("자동 재생이 차단되었습니다 — 페이지를 한 번 클릭한 뒤 다시 말해주세요.");
+    done();
+  });
+}
+
+// --- 4. the optional worksheet photo (not a turn-taking button) ------------
+$("sheet").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  worksheet = new Uint8Array(await file.arrayBuffer());
+  $("sheetname").textContent = `${file.name} (${Math.round(worksheet.length / 1024)} KB)`;
+});
+
+function sendWorksheet(captureId) {
+  if (!worksheet) {           // no camera here: the server falls back gracefully
+    sendEvent("capture_failed", { capture_id: captureId });
+    return;
+  }
+  ws.send(encodeFrame(IMAGE_FRAME, { capture_id: captureId, format: "jpeg" }, worksheet));
+}
+
+// --- 5. transcript log ----------------------------------------------------
+function addTurn(kind, text) {
+  const div = document.createElement("div");
+  div.className = `turn ${kind}`;
+  div.innerHTML = `<div class="who"></div><div class="txt"></div>`;
+  div.querySelector(".who").textContent =
+    { you: "나", tutor: "튜터", err: "오류" }[kind];
+  div.querySelector(".txt").textContent = text;
+  $("log").prepend(div);
+}
+
+function note(text) {
+  const last = $("log").firstChild;
+  if (!last) return;
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = text;
+  last.appendChild(meta);
+}
+
+$("orb").addEventListener("click", start, { once: true });
+</script>
+</body>
+</html>

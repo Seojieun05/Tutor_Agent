@@ -282,17 +282,24 @@ class Session:
         self.ctx = ProblemContext(hash=h, recognition=rec, match=match, reference=reference)
         return self.ctx
 
+    async def _speak(self, text: str) -> None:
+        """Say it on the machine running the server (XIAO setup: same room).
+
+        BrowserSession overrides this to ship the audio to the device instead.
+        """
+        await self.ws.send(make_event("speech_state", {"state": "speaking"}))
+        try:
+            await asyncio.to_thread(self.deps.speaker.speak, text)
+        finally:
+            # whatever happens to TTS, never leave the device muted
+            try:
+                await self.ws.send(make_event("speech_state", {"state": "idle"}))
+            except Exception:
+                pass
+
     async def _deliver(self, decision: Decision, text: str, problem_hash: str = "") -> None:
         if text:
-            await self.ws.send(make_event("speech_state", {"state": "speaking"}))
-            try:
-                await asyncio.to_thread(self.deps.speaker.speak, text)
-            finally:
-                # whatever happens to TTS, never leave the device muted
-                try:
-                    await self.ws.send(make_event("speech_state", {"state": "idle"}))
-                except Exception:
-                    pass
+            await self._speak(text)
         self.store.append_hint(
             problem_hash=problem_hash,
             step=decision.target_step,
