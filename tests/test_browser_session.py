@@ -369,3 +369,33 @@ async def test_spoken_answer_advances_without_a_second_capture(db):
     assert llm.calls.count("evaluate") == 1
     assert "맞아요!" in browser.tutor_said[1]
     assert browser.tutor_said[1] != browser.tutor_said[0]  # not the same question again
+
+
+async def test_filler_utterance_is_answered_and_the_mic_reopens(db):
+    """Hands-free: a hesitation gets the gentle prompt, not the pipeline, and
+    the turn still completes so the student can keep talking."""
+    llm = EchoLLMClient({"recognize": [WORKSHEET] * 5})
+    deps = Deps(
+        settings=SETTINGS,
+        recognizer=Recognizer(llm),
+        matcher=Matcher(db),
+        solver=GrokSolver(llm, db),
+        estimator=StudentStateEstimator(llm, db),
+        hint_gen=HintGenerator(llm, db),
+        transcriber=ScriptedTranscriber(["음... 어...", "힌트 주세요"]),
+        speaker=NullSpeaker(audio=MP3),
+        store=SessionStore(),
+    )
+    vad = ScriptedVAD()
+    async with await browser_server(deps, vad) as server:
+        port = server.sockets[0].getsockname()[1]
+        async with FakeBrowser(f"ws://127.0.0.1:{port}/browser", vad, JPEG) as browser:
+            await browser.speak_a_turn()  # hesitation
+            assert browser.tutor_said == ["괜찮아요, 이어서 말해 줄래요?"]
+            assert browser.captures == 0  # nothing ran: no camera, no pipeline
+            assert deps.store.get_history() == []  # not a hint
+
+            await browser.speak_a_turn()  # then a real request, same session
+            assert deps.store.get_history()[0].level == 1
+
+    assert browser.states[-1] == "LISTENING"  # never left deaf

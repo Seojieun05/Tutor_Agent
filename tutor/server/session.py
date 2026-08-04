@@ -35,7 +35,7 @@ from tutor.policy.engine import Action, Decision, Trigger, decide
 from tutor.protocol.events import make_event, parse_event
 from tutor.protocol.frames import AudioFrame, ImageFrame, ProtocolError, decode
 from tutor.solver.grok_solver import GrokSolver
-from tutor.speech.stt import wants_hint
+from tutor.speech.stt import classify_transcript, wants_hint
 from tutor.state.answer import AnswerEvaluator
 from tutor.state.estimator import StudentStateEstimator, hint_was_effective
 from tutor.state.models import StudentState
@@ -43,6 +43,13 @@ from tutor.store.session_store import HintRecord, SessionStore
 from tutor.vision.recognizer import Recognition, Recognizer
 
 log = logging.getLogger(__name__)
+
+# What the tutor says instead of running the pipeline on an unusable utterance.
+# Neither counts as a hint, so neither enters the hint history or the policy.
+RETRY_PROMPTS = {
+    "unclear": "잘 못 들었어요. 다시 한번 말해 줄래요?",
+    "filler_only": "괜찮아요, 이어서 말해 줄래요?",
+}
 
 
 @dataclass
@@ -167,14 +174,27 @@ class Session:
             transcript = await asyncio.to_thread(
                 self.deps.transcriber.transcribe, pcm, sample_rate
             )
+            text = transcript.text
         except Exception:
-            log.exception("STT failed; utterance dropped")
-            # tell the device anyway: a hands-free one is muted until it hears back
-            await self._send_transcript("", False)
+            log.exception("STT failed; asking the student to repeat")
+            text = ""  # graded as "unclear" below, so the student hears back
+
+        # Quality gate: noise transcribed as glyphs, silence, or a hesitation
+        # sound is not an answer. Ask again instead of grading it — and leave
+        # any pending hint pending, so the real answer still lands on it.
+        quality = classify_transcript(text)
+        if quality != "ok":
+            log.info("utterance rejected (%s): %r", quality, text)
+            await self._send_transcript(text, True)
+            try:
+                await self._speak(RETRY_PROMPTS[quality])
+            except Exception:
+                log.exception("could not ask the student to repeat")
             return
-        log.info("utterance: %r", transcript.text)
-        self.last_transcript = transcript.text
-        asks_hint = wants_hint(transcript.text)
+
+        log.info("utterance: %r", text)
+        self.last_transcript = text
+        asks_hint = wants_hint(text)
         pending = (
             self.store.pending_hint(self.ctx.hash) if self.ctx is not None else None
         )
@@ -183,12 +203,12 @@ class Session:
         answering = (
             pending is not None
             and self.deps.evaluator is not None
-            and bool(transcript.text.strip())
+            and bool(text.strip())
         )
-        await self._send_transcript(transcript.text, answering or asks_hint)
+        await self._send_transcript(text, answering or asks_hint)
 
         if answering:
-            await self.handle_answer(transcript.text, pending)
+            await self.handle_answer(text, pending)
         elif asks_hint or pending is not None:
             await self.handle_hint_request()
 
