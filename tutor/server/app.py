@@ -25,6 +25,7 @@ from tutor.hints.generator import HintGenerator
 from tutor.knowledge.db import KnowledgeDB
 from tutor.knowledge.matching import Matcher
 from tutor.knowledge.tagger import ConceptTagger
+from tutor.server.camera import CameraConnection, CameraHub
 from tutor.llm.echo import EchoLLMClient
 from tutor.server.session import Deps, Session
 from tutor.solver.grok_solver import GrokSolver
@@ -103,7 +104,9 @@ def build_shared(settings: Settings):
     return db, llm, transcriber, speaker, semantic
 
 
-def make_deps(settings: Settings, db, llm, transcriber, speaker, semantic=None) -> Deps:
+def make_deps(
+    settings: Settings, db, llm, transcriber, speaker, semantic=None, cameras=None
+) -> Deps:
     """Per-connection dependencies (fresh SessionStore each time)."""
     return Deps(
         settings=settings,
@@ -116,6 +119,7 @@ def make_deps(settings: Settings, db, llm, transcriber, speaker, semantic=None) 
         speaker=speaker,
         evaluator=AnswerEvaluator(llm, db),
         tagger=ConceptTagger(llm),
+        cameras=cameras,
         store=SessionStore(),
     )
 
@@ -138,9 +142,16 @@ async def amain(settings: Settings) -> None:
         raise OSError(errno.EADDRINUSE, "address already in use")
     db, llm, transcriber, speaker, semantic = build_shared(settings)
 
+    cameras = CameraHub()
+
     async def handler(ws):
         path = ws.request.path.split("?", 1)[0]
-        deps = make_deps(settings, db, llm, transcriber, speaker, semantic)
+        if path.rstrip("/") == "/camera":
+            # A camera device (XIAO) has no session of its own: it is an eye
+            # that voice sessions borrow. See tutor/server/camera.py.
+            await CameraConnection(ws, cameras).run()
+            return
+        deps = make_deps(settings, db, llm, transcriber, speaker, semantic, cameras)
         if path.rstrip("/") == "/browser":
             from tutor.server.browser import BrowserSession
 

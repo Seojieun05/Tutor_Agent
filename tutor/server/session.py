@@ -75,6 +75,7 @@ class Deps:
     speaker: object  # .speak(text) -> None
     evaluator: AnswerEvaluator | None = None  # None → answers fall back to a hint request
     tagger: ConceptTagger | None = None  # None → Recognition keeps "unknown"/[]
+    cameras: object | None = None  # CameraHub: eyes on another socket (XIAO)
     store: SessionStore = field(default_factory=SessionStore)
 
 
@@ -228,6 +229,23 @@ class Session:
     # --- capture --------------------------------------------------------------
 
     async def _request_capture(self) -> bytes | None:
+        """The student's worksheet, from whichever eye can see it.
+
+        The session's own device first (a simulator image, the browser's
+        attached photo). If it has no camera it answers capture_failed, and a
+        XIAO connected on /camera — a different socket entirely — is asked
+        instead. Voice and vision can therefore live on different machines.
+        """
+        jpeg = await self._capture_from_device()
+        if jpeg:
+            return jpeg
+        cameras = self.deps.cameras
+        if cameras:
+            log.info("no local camera; asking a connected camera device")
+            return await cameras.capture(self.deps.settings.capture_timeout_s)
+        return None
+
+    async def _capture_from_device(self) -> bytes | None:
         self._capture_seq += 1
         capture_id = f"cap-{self._capture_seq}"
         future: asyncio.Future = asyncio.get_running_loop().create_future()
