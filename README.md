@@ -190,7 +190,7 @@ stay on Grok:
 VISION_PROVIDER=gemini python server.py
 ```
 
-Needs `GOOGLE_API_KEY` in `.env` and `pip install -e ".[vision-gemini]"`. The
+Needs `GOOGLE_API_KEY` in `.env` and `pip install -e ".[gemini]"`. The
 model is `GEMINI_VISION_MODEL` (default `gemini-3.6-flash`). A missing key or
 package logs an error and falls back to Grok rather than refusing to start.
 

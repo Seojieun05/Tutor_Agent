@@ -77,10 +77,10 @@ class TestProviderChoice:
         assert "gemini" in caplog.text.lower()
 
     def test_gemini_client_refuses_to_exist_without_a_key(self):
-        from tutor.llm.gemini_vision import GeminiVisionClient
+        from tutor.llm.gemini import GeminiClient
 
         with pytest.raises(LLMError, match="GOOGLE_API_KEY"):
-            GeminiVisionClient(Settings(vision_provider="gemini", google_api_key=""))
+            GeminiClient(Settings(vision_provider="gemini", google_api_key=""))
 
     def test_only_the_recognizer_changes_eyes(self, db):
         """The solver, estimator and hint generator stay on the chat model."""
@@ -92,6 +92,110 @@ class TestProviderChoice:
         assert deps.solver.llm is chat
         assert deps.estimator.llm is chat
         assert deps.hint_gen.llm is chat
+
+
+class TestHintProvider:
+    """What the tutor SAYS can move to Gemini for its LearnLM tuning. What
+    decides how much it may say cannot move anywhere."""
+
+    def test_hints_stay_on_grok_by_default(self):
+        from tutor.server.app import build_hint_llm
+
+        llm = EchoLLMClient()
+        assert build_hint_llm(Settings(xai_api_key="k"), llm) is llm
+
+    def test_the_hint_model_defaults_to_pro(self, env):
+        # Phrasing a hint that teaches without leaking is the hardest judgement
+        # in the pipeline, and it happens once per turn — flash is the wrong trade.
+        assert load_settings(env).gemini_hint_model == "gemini-3.1-pro-preview"
+
+    def test_the_hint_model_is_readable_from_the_environment(self, env, monkeypatch):
+        monkeypatch.setenv("GEMINI_HINT_MODEL", "gemini-3.6-flash")
+        assert load_settings(env).gemini_hint_model == "gemini-3.6-flash"
+
+    def test_a_missing_key_degrades_instead_of_refusing_to_start(self, caplog):
+        from tutor.server.app import build_hint_llm
+
+        llm = EchoLLMClient()
+        settings = Settings(xai_api_key="k", hint_provider="gemini", google_api_key="")
+        with caplog.at_level(logging.ERROR):
+            assert build_hint_llm(settings, llm) is llm
+        assert "HINT_PROVIDER" in caplog.text
+
+    def test_only_the_hint_generator_changes_voice(self, db):
+        """Swapping the writer must not move the solver or the diagnosis: a
+        model that has never seen the reference solution cannot leak it."""
+        from tutor.server.app import make_deps
+
+        chat, writer = EchoLLMClient(), EchoLLMClient()
+        deps = make_deps(Settings(), db, chat, None, None, hint_llm=writer)
+        assert deps.hint_gen.llm is writer
+        assert deps.solver.llm is chat
+        assert deps.estimator.llm is chat
+        assert deps.recognizer.llm is chat
+
+    def test_the_leak_guard_does_not_move_with_the_model(self, db):
+        """The guard is deterministic and runs on whatever the writer wrote."""
+        from tutor.hints.generator import HintGenerator
+        from tutor.knowledge.models import (
+            Answer, MatchResult, ReferenceSolution, SolutionStep, Tier,
+        )
+        from tutor.policy.engine import Action, Decision
+        from tutor.vision.recognizer import Recognition
+
+        class Leaker:
+            """A "better" model that helpfully gives away the answer."""
+
+            def run_with_tools(self, **kw):
+                from tutor.hints.generator import PhrasedHint
+
+                return PhrasedHint(hint="x = 5 니까 그렇게 하면 돼요.")
+
+            complete_json = run_with_tools
+
+        reference = ReferenceSolution(
+            steps=[SolutionStep(idx=1, description="양변에서 5를 뺀다", expression="3*x = 15")],
+            final_answer=Answer(kind="SCALAR", value="5"),
+            concepts=["linear_equation"], verified=True, origin="db",
+        )
+        text = HintGenerator(Leaker(), db).generate(
+            Decision(Action.SOCRATIC_QUESTION, 1, 1, None, "t"),
+            MatchResult(tier=Tier.NEW, concepts=["linear_equation"]),
+            reference,
+            Recognition(problem_text="3x + 5 = 20", equations=["3*x + 5 = 20"]),
+            [],
+        )
+        assert "x = 5" not in text and "5 니까" not in text
+
+
+class TestLearnLMPrompt:
+    """The prompt is written on Google's LearnLM guide: PARTS (Persona, Act,
+    Recipient, Theme, Structure) plus its five learning-science principles."""
+
+    def test_it_states_the_role_before_the_prohibitions(self):
+        from tutor.hints.generator import _PHRASE_SYSTEM
+
+        # "Define the role and tone up front" — a model told what to do holds
+        # the line better than one told only what to avoid.
+        assert _PHRASE_SYSTEM.index("PERSONA") < _PHRASE_SYSTEM.index("NEVER")
+
+    @pytest.mark.parametrize("part", ["PERSONA", "ACT", "RECIPIENT", "THEME", "STRUCTURE"])
+    def test_every_part_of_parts_is_present(self, part):
+        from tutor.hints.generator import _PHRASE_SYSTEM
+
+        assert part in _PHRASE_SYSTEM
+
+    def test_the_answer_is_still_forbidden(self):
+        from tutor.hints.generator import _PHRASE_SYSTEM
+
+        assert "Never state the final answer" in _PHRASE_SYSTEM
+
+    def test_it_asks_for_one_idea_per_turn(self):
+        """LearnLM's "manage cognitive load", and the guide's own math-coach
+        exemplar: "use one step per turn"."""
+        from tutor.hints.generator import _PHRASE_SYSTEM
+
+        assert "One question, not two" in _PHRASE_SYSTEM
 
 
 class TestFrameDump:
@@ -120,3 +224,83 @@ class TestFrameDump:
         blocked.write_text("in the way")
         # No exception: the student is mid-problem and a full disk is not their problem.
         self._session(Settings(save_captures_dir=blocked / "shots"), db)._save_capture(JPEG)
+
+
+class TestStandby:
+    """A key can list a model it has no quota for; that only shows up on the
+    first real call, mid-lesson. gemini-3.1-pro-preview does exactly this on a
+    free-tier key: 429 RESOURCE_EXHAUSTED, limit: 0."""
+
+    def _pair(self, **kw):
+        from tutor.llm.fallback import FallbackLLM
+
+        class Dead:
+            def complete_json(self, **_):
+                raise RuntimeError("429 RESOURCE_EXHAUSTED ... limit: 0, model: gemini-3.1-pro")
+
+            run_with_tools = complete_json
+
+        class Alive:
+            def __init__(self):
+                self.calls = 0
+
+            def complete_json(self, **_):
+                self.calls += 1
+                return "standby"
+
+            run_with_tools = complete_json
+
+        alive = Alive()
+        return FallbackLLM(Dead(), alive, label="HINT_PROVIDER", **kw), alive
+
+    def test_a_dead_primary_does_not_cost_the_turn(self):
+        llm, standby = self._pair()
+        assert llm.run_with_tools(purpose="phrase") == "standby"
+        assert standby.calls == 1
+
+    def test_the_reason_is_logged_in_a_form_you_can_act_on(self, caplog):
+        llm, _ = self._pair()
+        with caplog.at_level(logging.ERROR):
+            llm.run_with_tools(purpose="phrase")
+        assert "not on your plan" in caplog.text
+
+    def test_a_dead_primary_is_paid_for_once_not_every_turn(self, caplog):
+        """A failed call still costs its round trip, and a student is waiting."""
+        llm, _ = self._pair(cooldown_s=60)
+        tried = []
+        llm.primary.complete_json = lambda **_: (tried.append(1), 1 / 0)[1]
+        for _ in range(5):
+            llm.run_with_tools(purpose="phrase")
+        assert len(tried) <= 1, "the standby cooldown did not hold"
+
+    def test_it_goes_back_to_the_primary_once_the_cooldown_passes(self):
+        from tutor.llm.fallback import FallbackLLM
+
+        class Flaky:
+            def __init__(self):
+                self.fail = True
+
+            def run_with_tools(self, **_):
+                if self.fail:
+                    raise RuntimeError("boom")
+                return "primary"
+
+            complete_json = run_with_tools
+
+        flaky = Flaky()
+        llm = FallbackLLM(flaky, type("S", (), {"run_with_tools": lambda s, **k: "standby",
+                                                "complete_json": lambda s, **k: "standby"})(),
+                          cooldown_s=0.0)
+        assert llm.run_with_tools() == "standby"
+        flaky.fail = False
+        assert llm.run_with_tools() == "primary"
+
+    def test_a_healthy_primary_is_never_bypassed(self):
+        from tutor.llm.fallback import FallbackLLM
+
+        good = type("P", (), {"run_with_tools": lambda s, **k: "primary",
+                              "complete_json": lambda s, **k: "primary"})()
+        bad = type("S", (), {"run_with_tools": lambda s, **k: pytest.fail("standby used"),
+                             "complete_json": lambda s, **k: pytest.fail("standby used")})()
+        llm = FallbackLLM(good, bad)
+        assert llm.run_with_tools() == "primary"

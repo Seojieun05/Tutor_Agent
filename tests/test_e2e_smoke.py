@@ -143,8 +143,15 @@ async def test_full_hint_flow(scripted_deps):
             assert issued["level"] == 1
             assert issued["action"] == "SOCRATIC_QUESTION"
             first = speaker.spoken[0]
-            assert first and "x = 5" not in first
-            assert not re.search(r"(?<![\d.])5(?![\d.])", first)  # answer never spoken
+            # The answer is 5 and so is a coefficient of `3x + 5 = 20`, so the
+            # test is not "never says 5" — that would ban the best question on
+            # this problem ("5를 어떻게 옮길까요?"). It is "never says 5 AS the
+            # answer", which is what the guard now distinguishes.
+            assert first
+            for reveal in ("x = 5", "x는 5", "x = 5", "답은 5", "정답은 5", "5입니다", "5예요"):
+                assert reveal not in first, first
+            # and nothing that computes it either
+            assert not re.search(r"15\s*[/÷]\s*3|20\s*-\s*5", first), first
 
             # 2nd hint, same worksheet: pre-check marks the L1 hint ineffective → L2.
             issued = await request_hint(ws)

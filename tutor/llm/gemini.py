@@ -1,17 +1,28 @@
-"""Gemini as a second pair of eyes, behind the same seam as Grok.
+"""Gemini behind the same seam as Grok, for the two jobs it is better at.
 
-Reading a photo and teaching from it are different jobs, and only the first one
-is a vision problem. So this swaps the *recognizer's* model and nothing else:
-the solver, the estimator, the hint generator, STT and TTS all stay on Grok,
-and the pedagogy never learns which model read the worksheet.
+Nothing here is all-or-nothing: each job picks its own model, and the rest of
+the pipeline never learns which one answered.
 
-    VISION_PROVIDER=gemini python server.py
+    VISION_PROVIDER=gemini   reads the worksheet
+    HINT_PROVIDER=gemini     writes what the tutor says
 
-It implements complete_json properly and lets run_with_tools fall through to it,
-which is honest rather than lazy: the only purpose that reaches this client is
-`recognize`, and recognize is the one purpose with an empty tool allowlist
-(tutor/tools/registry.py). A tool loop here would be dead code pretending to
-be a feature.
+The second one is the interesting choice. Google fine-tuned Gemini on LearnLM,
+their learning-science work, specifically so that pedagogical system
+instructions — "act as a supportive math tutor", "give a nudge, not the
+answer" — are followed as behaviour rather than as a style request. That is
+exactly the instruction this tutor gives, and exactly the instruction a general
+model tends to drift out of by helpfully finishing the problem.
+
+`run_with_tools` falls through to `complete_json`, which is honest rather than
+lazy. The purposes routed here — recognize, phrase, explain — are the ones this
+codebase deliberately feeds by prefetching: the orchestrator puts the state,
+the history, the target step and the misconception into the prompt rather than
+letting the model go looking (CLAUDE.md, "Do not rely on autonomous tool
+calls"). A tool loop here would be dead code pretending to be a feature.
+
+What does NOT move with the model: the policy that chose the hint level, and
+the leak guard that checks the result. Both are deterministic and both still
+run. Changing the writer cannot change how much is given away.
 """
 
 from __future__ import annotations
@@ -31,29 +42,29 @@ M = TypeVar("M", bound=BaseModel)
 DEFAULT_MODEL = "gemini-3.6-flash"
 
 
-class GeminiVisionClient:
-    """LLMClient for image reading only. Import is lazy so a missing google-genai
-    costs nothing until someone actually asks for this provider."""
+class GeminiClient:
+    """An LLMClient backed by one Gemini model. Import is lazy so a missing
+    google-genai costs nothing until someone actually asks for this provider."""
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, model: str | None = None, role: str = "gemini"):
         if not settings.google_api_key:
             raise LLMError(
-                "VISION_PROVIDER=gemini needs GOOGLE_API_KEY in .env "
+                f"{role} needs GOOGLE_API_KEY in .env "
                 "(https://aistudio.google.com/apikey)."
             )
         try:
             from google import genai
         except ImportError as e:  # pragma: no cover - depends on the extra
             raise LLMError(
-                "VISION_PROVIDER=gemini needs the google-genai package: "
-                "pip install -e \".[vision-gemini]\""
+                f"{role} needs the google-genai package: "
+                "pip install -e \".[gemini]\""
             ) from e
 
         self.settings = settings
-        self.model = settings.gemini_vision_model
+        self.model = model or settings.gemini_vision_model or DEFAULT_MODEL
         self._genai = genai
         self._client = genai.Client(api_key=settings.google_api_key)
-        log.info("vision provider: gemini (%s)", self.model)
+        log.info("%s: gemini (%s)", role, self.model)
 
     def complete_json(self, *, purpose, system, user, images=(), schema: type[M]) -> M:
         from google.genai import types

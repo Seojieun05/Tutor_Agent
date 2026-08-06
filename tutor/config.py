@@ -19,8 +19,17 @@ class Settings:
     # Reading the worksheet is the one job that can be moved to another model
     # without touching the pedagogy: "grok" (default) or "gemini".
     vision_provider: str = "grok"
+    # What the tutor SAYS is the other job worth moving. Gemini carries Google's
+    # LearnLM fine-tuning, which is specifically about following pedagogical
+    # system instructions — "nudge, not the answer" as behaviour rather than as
+    # a style note. The policy that picks the hint level and the leak guard that
+    # checks the result are deterministic and do not move with it.
+    hint_provider: str = "grok"
     google_api_key: str = ""
     gemini_vision_model: str = "gemini-3.6-flash"
+    # Pro, not flash: phrasing a hint that teaches without leaking is the
+    # hardest judgement in the pipeline, and it happens once per turn.
+    gemini_hint_model: str = "gemini-3.1-pro-preview"
     tts_voice: str = "eve"
     ws_host: str = "0.0.0.0"
     ws_port: int = 8765
@@ -84,7 +93,13 @@ def load_settings(env_file: Path | None = None) -> Settings:
     s.vision_provider = (
         os.getenv("VISION_PROVIDER", s.vision_provider).strip().lower() or s.vision_provider
     )
+    s.hint_provider = (
+        os.getenv("HINT_PROVIDER", s.hint_provider).strip().lower() or s.hint_provider
+    )
     s.google_api_key = os.getenv("GOOGLE_API_KEY", "").strip()
+    s.gemini_hint_model = (
+        os.getenv("GEMINI_HINT_MODEL", s.gemini_hint_model).strip() or s.gemini_hint_model
+    )
     s.gemini_vision_model = (
         os.getenv("GEMINI_VISION_MODEL", s.gemini_vision_model).strip()
         or s.gemini_vision_model

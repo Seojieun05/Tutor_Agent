@@ -26,7 +26,11 @@ import time
 from dataclasses import dataclass, field
 
 from tutor.config import Settings
-from tutor.hints.generator import HintGenerator, strip_leading_acknowledgement
+from tutor.hints.generator import (
+    HintGenerator,
+    strip_leading_acknowledgement,
+    visible_to_student,
+)
 from tutor.hints.guard import leaks_answer
 from tutor.knowledge import mathnorm
 from tutor.knowledge.matching import Matcher, problem_hash
@@ -455,7 +459,9 @@ class Session:
         context — the next capture starts a fresh problem.
         """
         feedback = (verdict.feedback or "").strip()
-        if feedback and leaks_answer(feedback, ctx.reference, target_step):
+        if feedback and leaks_answer(
+            feedback, ctx.reference, target_step, visible_to_student(ctx.recognition)
+        ):
             feedback = ""
         try:
             await self._speak(" ".join(part for part in (feedback, PROBLEM_DONE) if part))
@@ -475,7 +481,10 @@ class Session:
         # "네," makes the tutor say it twice in one breath.
         combined = f"{feedback} {strip_leading_acknowledgement(hint)}"
         reference = self.ctx.reference if self.ctx is not None else None
-        if reference is not None and leaks_answer(combined, reference, decision.target_step):
+        seen = visible_to_student(self.ctx.recognition) if self.ctx is not None else []
+        if reference is not None and leaks_answer(
+            combined, reference, decision.target_step, seen
+        ):
             log.warning("answer feedback leaked; dropping it")
             return hint
         return combined

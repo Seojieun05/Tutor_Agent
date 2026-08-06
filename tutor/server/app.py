@@ -103,7 +103,8 @@ def build_shared(settings: Settings):
     # the KB tool already loaded the embedding index: share that one instance
     # with the matcher's SEMANTIC tier instead of loading the model twice
     semantic = getattr(getattr(registry, "kb", None), "semantic", None)
-    return db, llm, transcriber, speaker, semantic, build_vision_llm(settings, llm)
+    return (db, llm, transcriber, speaker, semantic,
+            build_vision_llm(settings, llm), build_hint_llm(settings, llm))
 
 
 def wrap_with_cache(settings: Settings, speaker):
@@ -130,26 +131,46 @@ def wrap_with_cache(settings: Settings, speaker):
 
 
 def build_vision_llm(settings: Settings, llm):
-    """Whichever model reads the worksheet. Only the Recognizer sees this.
+    """Whichever model reads the worksheet. Only the Recognizer sees this."""
+    return _gemini_or(settings, llm, settings.vision_provider,
+                      settings.gemini_vision_model, "VISION_PROVIDER")
 
-    A bad key or a missing package must not cost the student the whole lesson,
-    so a failure here falls back to the chat model rather than refusing to start.
+
+def build_hint_llm(settings: Settings, llm):
+    """Whichever model writes what the tutor says. Only HintGenerator sees this.
+
+    The hint LEVEL is not this model's decision and the leak guard still checks
+    its output, so swapping it changes the wording and nothing about how much
+    is given away.
     """
-    if settings.vision_provider != "gemini" or settings.echo_mode:
+    return _gemini_or(settings, llm, settings.hint_provider,
+                      settings.gemini_hint_model, "HINT_PROVIDER")
+
+
+def _gemini_or(settings: Settings, llm, provider: str, model: str, knob: str):
+    """A bad key or a missing package must not cost the student the whole
+    lesson, so a failure here falls back to the chat model rather than
+    refusing to start — loudly, because reading with a model you did not
+    choose is worse than knowing you are."""
+    if provider != "gemini" or settings.echo_mode:
         return llm
-    from tutor.llm.gemini_vision import GeminiVisionClient
+    from tutor.llm.fallback import FallbackLLM
+    from tutor.llm.gemini import GeminiClient
 
     try:
-        return GeminiVisionClient(settings)
+        chosen = GeminiClient(settings, model, role=knob)
     except Exception as e:  # noqa: BLE001 — degrade to Grok, loudly
-        log.error("VISION_PROVIDER=gemini unavailable (%s); reading with %s instead",
-                  e, settings.chat_model)
+        log.error("%s=gemini unavailable (%s); using %s instead",
+                  knob, e, settings.chat_model)
         return llm
+    # A key can list a model it has no quota for, and that only shows up on the
+    # first real call — mid-lesson. Keep the old model on standby.
+    return FallbackLLM(chosen, llm, label=f"{knob}={model}")
 
 
 def make_deps(
     settings: Settings, db, llm, transcriber, speaker, semantic=None, cameras=None,
-    vision_llm=None,
+    vision_llm=None, hint_llm=None,
 ) -> Deps:
     """Per-connection dependencies (fresh SessionStore each time)."""
     return Deps(
@@ -158,7 +179,7 @@ def make_deps(
         matcher=Matcher(db, semantic=semantic),
         solver=GrokSolver(llm, db),
         estimator=StudentStateEstimator(llm, db, settings.recog_conf_threshold),
-        hint_gen=HintGenerator(llm, db, settings.input_mode),
+        hint_gen=HintGenerator(hint_llm or llm, db, settings.input_mode),
         transcriber=transcriber,
         speaker=speaker,
         evaluator=AnswerEvaluator(llm, db),
@@ -185,7 +206,7 @@ def port_is_free(host: str, port: int) -> bool:
 async def amain(settings: Settings) -> None:
     if not port_is_free(settings.ws_host, settings.ws_port):
         raise OSError(errno.EADDRINUSE, "address already in use")
-    db, llm, transcriber, speaker, semantic, vision_llm = build_shared(settings)
+    db, llm, transcriber, speaker, semantic, vision_llm, hint_llm = build_shared(settings)
 
     cameras = CameraHub()
 
@@ -211,7 +232,8 @@ async def amain(settings: Settings) -> None:
             await CameraConnection(ws, cameras).run()
             return
         deps = make_deps(
-            settings, db, llm, transcriber, speaker, semantic, cameras, vision_llm
+            settings, db, llm, transcriber, speaker, semantic, cameras,
+            vision_llm, hint_llm,
         )
         if path.rstrip("/") == "/browser":
             from tutor.server.browser import BrowserSession
