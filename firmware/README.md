@@ -118,6 +118,44 @@ the server debugged) before anything is flashed:
 Then talk to the tutor in the browser page: the hint request will be served by
 this fake camera exactly as it would by the board.
 
+## 6. "카메라에 다시 보여 줄래요?" and nothing else
+
+That one sentence has two completely different causes, and from the outside they
+are identical: either **no frame arrived** (so the VLM was never called), or a
+frame arrived and **the read was rejected** as too uncertain. Do not guess —
+measure, with the server stopped:
+
+```bash
+.venv/bin/python -m tutor.scripts.camera_check
+```
+
+It serves only `/camera`, waits for the board, asks for one photo, and prints the
+byte count, the transfer time, the dimensions, and where it saved the JPEG — then
+sends that exact photo to the VLM and prints what came back. **Open the saved
+file.** Half the answer is usually visible in it: the page out of frame, out of
+focus, upside down, or too dark.
+
+Reading the result:
+
+| what you see | what it means |
+|---|---|
+| board never connects | `SERVER_HOST` is not the laptop's LAN IP, or the board is on 5 GHz |
+| no frame within the timeout | the transfer is the problem — see the transfer time in the board's serial log |
+| frame arrives, `confidence` low | the photo is genuinely hard to read: framing, focus, glare, light |
+| frame arrives, JSON looks right | vision is fine; the fault is downstream, so read the server log |
+
+If the board's serial log prints a transfer time above 5 s, the default capture
+timeout used to be the whole bug. It is now 15 s and tunable:
+
+```bash
+CAPTURE_TIMEOUT_S=25 SAVE_CAPTURES_DIR=data/captures .venv/bin/python server.py
+```
+
+`SAVE_CAPTURES_DIR` keeps every frame the server receives during a real lesson,
+which is the fastest way to see what the tutor was looking at when it complained.
+If the transfer is simply too slow, drop `CAPTURE_SIZE` to `FRAMESIZE_SXGA` in the
+sketch — it roughly halves the bytes and stays readable.
+
 ## Notes on the image
 
 - **UXGA (1600×1200), quality 10.** Handwriting needs the resolution; SVGA is

@@ -16,13 +16,25 @@ class Settings:
     xai_api_key: str = ""
     xai_base_url: str = "https://api.x.ai/v1"
     chat_model: str = "grok-4.5"
+    # Reading the worksheet is the one job that can be moved to another model
+    # without touching the pedagogy: "grok" (default) or "gemini".
+    vision_provider: str = "grok"
+    google_api_key: str = ""
+    gemini_vision_model: str = "gemini-3.6-flash"
     tts_voice: str = "eve"
     ws_host: str = "0.0.0.0"
     ws_port: int = 8765
     db_path: Path = field(default_factory=lambda: PROJECT_ROOT / "data" / "knowledge.db")
     tutor_language: str = "ko"
     recog_conf_threshold: float = 0.6
-    capture_timeout_s: float = 5.0
+    # A XIAO sends ~300 KB of UXGA JPEG over 2.4 GHz Wi-Fi, and it grabs two
+    # throwaway frames first so the exposure is right. Five seconds is enough
+    # on a good link and never on a busy one — and a capture that times out is
+    # indistinguishable, to the student, from a camera that cannot see the page.
+    capture_timeout_s: float = 15.0
+    # Where to drop every received frame, for when the tutor says it cannot read
+    # the worksheet and you want to know what it was actually looking at.
+    save_captures_dir: Path | None = None
     audio_sample_rate: int = 16000
     # Reasoning effort for the conversational LLM calls (see llm.client
     # FAST_PURPOSES). Empty string = the model's default.
@@ -45,12 +57,23 @@ def load_settings(env_file: Path | None = None) -> Settings:
     s.xai_api_key = os.getenv("XAI_API_KEY", "").strip()
     s.xai_base_url = os.getenv("XAI_BASE_URL", s.xai_base_url).strip() or s.xai_base_url
     s.chat_model = os.getenv("CHAT_MODEL", s.chat_model).strip() or s.chat_model
+    s.vision_provider = (
+        os.getenv("VISION_PROVIDER", s.vision_provider).strip().lower() or s.vision_provider
+    )
+    s.google_api_key = os.getenv("GOOGLE_API_KEY", "").strip()
+    s.gemini_vision_model = (
+        os.getenv("GEMINI_VISION_MODEL", s.gemini_vision_model).strip()
+        or s.gemini_vision_model
+    )
     s.tts_voice = os.getenv("TTS_VOICE", s.tts_voice).strip() or s.tts_voice
     s.ws_host = os.getenv("WS_HOST", s.ws_host).strip() or s.ws_host
     s.ws_port = int(os.getenv("WS_PORT", str(s.ws_port)))
     s.db_path = Path(os.getenv("DB_PATH", str(s.db_path)))
     s.tutor_language = os.getenv("TUTOR_LANGUAGE", s.tutor_language).strip() or s.tutor_language
     s.recog_conf_threshold = float(os.getenv("RECOG_CONF_THRESHOLD", str(s.recog_conf_threshold)))
+    s.capture_timeout_s = float(os.getenv("CAPTURE_TIMEOUT_S", str(s.capture_timeout_s)))
+    captures = os.getenv("SAVE_CAPTURES_DIR", "").strip()
+    s.save_captures_dir = Path(captures) if captures else None
     s.llm_reasoning_effort = os.getenv(
         "LLM_REASONING_EFFORT", s.llm_reasoning_effort
     ).strip()

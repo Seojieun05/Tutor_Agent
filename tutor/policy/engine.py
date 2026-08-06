@@ -39,6 +39,9 @@ LEVEL_ACTIONS: dict[int, Action] = {
 
 MAX_LEVEL = 4
 
+# The two things the tutor says when it cannot see the worksheet.
+BLIND_ACTIONS = frozenset({Action.ASK_RECAPTURE.value, Action.PROBE.value})
+
 
 @dataclass(frozen=True)
 class Decision:
@@ -52,13 +55,23 @@ class Decision:
 def decide(state: StudentState, history: list[HintRecord], trigger: Trigger) -> Decision:
     target = state.last_correct_step + 1
 
-    # R10: capture/decode failure — nothing to reason about.
+    # Are we already teaching blind? Both level-0 actions mean "the tutor cannot
+    # see the worksheet", so the tail of the history says whether asking for a
+    # photo has been tried and has not worked. It re-arms by itself: the moment a
+    # real hint (level >= 1) is given, the camera is evidently working again.
+    still_blind = bool(history) and history[-1].action in BLIND_ACTIONS
+
+    # R10: capture/decode failure — nothing to reason about. Worth one retry;
+    # past that the tutor is talking to itself, which is exactly what a camera
+    # that never delivers a frame used to produce, forever.
     if trigger == "RECOGNITION_FAILED":
+        if still_blind:
+            return Decision(Action.PROBE, 0, target, None, "camera keeps failing; go verbal")
         return Decision(Action.ASK_RECAPTURE, 0, target, None, "recognition failed")
 
     # R1/R2: unreadable state — recapture once, then probe verbally.
     if state.status == "UNCERTAIN":
-        if history and history[-1].action == Action.ASK_RECAPTURE.value:
+        if still_blind:
             return Decision(Action.PROBE, 0, target, None, "recapture already tried; probe")
         return Decision(Action.ASK_RECAPTURE, 0, target, None, "uncertain recognition")
 

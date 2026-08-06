@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 
 from tutor.config import Settings
@@ -236,14 +237,48 @@ class Session:
         XIAO connected on /camera — a different socket entirely — is asked
         instead. Voice and vision can therefore live on different machines.
         """
+        timeout = self.deps.settings.capture_timeout_s
+        started = time.monotonic()
         jpeg = await self._capture_from_device()
-        if jpeg:
-            return jpeg
-        cameras = self.deps.cameras
-        if cameras:
+        eye = "session device"
+        if not jpeg:
+            cameras = self.deps.cameras
+            if not cameras:
+                log.warning("no eye at all: the session device has no camera and none "
+                            "is connected on /camera")
+                return None
             log.info("no local camera; asking a connected camera device")
-            return await cameras.capture(self.deps.settings.capture_timeout_s)
-        return None
+            started = time.monotonic()  # the local device's answer was not the wait
+            jpeg = await cameras.capture(timeout)
+            eye = "camera device"
+        elapsed = (time.monotonic() - started) * 1000
+
+        if jpeg:
+            log.info("captured %d bytes from the %s in %.0f ms", len(jpeg), eye, elapsed)
+            self._save_capture(jpeg)
+        else:
+            # The single most useful line in the log when the tutor keeps asking
+            # to be shown the worksheet again: it says the VLM was never called.
+            log.warning(
+                "NO FRAME from the %s after %.0f ms (timeout %.0fs) — the worksheet was "
+                "never seen, so recognition did not run. Raise CAPTURE_TIMEOUT_S, or check "
+                "the board's serial output for the transfer time.",
+                eye, elapsed, timeout,
+            )
+        return jpeg
+
+    def _save_capture(self, jpeg: bytes) -> None:
+        """SAVE_CAPTURES_DIR=... to see what the camera actually sent."""
+        directory = self.deps.settings.save_captures_dir
+        if directory is None:
+            return
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / f"capture-{int(time.time() * 1000)}.jpg"
+            path.write_bytes(jpeg)
+            log.info("frame saved: %s", path)
+        except OSError as e:  # a full disk must not end the lesson
+            log.warning("could not save the frame: %s", e)
 
     async def _capture_from_device(self) -> bytes | None:
         self._capture_seq += 1
@@ -445,6 +480,20 @@ class Session:
             return
 
         rec = await asyncio.to_thread(self.deps.recognizer.recognize, jpeg)
+        # What the VLM actually read. Nothing here comes from the solver, so no
+        # answer can reach the log through this line — it is the worksheet, which
+        # the student is looking at anyway.
+        log.info(
+            "recognized: conf=%.2f problem=%r equations=%s work=%s uncertain=%s",
+            rec.confidence, rec.problem_text[:60], rec.equations,
+            rec.student_work, rec.uncertain_regions,
+        )
+        if rec.confidence < self.deps.settings.recog_conf_threshold:
+            log.warning(
+                "confidence %.2f < RECOG_CONF_THRESHOLD %.2f → UNCERTAIN → the tutor will "
+                "ask to see the worksheet again",
+                rec.confidence, self.deps.settings.recog_conf_threshold,
+            )
         ctx = await self._problem_context(rec)
 
         # Diagnose before helping (spec rule 4). State/history are prefetched
@@ -479,6 +528,13 @@ class Session:
         # Always read state/history through the store right before the policy.
         current = self.store.get_state() or new_state
         fresh_history = self.store.get_history(problem_hash=ctx.hash)
+        if current.status == "UNCERTAIN" and not fresh_history:
+            # An unreadable photo has no trustworthy identity: problem_hash is
+            # built from what the VLM read, so a garbled read mints a new hash
+            # every turn, hides the recapture we just asked for, and the tutor
+            # repeats that one sentence forever. When we cannot see the problem,
+            # the whole history is the right history.
+            fresh_history = self.store.get_history()
         decision = decide(current, fresh_history, "HINT_REQUEST")
         log.info("decision: %s", decision)
 

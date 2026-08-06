@@ -23,6 +23,29 @@ class TestRules:
         d = decide(state(), [], "RECOGNITION_FAILED")
         assert d.action == Action.ASK_RECAPTURE
 
+    def test_r10_repeated_capture_failure_goes_verbal(self):
+        """A camera that never delivers a frame used to make the tutor say
+        "카메라에 다시 보여 줄래요?" forever: R10 fired before any history rule,
+        so nothing could ever break the loop. One retry, then teach by voice."""
+        history = [hint(level=0, action="ASK_RECAPTURE")]
+        assert decide(state(), history, "RECOGNITION_FAILED").action == Action.PROBE
+
+    def test_r10_stays_verbal_rather_than_alternating(self):
+        """Having gone verbal, asking for the photo again next turn would just
+        be the same loop with an extra step in it."""
+        history = [hint(level=0, action="ASK_RECAPTURE"), hint(level=0, action="PROBE")]
+        assert decide(state(), history, "RECOGNITION_FAILED").action == Action.PROBE
+
+    def test_r10_asks_again_once_the_camera_has_proved_it_works(self):
+        """A hint at level 1+ can only have been given from a photo that was
+        read, so the next failure deserves a fresh 'show me again'."""
+        history = [
+            hint(level=0, action="ASK_RECAPTURE"),
+            hint(level=0, action="PROBE"),
+            hint(step=1, level=1),  # the camera came back
+        ]
+        assert decide(state(), history, "RECOGNITION_FAILED").action == Action.ASK_RECAPTURE
+
     def test_r1_uncertain_recapture_first(self):
         d = decide(state(status="UNCERTAIN"), [], "HINT_REQUEST")
         assert d.action == Action.ASK_RECAPTURE

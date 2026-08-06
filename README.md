@@ -142,6 +142,30 @@ Try the pairing without hardware:
 .venv/bin/python -m simulator.camera_device --server ws://localhost:8765 --images simulator/assets/lin_001_wrong_sign.jpg
 ```
 
+If the tutor keeps saying it cannot see the worksheet, stop the server and run
+
+```bash
+.venv/bin/python -m tutor.scripts.camera_check
+```
+
+which asks the board for one photo, saves it, and sends that photo to the VLM —
+so you can tell "no frame arrived" from "the frame was unreadable" instead of
+guessing. See [firmware/README.md](firmware/README.md#6-카메라에-다시-보여-줄래요-and-nothing-else).
+
+### Reading the worksheet with Gemini
+
+Vision is the one job that can move to another model without touching the
+pedagogy — the solver, the diagnosis, the hint ladder and the leak guard all
+stay on Grok:
+
+```bash
+VISION_PROVIDER=gemini python server.py
+```
+
+Needs `GOOGLE_API_KEY` in `.env` and `pip install -e ".[vision-gemini]"`. The
+model is `GEMINI_VISION_MODEL` (default `gemini-3.6-flash`). A missing key or
+package logs an error and falls back to Grok rather than refusing to start.
+
 ## Tests
 
 ```bash

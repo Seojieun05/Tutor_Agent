@@ -101,16 +101,35 @@ def build_shared(settings: Settings):
     # the KB tool already loaded the embedding index: share that one instance
     # with the matcher's SEMANTIC tier instead of loading the model twice
     semantic = getattr(getattr(registry, "kb", None), "semantic", None)
-    return db, llm, transcriber, speaker, semantic
+    return db, llm, transcriber, speaker, semantic, build_vision_llm(settings, llm)
+
+
+def build_vision_llm(settings: Settings, llm):
+    """Whichever model reads the worksheet. Only the Recognizer sees this.
+
+    A bad key or a missing package must not cost the student the whole lesson,
+    so a failure here falls back to the chat model rather than refusing to start.
+    """
+    if settings.vision_provider != "gemini" or settings.echo_mode:
+        return llm
+    from tutor.llm.gemini_vision import GeminiVisionClient
+
+    try:
+        return GeminiVisionClient(settings)
+    except Exception as e:  # noqa: BLE001 — degrade to Grok, loudly
+        log.error("VISION_PROVIDER=gemini unavailable (%s); reading with %s instead",
+                  e, settings.chat_model)
+        return llm
 
 
 def make_deps(
-    settings: Settings, db, llm, transcriber, speaker, semantic=None, cameras=None
+    settings: Settings, db, llm, transcriber, speaker, semantic=None, cameras=None,
+    vision_llm=None,
 ) -> Deps:
     """Per-connection dependencies (fresh SessionStore each time)."""
     return Deps(
         settings=settings,
-        recognizer=Recognizer(llm),
+        recognizer=Recognizer(vision_llm or llm),
         matcher=Matcher(db, semantic=semantic),
         solver=GrokSolver(llm, db),
         estimator=StudentStateEstimator(llm, db, settings.recog_conf_threshold),
@@ -140,7 +159,7 @@ def port_is_free(host: str, port: int) -> bool:
 async def amain(settings: Settings) -> None:
     if not port_is_free(settings.ws_host, settings.ws_port):
         raise OSError(errno.EADDRINUSE, "address already in use")
-    db, llm, transcriber, speaker, semantic = build_shared(settings)
+    db, llm, transcriber, speaker, semantic, vision_llm = build_shared(settings)
 
     cameras = CameraHub()
 
@@ -151,7 +170,9 @@ async def amain(settings: Settings) -> None:
             # that voice sessions borrow. See tutor/server/camera.py.
             await CameraConnection(ws, cameras).run()
             return
-        deps = make_deps(settings, db, llm, transcriber, speaker, semantic, cameras)
+        deps = make_deps(
+            settings, db, llm, transcriber, speaker, semantic, cameras, vision_llm
+        )
         if path.rstrip("/") == "/browser":
             from tutor.server.browser import BrowserSession
 
