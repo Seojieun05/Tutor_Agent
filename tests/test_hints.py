@@ -1,3 +1,5 @@
+import pytest
+
 from tutor.hints.guard import leaks_answer
 from tutor.hints.generator import HintGenerator
 from tutor.knowledge.models import (
@@ -135,10 +137,22 @@ class TestGenerator:
 
     def test_fixed_actions(self, db):
         gen = HintGenerator(EchoLLMClient(), db)
-        d = Decision(Action.ASK_RECAPTURE, 0, 1, None, "r")
-        assert "카메라" in gen.generate(d, lin_match(), LIN_REF, Recognition(problem_text=""), [])
         d = Decision(Action.WAIT, 0, 1, None, "r")
         assert gen.generate(d, lin_match(), LIN_REF, Recognition(problem_text=""), []) == ""
+
+    @pytest.mark.parametrize("mode, word, absent", [
+        ("upload", "사진", "카메라"),
+        ("camera", "카메라", "올려"),
+    ])
+    def test_recapture_asks_for_the_picture_the_student_can_actually_give(
+        self, db, mode, word, absent
+    ):
+        """Telling a student to hold their worksheet up to a camera that is not
+        connected is worse than saying nothing at all."""
+        gen = HintGenerator(EchoLLMClient(), db, input_mode=mode)
+        d = Decision(Action.ASK_RECAPTURE, 0, 1, None, "r")
+        text = gen.generate(d, lin_match(), LIN_REF, Recognition(problem_text=""), [])
+        assert word in text and absent not in text
 
     def test_completed_problem_gets_praise(self, db):
         gen = HintGenerator(EchoLLMClient(), db)

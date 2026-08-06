@@ -23,8 +23,17 @@ from tutor.vision.recognizer import Recognition
 
 log = logging.getLogger(__name__)
 
+# "Show me again" means different things depending on where the picture comes
+# from, and telling a student to hold a worksheet up to a camera that is not
+# there is worse than saying nothing.
+RECAPTURE_TEXTS: dict[str, str] = {
+    "upload": "문제와 지금까지 쓴 풀이가 잘 보이게 사진을 다시 올려 줄래요?",
+    "camera": "문제와 지금까지 쓴 풀이가 잘 보이게 카메라에 다시 보여 줄래요?",
+}
+DEFAULT_INPUT_MODE = "upload"
+
 FIXED_ACTIONS: dict[Action, str] = {
-    Action.ASK_RECAPTURE: "문제와 지금까지 쓴 풀이가 잘 보이게 카메라에 다시 보여 줄래요?",
+    Action.ASK_RECAPTURE: RECAPTURE_TEXTS[DEFAULT_INPUT_MODE],
     Action.PROBE: "방금 쓴 줄을 소리 내어 읽어 줄래요? 어떻게 생각했는지 듣고 싶어요.",
     Action.WAIT: "",
 }
@@ -92,9 +101,13 @@ class PhrasedHint(BaseModel):
 
 
 class HintGenerator:
-    def __init__(self, llm: LLMClient, db: KnowledgeDB):
+    def __init__(self, llm: LLMClient, db: KnowledgeDB, input_mode: str = DEFAULT_INPUT_MODE):
         self.llm = llm
         self.db = db
+        self.fixed = dict(FIXED_ACTIONS)
+        self.fixed[Action.ASK_RECAPTURE] = RECAPTURE_TEXTS.get(
+            input_mode, FIXED_ACTIONS[Action.ASK_RECAPTURE]
+        )
 
     def generate(
         self,
@@ -105,8 +118,8 @@ class HintGenerator:
         history: list[HintRecord],
         student_answer: str | None = None,
     ) -> str:
-        if decision.action in FIXED_ACTIONS:
-            return FIXED_ACTIONS[decision.action]
+        if decision.action in self.fixed:
+            return self.fixed[decision.action]
 
         if reference is not None and decision.target_step > len(reference.steps):
             # every reference step is done — nothing left to hint at

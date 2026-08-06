@@ -35,6 +35,20 @@ class Settings:
     # Where to drop every received frame, for when the tutor says it cannot read
     # the worksheet and you want to know what it was actually looking at.
     save_captures_dir: Path | None = None
+    # Where the worksheet picture comes from. "upload" is the browser page's
+    # file picker (paste, drag or choose); "camera" borrows a XIAO on /camera.
+    # Upload is the default because it is the one that always works: a 2 MP
+    # fixed-focus sensor on a desk mount gave ~65 DPI across an A4 page, and
+    # handwriting OCR wants 150+.
+    input_mode: str = "upload"
+    # A camera on a desk photographs mostly desk. Cropping to the page before
+    # the reading model sees it is worth 2-3x in effective resolution, because
+    # the model's tile budget stops being spent on an empty table.
+    # WORKSHEET_ROI="x,y,w,h" (fractions) is exact; auto-crop is best-effort and
+    # returns the whole frame whenever it is unsure. See tutor/vision/framing.py.
+    worksheet_roi: tuple[float, float, float, float] | None = None
+    auto_crop: bool = True
+    crop_target_px: int = 1024
     audio_sample_rate: int = 16000
     # Reasoning effort for the conversational LLM calls (see llm.client
     # FAST_PURPOSES). Empty string = the model's default.
@@ -74,6 +88,13 @@ def load_settings(env_file: Path | None = None) -> Settings:
     s.capture_timeout_s = float(os.getenv("CAPTURE_TIMEOUT_S", str(s.capture_timeout_s)))
     captures = os.getenv("SAVE_CAPTURES_DIR", "").strip()
     s.save_captures_dir = Path(captures) if captures else None
+    mode = os.getenv("INPUT_MODE", s.input_mode).strip().lower()
+    s.input_mode = mode if mode in {"upload", "camera"} else s.input_mode
+    from tutor.vision.framing import parse_roi
+
+    s.worksheet_roi = parse_roi(os.getenv("WORKSHEET_ROI", ""))
+    s.auto_crop = os.getenv("AUTO_CROP", "1").strip().lower() not in {"0", "false", "no"}
+    s.crop_target_px = int(os.getenv("CROP_TARGET_PX", str(s.crop_target_px)))
     s.llm_reasoning_effort = os.getenv(
         "LLM_REASONING_EFFORT", s.llm_reasoning_effort
     ).strip()

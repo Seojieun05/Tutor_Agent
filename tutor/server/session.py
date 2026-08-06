@@ -243,6 +243,13 @@ class Session:
         eye = "session device"
         if not jpeg:
             cameras = self.deps.cameras
+            if self.deps.settings.input_mode != "camera":
+                # INPUT_MODE=upload: the picture comes from the browser's file
+                # picker and nowhere else. Falling through to a camera device
+                # here would silently hand the tutor a different photo from the
+                # one the student just chose.
+                log.warning("no worksheet photo attached (INPUT_MODE=upload)")
+                return None
             if not cameras:
                 log.warning("no eye at all: the session device has no camera and none "
                             "is connected on /camera")

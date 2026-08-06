@@ -116,13 +116,41 @@ client-side and TTS plays on the machine running the server, so both must be
 the same room (the XIAO setup). `--list-devices` lists microphones,
 `--input-device` selects one, `--images` replays a worksheet.
 
-## XIAO camera
+## The worksheet photo
+
+By default the picture comes from the browser page: choose a file, drag one in,
+or paste a screenshot with `Ctrl+V`. A thumbnail shows what the tutor is
+actually looking at, which is the fastest way to catch the usual problem — a
+photo that turns out blurred, cropped short, or of the wrong page.
+
+Cropping happens server-side before the model sees the frame, because a vision
+model resizes whatever it is given into a fixed budget and a photo of a desk
+spends most of that budget on the desk:
+
+```bash
+WORKSHEET_ROI=0.18,0.36,0.36,0.55   # exact region, for a fixed camera mount
+AUTO_CROP=0                          # or turn the automatic one off
+```
+
+The automatic crop refuses rather than guesses: anything that is not
+page-shaped, page-sized and brighter than the rest of the frame is passed
+through whole. See [tutor/vision/framing.py](tutor/vision/framing.py).
+
+### XIAO camera (opt-in)
+
+```bash
+INPUT_MODE=camera python server.py
+```
 
 The board is the eyes only — mic and speaker stay on the laptop, where the
 sound comes out. It connects to `ws://<laptop>:8765/camera` and answers each
-`capture_request` with one JPEG; the voice session borrows it whenever it has
-no camera of its own. Flashing, wiring and network notes:
+`capture_request` with one JPEG. Flashing, wiring and network notes:
 [firmware/README.md](firmware/README.md).
+
+It is off by default for a measured reason: on a desk mount the 2 MP
+fixed-focus sensor put an A4 page across ~540 px, about 65 DPI, with
+handwriting 25-30 px tall. Handwriting recognition wants 150+ DPI, and no
+model reads pixels that were never captured. Upload is what works today.
 
 Running the server on the laptop (the demo setup — no tunnel, sound just works):
 

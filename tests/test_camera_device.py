@@ -39,13 +39,17 @@ LOCAL_JPEG = b"\xff\xd8" + b"local" * 2048   # what the browser attached
 @pytest.fixture
 def deps(db):
     llm = EchoLLMClient({"recognize": [WORKSHEET] * 5})
+    # input_mode="camera": borrowing a XIAO is opt-in now that the default
+    # worksheet source is the browser's file picker. Wired through to the
+    # generator exactly as tutor/server/app.py does it.
+    settings = Settings(capture_timeout_s=2.0, input_mode="camera")
     return Deps(
-        settings=Settings(capture_timeout_s=2.0),
+        settings=settings,
         recognizer=Recognizer(llm),
         matcher=Matcher(db),
         solver=GrokSolver(llm, db),
         estimator=StudentStateEstimator(llm, db),
-        hint_gen=HintGenerator(llm, db),
+        hint_gen=HintGenerator(llm, db, settings.input_mode),
         transcriber=EchoTranscriber(),
         speaker=NullSpeaker(),
         cameras=CameraHub(),
@@ -158,6 +162,27 @@ async def test_a_cameraless_session_borrows_the_xiao(deps):
     assert camera.requests == 1              # the board was asked
     assert laptop.hints[0]["level"] == 1     # and a real hint came back
     assert deps.store.get_history()[0].level == 1
+
+
+async def test_upload_mode_never_borrows_a_connected_board(deps):
+    """INPUT_MODE=upload means the picture is the one the student chose.
+
+    A XIAO left plugged in from an earlier experiment must not quietly become
+    the tutor's eyes: it would answer with a photo of whatever the board happens
+    to be pointed at, and the student would be told about a different problem
+    from the one on their screen.
+    """
+    deps.settings.input_mode = "upload"
+    deps.hint_gen = HintGenerator(deps.hint_gen.llm, deps.hint_gen.db, "upload")
+    async with await tutor_server(deps) as server:
+        url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+        async with FakeCamera(url) as camera, VoiceClient(url) as laptop:
+            assert deps.cameras.count == 1   # connected, and still not used
+            await laptop.ask_for_a_hint()
+
+    assert camera.requests == 0
+    assert laptop.hints[0]["action"] == "ASK_RECAPTURE"
+    assert "사진" in deps.speaker.spoken[0], deps.speaker.spoken
 
 
 async def test_the_sessions_own_camera_wins(deps):

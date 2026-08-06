@@ -129,11 +129,11 @@ def make_deps(
     """Per-connection dependencies (fresh SessionStore each time)."""
     return Deps(
         settings=settings,
-        recognizer=Recognizer(vision_llm or llm),
+        recognizer=Recognizer(vision_llm or llm, settings),
         matcher=Matcher(db, semantic=semantic),
         solver=GrokSolver(llm, db),
         estimator=StudentStateEstimator(llm, db, settings.recog_conf_threshold),
-        hint_gen=HintGenerator(llm, db),
+        hint_gen=HintGenerator(llm, db, settings.input_mode),
         transcriber=transcriber,
         speaker=speaker,
         evaluator=AnswerEvaluator(llm, db),
@@ -213,9 +213,14 @@ async def amain(settings: Settings) -> None:
             say(f"         remote server? ssh -N -L {settings.ws_port}:localhost:"
                 f"{settings.ws_port} <user>@<this-host> first")
         # The board needs a routable address, not localhost.
-        from tutor.scripts.live_demo import lan_ip
+        if settings.input_mode == "camera":
+            # The board needs a routable address, not localhost.
+            from tutor.scripts.live_demo import lan_ip
 
-        say(f"  camera device (XIAO): ws://{lan_ip()}:{settings.ws_port}/camera")
+            say(f"  worksheet: camera device (XIAO) — ws://{lan_ip()}:{settings.ws_port}/camera")
+        else:
+            say("  worksheet: uploaded in the browser page (choose, drag, or Ctrl+V)")
+            say("             INPUT_MODE=camera to use a XIAO on /camera instead")
         await asyncio.Future()
 
 

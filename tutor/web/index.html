@@ -54,6 +54,18 @@
   }
   #tools label:hover, #tools button:hover { color:var(--text); border-color:var(--dim); }
   #sheet { display:none; }
+  /* The photo is not a nice-to-have: without it the tutor has nothing to read. */
+  #drop {
+    width:100%; max-width:38rem; margin-top:1.2rem; padding:1rem;
+    border:1px dashed var(--line); border-radius:12px; color:var(--dim);
+    font:500 .85rem system-ui; text-align:center; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; gap:.9rem;
+  }
+  #drop:hover, #drop.over { border-color:var(--you); color:var(--text); }
+  #drop.has { border-style:solid; border-color:var(--tutor); color:var(--text); }
+  #thumb { max-height:5rem; border-radius:6px; display:none; }
+  #thumb.has { display:block; }
+  #drophint { text-align:left; line-height:1.5; }
   #log { width:100%; max-width:38rem; margin-top:2rem; }
   .turn { background:var(--panel); border-radius:10px; padding:.7rem 1rem; margin-bottom:.7rem; }
   .who { font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); }
@@ -68,11 +80,15 @@
 
   <button id="orb">시작</button>
 
-  <div id="tools">
-    <label for="sheet">📄 문제 사진 선택 (선택)</label>
-    <input type="file" id="sheet" accept="image/*">
-    <span id="sheetname" class="meta"></span>
+  <div id="drop">
+    <img id="thumb" alt="">
+    <div id="drophint">
+      📄 <b>문제 사진을 올려 주세요</b><br>
+      클릭해서 고르거나, 여기로 끌어다 놓거나, <b>Ctrl+V</b>로 붙여넣기<br>
+      <span id="sheetname" class="meta"></span>
+    </div>
   </div>
+  <input type="file" id="sheet" accept="image/*">
 
   <div id="log"></div>
   <audio id="player"></audio>
@@ -260,17 +276,53 @@ function play(bytes) {
   });
 }
 
-// --- 4. the optional worksheet photo (not a turn-taking button) ------------
-$("sheet").addEventListener("change", async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
+// --- 4. the worksheet photo ------------------------------------------------
+// Three ways in, because the one that fits the moment is the one that gets
+// used: choosing a file, dragging it, or pasting a screenshot straight from
+// the clipboard — which is how most photos actually arrive on a laptop.
+async function useWorksheet(file) {
+  if (!file || !file.type.startsWith("image/")) return;
   worksheet = new Uint8Array(await file.arrayBuffer());
-  $("sheetname").textContent = `${file.name} (${Math.round(worksheet.length / 1024)} KB)`;
+  $("sheetname").textContent =
+    `${file.name || "붙여넣은 이미지"} · ${Math.round(worksheet.length / 1024)} KB`;
+  // Show it back: the commonest failure is not a bad model but a photo that
+  // turns out to be blurred, cropped short, or of the wrong page.
+  const thumb = $("thumb");
+  thumb.src = URL.createObjectURL(file);
+  thumb.classList.add("has");
+  $("drop").classList.add("has");
+  setStatus("사진을 받았습니다. 이제 힌트를 물어보세요.");
+}
+
+$("sheet").addEventListener("change", (e) => useWorksheet(e.target.files[0]));
+$("drop").addEventListener("click", () => $("sheet").click());
+
+for (const type of ["dragenter", "dragover"]) {
+  $("drop").addEventListener(type, (e) => {
+    e.preventDefault();
+    $("drop").classList.add("over");
+  });
+}
+for (const type of ["dragleave", "drop"]) {
+  $("drop").addEventListener(type, (e) => {
+    e.preventDefault();
+    $("drop").classList.remove("over");
+  });
+}
+$("drop").addEventListener("drop", (e) => useWorksheet(e.dataTransfer.files[0]));
+
+document.addEventListener("paste", (e) => {
+  for (const item of e.clipboardData.files) {
+    if (item.type.startsWith("image/")) { useWorksheet(item); return; }
+  }
 });
 
 function sendWorksheet(captureId) {
-  if (!worksheet) {           // no camera here: the server falls back gracefully
+  if (!worksheet) {
+    // Nothing to read. The server turns this into "사진을 다시 올려 줄래요?",
+    // so say the same thing here where the student is actually looking.
     sendEvent("capture_failed", { capture_id: captureId });
+    setStatus("문제 사진이 아직 없어요 — 위에 사진을 올려 주세요.");
     return;
   }
   ws.send(encodeFrame(IMAGE_FRAME, { capture_id: captureId, format: "jpeg" }, worksheet));

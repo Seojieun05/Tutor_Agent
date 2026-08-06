@@ -38,6 +38,17 @@ static const int JPEG_QUALITY = 10;  // 0-63, LOWER is better
 static const uint32_t KEEP_AWAKE_MS = 3000;
 static const int DISCARD_BEFORE_CAPTURE = 2;
 
+// A white page on a white desk is the worst case for auto-exposure: it meters
+// the whole bright scene, opens up, and the page saturates — black ink on white
+// paper arrives with almost no contrast left, which is what a real capture from
+// this rig looked like. Bias the exposure down and push contrast back up; the
+// pixels are the same, the ink is legible.
+// Raise AE_LEVEL toward 0 if photos come out too dark for the room.
+static const int AE_LEVEL   = -2;  // -2..2, exposure bias
+static const int BRIGHTNESS = -1;  // -2..2
+static const int CONTRAST   =  1;  // -2..2
+static const int SATURATION = -2;  // ink is not a colour; -2 is effectively grey
+
 // ------------------------------------------------------------------ globals --
 WebSocketsClient ws;
 static bool cameraReady = false;
@@ -96,12 +107,18 @@ static bool startCamera() {
 
   sensor_t *s = esp_camera_sensor_get();
   if (s->id.PID == OV3660_PID) {
-    // Newer Sense units ship an OV3660: its image arrives flipped and oversaturated.
+    // Newer Sense units ship an OV3660, whose image arrives vertically flipped.
     s->set_vflip(s, 1);
-    s->set_brightness(s, 1);
-    s->set_saturation(s, -2);
   }
   s->set_framesize(s, config.frame_size);  // the streaming examples drop to QVGA here
+
+  // Exposure for paper, not for the room. Applied to both sensors: the page is
+  // the subject on every unit, and the OV3660's own tuning was the same idea
+  // pointed the wrong way (it used to raise brightness, blowing the page out).
+  s->set_ae_level(s, AE_LEVEL);
+  s->set_brightness(s, BRIGHTNESS);
+  s->set_contrast(s, CONTRAST);
+  s->set_saturation(s, SATURATION);
 
   // Cycle frames so auto-exposure converges before the first real request.
   for (int i = 0; i < 8; i++) {
