@@ -90,9 +90,10 @@ class XaiSpeaker:
     def speak(self, text: str) -> None:
         audio = self.synthesize(text)
         if audio:
-            self._play(audio)
+            self.play(audio)
 
-    def _play(self, mp3: bytes) -> None:
+    def play(self, mp3: bytes) -> None:
+        """Play audio we already have — a cached phrase costs no TTS call."""
         if not self._can_play:
             # Say so every time: silence with no explanation is the worst
             # failure mode this system has.
@@ -126,6 +127,9 @@ class EchoSpeaker:
         if text:
             print(f"[TUTOR 🔊] {text}", flush=True)
 
+    def play(self, audio: bytes) -> None:
+        pass  # echo mode has no audio to play
+
 
 class NullSpeaker:
     """Test double. ``spoken`` is what was played HERE, ``synthesized`` what was
@@ -136,7 +140,11 @@ class NullSpeaker:
     def __init__(self, audio: bytes | None = None):
         self.spoken: list[str] = []
         self.synthesized: list[str] = []
+        self.played: list[bytes] = []
         self.audio = audio  # what synthesize() hands back, if anything
+
+    def play(self, audio: bytes) -> None:
+        self.played.append(audio)
 
     def synthesize(self, text: str) -> bytes | None:
         if not text:

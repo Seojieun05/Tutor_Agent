@@ -118,7 +118,7 @@ class BrowserSession(Session):
 
     # --- tutor speech: to the browser, never to the server's speaker --------
 
-    async def _speak(self, text: str) -> None:
+    async def _say(self, text: str) -> None:
         # a hint_request can arrive before any audio (button-driven client)
         taker = await self._ensure_taker()
         audio = await asyncio.to_thread(self.deps.speaker.synthesize, text)

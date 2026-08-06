@@ -29,6 +29,7 @@ from tutor.server.camera import CameraConnection, CameraHub
 from tutor.llm.echo import EchoLLMClient
 from tutor.server.session import Deps, Session
 from tutor.solver.grok_solver import GrokSolver
+from tutor.speech.filler import FillerBank
 from tutor.state.answer import AnswerEvaluator
 from tutor.state.estimator import StudentStateEstimator
 from tutor.store.session_store import SessionStore
@@ -98,10 +99,34 @@ def build_shared(settings: Settings):
         llm = GrokClient(settings, registry)
         transcriber = XaiTranscriber(settings)
         speaker = XaiSpeaker(settings)
+    speaker = wrap_with_cache(settings, speaker)
     # the KB tool already loaded the embedding index: share that one instance
     # with the matcher's SEMANTIC tier instead of loading the model twice
     semantic = getattr(getattr(registry, "kb", None), "semantic", None)
     return db, llm, transcriber, speaker, semantic, build_vision_llm(settings, llm)
+
+
+def wrap_with_cache(settings: Settings, speaker):
+    """Memoize the lines the tutor repeats all day: the fillers and the fixed
+    prompts. Hints are never cached — they belong to one student and one step."""
+    if not settings.filler_enabled:
+        return speaker
+    from tutor.hints.generator import FIXED_ACTIONS
+    from tutor.server.session import PROBLEM_DONE, RETRY_PROMPTS
+    from tutor.speech.filler import FILLER_PHRASES, CachedSpeech
+
+    repeated = [
+        *FILLER_PHRASES,
+        *(t for t in FIXED_ACTIONS.values() if t),
+        *RETRY_PROMPTS.values(),
+        PROBLEM_DONE,
+    ]
+    return CachedSpeech(
+        speaker,
+        cacheable=repeated,
+        cache_dir=settings.tts_cache_dir,
+        voice=settings.tts_voice,
+    )
 
 
 def build_vision_llm(settings: Settings, llm):
@@ -139,6 +164,7 @@ def make_deps(
         evaluator=AnswerEvaluator(llm, db),
         tagger=ConceptTagger(llm),
         cameras=cameras,
+        fillers=FillerBank() if settings.filler_enabled else None,
         store=SessionStore(),
     )
 
@@ -162,6 +188,20 @@ async def amain(settings: Settings) -> None:
     db, llm, transcriber, speaker, semantic, vision_llm = build_shared(settings)
 
     cameras = CameraHub()
+
+    async def warm_fillers() -> None:
+        """Render the repeated phrases before anyone asks for one.
+
+        In a thread and unawaited: the first student should not pay for this,
+        and neither should the port being open.
+        """
+        warm = getattr(speaker, "warm", None)
+        if not callable(warm):
+            return
+        ready = await asyncio.to_thread(warm)
+        log.info("pre-rendered %d spoken phrases (cache: %s)", ready, settings.tts_cache_dir)
+
+    warming = asyncio.create_task(warm_fillers())
 
     async def handler(ws):
         path = ws.request.path.split("?", 1)[0]

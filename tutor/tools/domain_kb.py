@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 import logging
+import threading
+import time
 
 from tutor.knowledge import mathnorm
 from tutor.knowledge.db import KnowledgeDB
@@ -38,10 +40,59 @@ def load_semantic_retriever(db: KnowledgeDB):
     return None
 
 
+class LazySemantic:
+    """The embedding index, loaded off the startup path.
+
+    Importing torch and sentence-transformers and reading the 22 MB index takes
+    about 15 seconds, and it used to happen before the socket was even open —
+    so `python server.py` looked hung, and a student opening the page early got
+    a connection refused. None of it is needed to accept a connection, and most
+    of it is not needed for the first hint either: SEMANTIC is the fourth tier
+    of the matching cascade, behind EXACT, TEMPLATE and CONCEPT.
+
+    Loading in a thread and *waiting only when someone actually searches* keeps
+    both properties: the server is up in a second, and nobody silently loses a
+    retrieval tier. Every caller is already on a worker thread (matcher.match
+    and the tool loop both run under asyncio.to_thread), so blocking here
+    blocks nothing else.
+    """
+
+    def __init__(self, db: KnowledgeDB, timeout_s: float = 90.0):
+        self.timeout_s = timeout_s
+        self._ready = threading.Event()
+        self._inner = None
+        self._started = time.monotonic()
+        threading.Thread(
+            target=self._load, args=(db,), name="semantic-index", daemon=True
+        ).start()
+
+    def _load(self, db: KnowledgeDB) -> None:
+        try:
+            self._inner = load_semantic_retriever(db)
+        finally:
+            self._ready.set()
+            if self._inner is not None:
+                log.info(
+                    "semantic index ready after %.1fs", time.monotonic() - self._started
+                )
+
+    def search(self, *args, **kwargs):
+        if not self._ready.is_set():
+            waited = time.monotonic() - self._started
+            log.info("waiting for the semantic index (%.1fs so far)", waited)
+            if not self._ready.wait(self.timeout_s):
+                # Better a weaker retrieval tier than a student waiting forever.
+                log.warning("semantic index still not ready; searching without it")
+                return []
+        return self._inner.search(*args, **kwargs) if self._inner is not None else []
+
+
 class DomainKBTool:
-    def __init__(self, db: KnowledgeDB):
+    def __init__(self, db: KnowledgeDB, semantic_in_background: bool = True):
         self.db = db
-        self.semantic = load_semantic_retriever(db)
+        self.semantic = (
+            LazySemantic(db) if semantic_in_background else load_semantic_retriever(db)
+        )
 
     def search(
         self,

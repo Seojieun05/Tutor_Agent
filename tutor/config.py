@@ -35,6 +35,16 @@ class Settings:
     # Where to drop every received frame, for when the tutor says it cannot read
     # the worksheet and you want to know what it was actually looking at.
     save_captures_dir: Path | None = None
+    # Something to say while the pipeline thinks. The delay is the whole design:
+    # a turn that answers sooner than this stays silent, so the filler only ever
+    # replaces a wait the student would have had anyway.
+    filler_enabled: bool = True
+    filler_delay_ms: int = 400
+    # Pre-rendered phrases live here between runs; a warm cache means the filler
+    # itself costs no TTS round trip.
+    tts_cache_dir: Path | None = field(
+        default_factory=lambda: PROJECT_ROOT / "data" / "tts_cache"
+    )
     # Where the worksheet picture comes from. "upload" is the browser page's
     # file picker (paste, drag or choose); "camera" borrows a XIAO on /camera.
     # Upload is the default because it is the one that always works: a 2 MP
@@ -88,6 +98,10 @@ def load_settings(env_file: Path | None = None) -> Settings:
     s.capture_timeout_s = float(os.getenv("CAPTURE_TIMEOUT_S", str(s.capture_timeout_s)))
     captures = os.getenv("SAVE_CAPTURES_DIR", "").strip()
     s.save_captures_dir = Path(captures) if captures else None
+    s.filler_enabled = os.getenv("FILLER", "1").strip().lower() not in {"0", "false", "no"}
+    s.filler_delay_ms = int(os.getenv("FILLER_DELAY_MS", str(s.filler_delay_ms)))
+    cache = os.getenv("TTS_CACHE_DIR", str(s.tts_cache_dir or "")).strip()
+    s.tts_cache_dir = Path(cache) if cache else None
     mode = os.getenv("INPUT_MODE", s.input_mode).strip().lower()
     s.input_mode = mode if mode in {"upload", "camera"} else s.input_mode
     from tutor.vision.framing import parse_roi
