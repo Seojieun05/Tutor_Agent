@@ -190,6 +190,34 @@ stay on Grok:
 VISION_PROVIDER=gemini python server.py
 ```
 
+Hints can move too — Gemini carries Google's LearnLM tuning, which is about
+following pedagogical system instructions rather than styling them:
+
+```bash
+HINT_PROVIDER=gemini python server.py     # GEMINI_HINT_MODEL, default gemini-3.6-flash
+```
+
+`gemini-3.1-pro-preview` phrases hints better — it reached for an everyday
+analogy where flash restated the rule — but at 8-12s per hint against flash's
+4-6s it takes a turn from 11s to 18s, so flash is the default.
+
+The policy that picks the hint level and the leak guard that checks the result
+are deterministic and do not move with the model, so this changes the wording
+and nothing about how much is given away.
+
+**Two doors, and the billing differs.** An AI Studio key spends prepaid credits
+and answers `429 ... prepayment credits are depleted` when they run out; a
+Cloud project spends its own:
+
+```bash
+VERTEX_PROJECT=gen-lang-client-0586206831   # + gcloud auth application-default login
+VERTEX_LOCATION=global                       # not us-central1: 3.1-pro-preview 404s there
+```
+
+Set `VERTEX_PROJECT` and it wins over `GOOGLE_API_KEY`. Either way, if the
+model is unreachable mid-lesson the turn falls back to the chat model for 60
+seconds rather than being lost ([tutor/llm/fallback.py](tutor/llm/fallback.py)).
+
 Needs `GOOGLE_API_KEY` in `.env` and `pip install -e ".[gemini]"`. The
 model is `GEMINI_VISION_MODEL` (default `gemini-3.6-flash`). A missing key or
 package logs an error and falls back to Grok rather than refusing to start.

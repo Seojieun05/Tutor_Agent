@@ -47,11 +47,6 @@ class GeminiClient:
     google-genai costs nothing until someone actually asks for this provider."""
 
     def __init__(self, settings: Settings, model: str | None = None, role: str = "gemini"):
-        if not settings.google_api_key:
-            raise LLMError(
-                f"{role} needs GOOGLE_API_KEY in .env "
-                "(https://aistudio.google.com/apikey)."
-            )
         try:
             from google import genai
         except ImportError as e:  # pragma: no cover - depends on the extra
@@ -63,8 +58,37 @@ class GeminiClient:
         self.settings = settings
         self.model = model or settings.gemini_vision_model or DEFAULT_MODEL
         self._genai = genai
-        self._client = genai.Client(api_key=settings.google_api_key)
-        log.info("%s: gemini (%s)", role, self.model)
+        self._client = self._connect(settings, role)
+        log.info("%s: gemini %s via %s", role, self.model, self.backend)
+
+    def _connect(self, settings: Settings, role: str):
+        """Vertex AI if a project is configured, the AI Studio key otherwise.
+
+        Two doors to the same models, and which one you have matters:
+        an AI Studio key bills prepaid credits and answers 429 "prepayment
+        credits are depleted" once they run out, while a Cloud project can
+        spend its own (often free) credits. The model ids are the same; the
+        location is not — gemini-3.1-pro-preview lives in `global` on Vertex and
+        answers 404 in us-central1.
+        """
+        from google import genai
+
+        if settings.vertex_project:
+            self.backend = f"vertex ai ({settings.vertex_project}/{settings.vertex_location})"
+            # Credentials come from ADC: `gcloud auth application-default login`.
+            return genai.Client(
+                vertexai=True,
+                project=settings.vertex_project,
+                location=settings.vertex_location,
+            )
+        if not settings.google_api_key:
+            raise LLMError(
+                f"{role} needs either GOOGLE_API_KEY in .env "
+                "(https://aistudio.google.com/apikey) or VERTEX_PROJECT plus "
+                "`gcloud auth application-default login`."
+            )
+        self.backend = "ai studio"
+        return genai.Client(api_key=settings.google_api_key)
 
     def complete_json(self, *, purpose, system, user, images=(), schema: type[M]) -> M:
         from google.genai import types

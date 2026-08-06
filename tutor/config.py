@@ -26,10 +26,20 @@ class Settings:
     # checks the result are deterministic and do not move with it.
     hint_provider: str = "grok"
     google_api_key: str = ""
+    # Set VERTEX_PROJECT to reach the same models through Google Cloud instead
+    # of an AI Studio key — different billing, and a Cloud project can spend its
+    # own credits. Auth is ADC (`gcloud auth application-default login`).
+    # `global` is not a default to be tidy about: gemini-3.1-pro-preview is only
+    # published there, and answers 404 in us-central1.
+    vertex_project: str = ""
+    vertex_location: str = "global"
     gemini_vision_model: str = "gemini-3.6-flash"
-    # Pro, not flash: phrasing a hint that teaches without leaking is the
-    # hardest judgement in the pipeline, and it happens once per turn.
-    gemini_hint_model: str = "gemini-3.1-pro-preview"
+    # Flash, not pro. Pro phrased hints noticeably better — it reached for an
+    # everyday analogy ("등식은 양팔저울과 같아서") where flash restated the rule —
+    # but it took 8-12s per hint against flash's 4-6s, pushing a turn from 11s
+    # to 18s. A tutor the student is waiting on is a worse tutor. Set
+    # GEMINI_HINT_MODEL=gemini-3.1-pro-preview to trade back.
+    gemini_hint_model: str = "gemini-3.6-flash"
     tts_voice: str = "eve"
     ws_host: str = "0.0.0.0"
     ws_port: int = 8765
@@ -97,6 +107,10 @@ def load_settings(env_file: Path | None = None) -> Settings:
         os.getenv("HINT_PROVIDER", s.hint_provider).strip().lower() or s.hint_provider
     )
     s.google_api_key = os.getenv("GOOGLE_API_KEY", "").strip()
+    s.vertex_project = os.getenv("VERTEX_PROJECT", "").strip()
+    s.vertex_location = (
+        os.getenv("VERTEX_LOCATION", s.vertex_location).strip() or s.vertex_location
+    )
     s.gemini_hint_model = (
         os.getenv("GEMINI_HINT_MODEL", s.gemini_hint_model).strip() or s.gemini_hint_model
     )

@@ -104,14 +104,14 @@ class TestHintProvider:
         llm = EchoLLMClient()
         assert build_hint_llm(Settings(xai_api_key="k"), llm) is llm
 
-    def test_the_hint_model_defaults_to_pro(self, env):
-        # Phrasing a hint that teaches without leaking is the hardest judgement
-        # in the pipeline, and it happens once per turn — flash is the wrong trade.
-        assert load_settings(env).gemini_hint_model == "gemini-3.1-pro-preview"
+    def test_the_hint_model_defaults_to_flash(self, env):
+        # Measured: pro phrases better but takes 8-12s against flash's 4-6s,
+        # which turns an 11s turn into 18s. The student is waiting through it.
+        assert load_settings(env).gemini_hint_model == "gemini-3.6-flash"
 
     def test_the_hint_model_is_readable_from_the_environment(self, env, monkeypatch):
-        monkeypatch.setenv("GEMINI_HINT_MODEL", "gemini-3.6-flash")
-        assert load_settings(env).gemini_hint_model == "gemini-3.6-flash"
+        monkeypatch.setenv("GEMINI_HINT_MODEL", "gemini-3.1-pro-preview")
+        assert load_settings(env).gemini_hint_model == "gemini-3.1-pro-preview"
 
     def test_a_missing_key_degrades_instead_of_refusing_to_start(self, caplog):
         from tutor.server.app import build_hint_llm
@@ -304,3 +304,57 @@ class TestStandby:
                              "complete_json": lambda s, **k: pytest.fail("standby used")})()
         llm = FallbackLLM(good, bad)
         assert llm.run_with_tools() == "primary"
+
+
+class TestVertexBackend:
+    """Two doors to the same models. Which one you have is a billing fact:
+    an AI Studio key spends prepaid credits and 429s with "prepayment credits
+    are depleted" when they run out; a Cloud project spends its own."""
+
+    def test_no_vertex_project_means_the_api_key_path(self, env, monkeypatch):
+        monkeypatch.delenv("VERTEX_PROJECT", raising=False)
+        assert load_settings(env).vertex_project == ""
+
+    def test_the_project_is_read_from_the_environment(self, env, monkeypatch):
+        monkeypatch.setenv("VERTEX_PROJECT", "gen-lang-client-0586206831")
+        assert load_settings(env).vertex_project == "gen-lang-client-0586206831"
+
+    def test_the_location_defaults_to_global(self, env):
+        # Not tidiness: gemini-3.1-pro-preview is only published in `global`
+        # and answers 404 in us-central1.
+        assert load_settings(env).vertex_location == "global"
+
+    def test_vertex_needs_no_api_key(self, monkeypatch):
+        """ADC, not a key — so an empty GOOGLE_API_KEY must not refuse."""
+        from google import genai
+
+        from tutor.llm.gemini import GeminiClient
+
+        seen = {}
+        monkeypatch.setattr(genai, "Client", lambda **kw: seen.update(kw) or object())
+
+        client = GeminiClient(
+            Settings(google_api_key="", vertex_project="p", vertex_location="global"),
+            model="gemini-3.1-pro-preview",
+        )
+        assert seen == {"vertexai": True, "project": "p", "location": "global"}
+        assert "vertex" in client.backend
+
+    def test_a_vertex_project_wins_over_a_stale_api_key(self, monkeypatch):
+        """Both configured means the project was the deliberate choice — and
+        the key is the one that ran out of credits."""
+        from google import genai
+
+        from tutor.llm.gemini import GeminiClient
+
+        seen = {}
+        monkeypatch.setattr(genai, "Client", lambda **kw: seen.update(kw) or object())
+
+        GeminiClient(Settings(google_api_key="stale", vertex_project="p"))
+        assert "api_key" not in seen and seen["vertexai"] is True
+
+    def test_without_either_it_says_what_is_missing(self):
+        from tutor.llm.gemini import GeminiClient
+
+        with pytest.raises(LLMError, match="VERTEX_PROJECT"):
+            GeminiClient(Settings(google_api_key="", vertex_project=""))
