@@ -58,6 +58,11 @@ class AudioFrame:
 class TtsAudioHeader(BaseModel):
     utterance_id: str = ""
     format: str = "mp3"  # what the tutor's TTS returned; the device plays it as-is
+    # Streaming: one utterance may arrive as many frames. The defaults make a
+    # sender that ships whole files valid unchanged — a single frame IS a
+    # complete stream — so old captures and simple devices keep working.
+    seq: int = 0
+    last: bool = True
 
 
 @dataclass(frozen=True)

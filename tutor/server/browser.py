@@ -31,8 +31,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 
+from tutor.llm import timing
 from tutor.protocol.events import make_event, parse_event
 from tutor.protocol.frames import AudioFrame, TtsAudioHeader, encode_tts_audio
 from tutor.server.session import Deps, Session
@@ -53,6 +55,7 @@ class BrowserSession(Session):
         self._playback: asyncio.Future | None = None
         self._sent_state: TurnState | None = None
         self._utterances = 0
+        self._speech_seq = 0  # one turn says several lines; each gets its own stream id
         # Set when the student cuts in; every _say for the rest of that turn
         # returns without speaking. Cleared when the next turn starts.
         self._interrupted = False
@@ -197,6 +200,31 @@ class BrowserSession(Session):
 
     # --- tutor speech: to the browser, never to the server's speaker --------
 
+    def _pump_tts(self, spoken: str) -> tuple[asyncio.Queue, "threading.Event", asyncio.Task]:
+        """Run the blocking TTS stream in a thread, chunks into an async queue.
+
+        None on the queue means the stream ended. The event asks the thread to
+        stop pulling — httpx closes the response when the generator is dropped,
+        so a barge-in stops costing bandwidth as well as attention.
+        """
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        stop = threading.Event()
+
+        def pump() -> None:
+            try:
+                for chunk in self.deps.speaker.synthesize_stream(spoken):
+                    if stop.is_set():
+                        break
+                    if chunk:
+                        loop.call_soon_threadsafe(queue.put_nowait, chunk)
+            except Exception:
+                log.exception("TTS stream failed; whatever arrived still plays")
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        return queue, stop, asyncio.create_task(asyncio.to_thread(pump))
+
     async def _say(self, text: str) -> None:
         # a hint_request can arrive before any audio (button-driven client)
         taker = await self._ensure_taker()
@@ -207,14 +235,17 @@ class BrowserSession(Session):
             return
         # The ear and the eye part ways HERE: the TTS gets "f 프라임 1", the
         # transcript panel gets f'(1) — as 2·x², not as programmer ASCII.
-        audio = await asyncio.to_thread(
-            self.deps.speaker.synthesize, mathspeak.speakable(text)
-        )
-        if self._interrupted:  # interrupted while TTS was being fetched
+        started = time.monotonic()
+        queue, stop, pump_task = self._pump_tts(mathspeak.speakable(text))
+        first = await queue.get()
+        if self._interrupted:  # interrupted while the first chunk was rendering
+            stop.set()
+            await pump_task
             return
         await self.ws.send(make_event("tutor_says", {"text": mathspeak.displayable(text)}))
 
-        if not audio:  # echo mode / no TTS configured: text only, keep talking
+        if first is None:  # echo mode / no TTS configured: text only, keep talking
+            await pump_task
             taker.listen()
             await self._push_state()
             return
@@ -223,20 +254,39 @@ class BrowserSession(Session):
         await self._push_state()
         await self.ws.send(make_event("speech_state", {"state": "speaking"}))
         self._playback = asyncio.get_running_loop().create_future()
+        # unique per SPOKEN LINE, not per student utterance: one turn now says
+        # several (echo, reaction, hint), and the page groups frames by this id
+        self._speech_seq += 1
+        utterance_id = f"tts-{self._utterances}-{self._speech_seq}"
+        audio_format = getattr(self.deps.speaker, "audio_format", "mp3")
         try:
-            await self.ws.send(
-                encode_tts_audio(
-                    audio,
-                    TtsAudioHeader(
-                        utterance_id=f"tts-{self._utterances}",
-                        format=getattr(self.deps.speaker, "audio_format", "mp3"),
-                    ),
+            seq, held = 0, first
+            while True:
+                nxt = await queue.get()
+                await self.ws.send(
+                    encode_tts_audio(
+                        held,
+                        TtsAudioHeader(
+                            utterance_id=utterance_id, format=audio_format,
+                            seq=seq, last=nxt is None,
+                        ),
+                    )
                 )
-            )
-            await asyncio.wait_for(self._playback, timeout=self.playback_timeout_s)
+                if seq == 0:
+                    # the number this whole streaming path exists to shrink:
+                    # how long the student waited before the voice began
+                    timing.record("speak.first", time.monotonic() - started, "first chunk")
+                seq += 1
+                if nxt is None or self._interrupted:
+                    stop.set()
+                    break
+                held = nxt
+            if not self._interrupted:
+                await asyncio.wait_for(self._playback, timeout=self.playback_timeout_s)
         except asyncio.TimeoutError:
             log.warning("no playback_done in %.0fs; resuming anyway", self.playback_timeout_s)
         finally:
+            await pump_task
             self._playback = None
             if self._interrupted:
                 # The student is already speaking. Sending idle would be a lie

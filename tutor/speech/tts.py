@@ -73,21 +73,40 @@ class XaiSpeaker:
 
     audio_format = "mp3"
 
-    def synthesize(self, text: str) -> bytes | None:
-        if not text:
-            return None
-        resp = httpx.post(
-            f"{self.settings.xai_base_url.rstrip('/')}/tts",
-            headers={"Authorization": f"Bearer {self.settings.xai_api_key}"},
-            json={
+    def _request(self, text: str) -> dict:
+        return {
+            "url": f"{self.settings.xai_base_url.rstrip('/')}/tts",
+            "headers": {"Authorization": f"Bearer {self.settings.xai_api_key}"},
+            "json": {
                 "text": text,
                 "voice_id": self.settings.tts_voice,
                 "language": self.settings.tutor_language,
             },
-            timeout=60,
-        )
+        }
+
+    def synthesize(self, text: str) -> bytes | None:
+        if not text:
+            return None
+        req = self._request(text)
+        resp = httpx.post(req["url"], headers=req["headers"], json=req["json"], timeout=60)
         resp.raise_for_status()
         return resp.content
+
+    def synthesize_stream(self, text: str):
+        """Yield the utterance as MP3 chunks while xAI is still rendering it.
+
+        The /tts endpoint answers with Transfer-Encoding: chunked — measured on
+        a typical hint: first chunk at ~1.3s, full file at ~2.5s. Playing from
+        the first chunk halves the time to first sound, with no new endpoint.
+        """
+        if not text:
+            return
+        req = self._request(text)
+        with httpx.stream(
+            "POST", req["url"], headers=req["headers"], json=req["json"], timeout=60
+        ) as resp:
+            resp.raise_for_status()
+            yield from resp.iter_bytes()
 
     def speak(self, text: str) -> None:
         audio = self.synthesize(text)
@@ -131,6 +150,11 @@ class EchoSpeaker:
             # echo mode dying on its own output makes the whole mode useless
             say(f"[TUTOR 🔊] {text}")
 
+    def synthesize_stream(self, text: str):
+        """No audio to stream: print, yield nothing — the text-only path."""
+        self.speak(text)
+        return iter(())
+
     def play(self, audio: bytes) -> None:
         pass  # echo mode has no audio to play
 
@@ -141,11 +165,12 @@ class NullSpeaker:
 
     audio_format = "mp3"
 
-    def __init__(self, audio: bytes | None = None):
+    def __init__(self, audio: bytes | None = None, stream_chunks: int = 1):
         self.spoken: list[str] = []
         self.synthesized: list[str] = []
         self.played: list[bytes] = []
         self.audio = audio  # what synthesize() hands back, if anything
+        self.stream_chunks = stream_chunks  # >1 simulates chunked TTS arrival
 
     def play(self, audio: bytes) -> None:
         self.played.append(audio)
@@ -155,6 +180,15 @@ class NullSpeaker:
             return None
         self.synthesized.append(text)
         return self.audio
+
+    def synthesize_stream(self, text: str):
+        audio = self.synthesize(text)
+        if not audio:
+            return
+        n = max(1, self.stream_chunks)
+        size = max(1, -(-len(audio) // n))  # ceil division: n pieces, none empty
+        for i in range(0, len(audio), size):
+            yield audio[i : i + size]
 
     def speak(self, text: str) -> None:
         if text:

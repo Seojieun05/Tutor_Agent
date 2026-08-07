@@ -106,6 +106,8 @@ class FakeBrowser:
                 assert isinstance(frame, TtsAudioFrame)
                 self.audio.append(frame)
                 self.queue.append(frame)
+                if not frame.header.last:
+                    continue  # a stream chunk: playback ends only after `last`
                 if self.hold_playback:
                     continue  # still playing: the server waits for playback_done
                 self.queue.clear()
@@ -224,6 +226,37 @@ async def test_one_turn_streams_pcm_in_and_audio_out(deps):
         "PROCESSING",
         "LISTENING",
     ]
+
+
+async def test_streamed_speech_arrives_in_ordered_chunks(db):
+    """One utterance, many frames: seq in order, exactly one `last`, ONE
+    playback_done — and the first frame goes out before the tail exists,
+    which is the entire reason the streaming path was built."""
+    llm = EchoLLMClient({"recognize": [WORKSHEET] * 5})
+    deps = Deps(
+        settings=SETTINGS,
+        recognizer=Recognizer(llm),
+        matcher=Matcher(db),
+        solver=GrokSolver(llm, db),
+        estimator=StudentStateEstimator(llm, db),
+        hint_gen=HintGenerator(llm, db),
+        transcriber=EchoTranscriber(),
+        speaker=NullSpeaker(audio=MP3 * 4, stream_chunks=3),
+        store=SessionStore(),
+    )
+    vad = ScriptedVAD()
+    async with await browser_server(deps, vad) as server:
+        port = server.sockets[0].getsockname()[1]
+        async with FakeBrowser(f"ws://127.0.0.1:{port}/browser", vad, JPEG) as browser:
+            await browser.speak_a_turn()
+
+    frames = browser.audio
+    assert len(frames) == 3                              # chunked, not one file
+    assert [f.header.seq for f in frames] == [0, 1, 2]   # in order
+    assert [f.header.last for f in frames] == [False, False, True]
+    assert len({f.header.utterance_id for f in frames}) == 1
+    assert b"".join(f.audio for f in frames) == MP3 * 4  # nothing lost or reordered
+    assert deps.store.get_history()[0].level == 1        # and the turn completed
 
 
 async def test_the_ear_hears_korean_and_the_eye_sees_notation(deps):

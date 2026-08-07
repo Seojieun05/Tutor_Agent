@@ -139,6 +139,24 @@ class CachedSpeech:
             self._write(path, audio)
         return audio
 
+    def synthesize_stream(self, text: str):
+        """Chunks as they exist: a cached phrase is one instant chunk, an
+        uncached line streams from the real speaker if it can."""
+        if not text:
+            return
+        if text in self._cacheable:
+            audio = self.synthesize(text)  # the cache lookup, misses rendered
+            if audio:
+                yield audio
+            return
+        inner = getattr(self.speaker, "synthesize_stream", None)
+        if inner is not None:
+            yield from inner(text)
+            return
+        audio = self.speaker.synthesize(text)
+        if audio:
+            yield audio
+
     def speak(self, text: str) -> None:
         if not text or text not in self._cacheable:
             self.speaker.speak(text)

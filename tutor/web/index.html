@@ -234,8 +234,8 @@ function onEvent(msg) {
 }
 
 function onBinary(buffer) {
-  const { type, payload } = decodeFrame(buffer);
-  if (type === TTS_FRAME) play(payload);
+  const { type, header, payload } = decodeFrame(buffer);
+  if (type === TTS_FRAME) onTts(header, payload);
 }
 
 function setState(s) {
@@ -278,20 +278,77 @@ async function unlockAudio() {
 // The tutor's audio is a queue, not a single clip: a turn can be a filler
 // followed by the hint, and a barge-in has to be able to throw away the part
 // that has not started playing as well as the part that has.
-let audioQueue = [];
+//
+// STREAMED SPEECH: one utterance now arrives as MANY small TTS frames (the
+// server ships MP3 chunks while xAI is still rendering the tail), grouped by
+// utterance_id and ordered by seq, the final one flagged last. Playback
+// starts on the FIRST chunk via MediaSource — that is the whole point: the
+// voice begins ~1.3s after synthesis starts instead of after the ~2.5s file.
+// Where MediaSource cannot take mp3, chunks are collected and played whole,
+// which is exactly the old behaviour.
+let audioQueue = [];                     // Blobs (fallback) and stream objects
 let playingUrl = null;
+const ttsStreams = new Map();            // utterance_id → in-flight stream
+const MSE_OK = window.MediaSource && MediaSource.isTypeSupported("audio/mpeg");
 
-function play(bytes) {
-  audioQueue.push(bytes);
-  if (!playingUrl) playNext();
+function onTts(header, bytes) {
+  const id = header.utterance_id || "solo";
+  // A stream begins at seq 0. A mid-stream chunk with no stream behind it is
+  // the tail of an utterance a barge-in already threw away — starting playback
+  // from the middle of an MP3 would be noise followed by a stall.
+  if (header.seq > 0 && !ttsStreams.has(id)) return;
+  if (!MSE_OK) {                         // fallback: whole-file, old behaviour
+    let held = ttsStreams.get(id);
+    if (!held) { held = []; ttsStreams.set(id, held); }
+    held.push(bytes);
+    if (header.last) {
+      ttsStreams.delete(id);
+      audioQueue.push(new Blob(held, { type: "audio/mpeg" }));
+      if (!playingUrl) playNext();
+    }
+    return;
+  }
+  let st = ttsStreams.get(id);
+  if (!st) {
+    st = { id, url: null, ms: null, sb: null, chunks: [], ended: false };
+    ttsStreams.set(id, st);
+    audioQueue.push(st);
+    if (!playingUrl) playNext();
+  }
+  st.chunks.push(bytes);
+  if (header.last) { st.ended = true; ttsStreams.delete(id); }
+  feedStream(st);
+}
+
+function feedStream(st) {
+  // append exactly one pending chunk per updateend; close when drained
+  if (!st.sb || st.url !== playingUrl || st.sb.updating) return;
+  if (st.chunks.length) {
+    st.sb.appendBuffer(st.chunks.shift());
+  } else if (st.ended && st.ms.readyState === "open") {
+    st.ms.endOfStream();
+  }
 }
 
 function playNext() {
-  const bytes = audioQueue.shift();
-  if (!bytes) { playingUrl = null; return; }
+  const item = audioQueue.shift();
+  if (!item) { playingUrl = null; return; }
 
   const player = $("player");
-  const url = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+  let url;
+  if (item instanceof Blob) {
+    url = URL.createObjectURL(item);
+  } else {                               // an in-flight stream: play as it arrives
+    item.ms = new MediaSource();
+    url = URL.createObjectURL(item.ms);
+    item.url = url;
+    item.ms.addEventListener("sourceopen", () => {
+      if (playingUrl !== url) return;    // dropped before it even opened
+      item.sb = item.ms.addSourceBuffer("audio/mpeg");
+      item.sb.addEventListener("updateend", () => feedStream(item));
+      feedStream(item);
+    });
+  }
   playingUrl = url;
   const done = () => {
     if (playingUrl !== url) return;      // already dropped by a barge-in
@@ -312,8 +369,9 @@ function playNext() {
 /** The student cut in. Stop mid-word and drop everything not yet played. */
 function stopSpeaking() {
   const player = $("player");
-  const dropped = audioQueue.length;
+  const dropped = audioQueue.length + ttsStreams.size;
   audioQueue = [];
+  ttsStreams.clear();                    // late chunks of dropped streams are ignored
   if (playingUrl) {
     URL.revokeObjectURL(playingUrl);
     playingUrl = null;
