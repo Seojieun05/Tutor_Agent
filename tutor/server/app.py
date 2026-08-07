@@ -34,6 +34,7 @@ from tutor.server.camera import CameraConnection, CameraHub
 from tutor.llm.echo import EchoLLMClient
 from tutor.server.session import Deps, Session
 from tutor.solver.grok_solver import GrokSolver
+from tutor.speech.filler import FillerBank
 from tutor.speech.intent import IntentClassifier
 from tutor.state.answer import AnswerEvaluator
 from tutor.state.estimator import StudentStateEstimator
@@ -106,47 +107,93 @@ def build_shared(settings: Settings):
         llm = GrokClient(settings, registry)
         transcriber = XaiTranscriber(settings)
         speaker = XaiSpeaker(settings)
+    speaker = wrap_with_cache(settings, speaker)
     # the KB tool already loaded the embedding index: share that one instance
     # with the matcher's SEMANTIC tier instead of loading the model twice
     semantic = getattr(getattr(registry, "kb", None), "semantic", None)
-    return db, llm, transcriber, speaker, semantic, build_vision_llm(settings, llm)
+    return (db, llm, transcriber, speaker, semantic,
+            build_vision_llm(settings, llm), build_hint_llm(settings, llm))
+
+
+def wrap_with_cache(settings: Settings, speaker):
+    """Memoize the lines the tutor repeats all day: the fillers and the fixed
+    prompts. Hints are never cached — they belong to one student and one step."""
+    if not settings.filler_enabled:
+        return speaker
+    from tutor.hints.generator import FIXED_ACTIONS
+    from tutor.server.session import PROBLEM_DONE, RETRY_PROMPTS
+    from tutor.speech.filler import FILLER_PHRASES, CachedSpeech
+
+    repeated = [
+        *FILLER_PHRASES,
+        *(t for t in FIXED_ACTIONS.values() if t),
+        *RETRY_PROMPTS.values(),
+        PROBLEM_DONE,
+    ]
+    return CachedSpeech(
+        speaker,
+        cacheable=repeated,
+        cache_dir=settings.tts_cache_dir,
+        voice=settings.tts_voice,
+    )
 
 
 def build_vision_llm(settings: Settings, llm):
-    """Whichever model reads the worksheet. Only the Recognizer sees this.
+    """Whichever model reads the worksheet. Only the Recognizer sees this."""
+    return _gemini_or(settings, llm, settings.vision_provider,
+                      settings.gemini_vision_model, "VISION_PROVIDER")
 
-    A bad key or a missing package must not cost the student the whole lesson,
-    so a failure here falls back to the chat model rather than refusing to start.
+
+def build_hint_llm(settings: Settings, llm):
+    """Whichever model writes what the tutor says. Only HintGenerator sees this.
+
+    The hint LEVEL is not this model's decision and the leak guard still checks
+    its output, so swapping it changes the wording and nothing about how much
+    is given away.
     """
-    if settings.vision_provider != "gemini" or settings.echo_mode:
+    return _gemini_or(settings, llm, settings.hint_provider,
+                      settings.gemini_hint_model, "HINT_PROVIDER")
+
+
+def _gemini_or(settings: Settings, llm, provider: str, model: str, knob: str):
+    """A bad key or a missing package must not cost the student the whole
+    lesson, so a failure here falls back to the chat model rather than
+    refusing to start — loudly, because reading with a model you did not
+    choose is worse than knowing you are."""
+    if provider != "gemini" or settings.echo_mode:
         return llm
-    from tutor.llm.gemini_vision import GeminiVisionClient
+    from tutor.llm.fallback import FallbackLLM
+    from tutor.llm.gemini import GeminiClient
 
     try:
-        return GeminiVisionClient(settings)
+        chosen = GeminiClient(settings, model, role=knob)
     except Exception as e:  # noqa: BLE001 — degrade to Grok, loudly
-        log.error("VISION_PROVIDER=gemini unavailable (%s); reading with %s instead",
-                  e, settings.chat_model)
+        log.error("%s=gemini unavailable (%s); using %s instead",
+                  knob, e, settings.chat_model)
         return llm
+    # A key can list a model it has no quota for, and that only shows up on the
+    # first real call — mid-lesson. Keep the old model on standby.
+    return FallbackLLM(chosen, llm, label=f"{knob}={model}")
 
 
 def make_deps(
     settings: Settings, db, llm, transcriber, speaker, semantic=None, cameras=None,
-    vision_llm=None,
+    vision_llm=None, hint_llm=None,
 ) -> Deps:
     """Per-connection dependencies (fresh SessionStore each time)."""
     return Deps(
         settings=settings,
-        recognizer=Recognizer(vision_llm or llm),
+        recognizer=Recognizer(vision_llm or llm, settings),
         matcher=Matcher(db, semantic=semantic),
         solver=GrokSolver(llm, db),
         estimator=StudentStateEstimator(llm, db, settings.recog_conf_threshold),
-        hint_gen=HintGenerator(llm, db),
+        hint_gen=HintGenerator(hint_llm or llm, db, settings.input_mode),
         transcriber=transcriber,
         speaker=speaker,
         evaluator=AnswerEvaluator(llm, db),
         tagger=ConceptTagger(llm),
         cameras=cameras,
+        fillers=FillerBank() if settings.filler_enabled else None,
         classifier=IntentClassifier(llm),
         store=SessionStore(),
     )
@@ -194,9 +241,23 @@ async def amain(settings: Settings) -> None:
     for port in ports:
         if not port_is_free(settings.ws_host, port):
             raise PortInUse(port)
-    db, llm, transcriber, speaker, semantic, vision_llm = build_shared(settings)
+    db, llm, transcriber, speaker, semantic, vision_llm, hint_llm = build_shared(settings)
 
     cameras = CameraHub()
+
+    async def warm_fillers() -> None:
+        """Render the repeated phrases before anyone asks for one.
+
+        In a thread and unawaited: the first student should not pay for this,
+        and neither should the port being open.
+        """
+        warm = getattr(speaker, "warm", None)
+        if not callable(warm):
+            return
+        ready = await asyncio.to_thread(warm)
+        log.info("pre-rendered %d spoken phrases (cache: %s)", ready, settings.tts_cache_dir)
+
+    warming = asyncio.create_task(warm_fillers())
 
     async def handler(ws):
         path = ws.request.path.split("?", 1)[0]
@@ -206,7 +267,8 @@ async def amain(settings: Settings) -> None:
             await CameraConnection(ws, cameras).run()
             return
         deps = make_deps(
-            settings, db, llm, transcriber, speaker, semantic, cameras, vision_llm
+            settings, db, llm, transcriber, speaker, semantic, cameras,
+            vision_llm, hint_llm,
         )
         if path.rstrip("/") == "/browser":
             from tutor.server.browser import BrowserSession
@@ -253,18 +315,22 @@ async def amain(settings: Settings) -> None:
             say(f"         http://localhost:{settings.ws_port}/  (press 시작)")
             say(f"         remote server? ssh -N -L {settings.ws_port}:localhost:"
                 f"{settings.ws_port} <user>@<this-host> first")
-        # The board needs a routable address, not localhost.
-        from tutor.scripts.live_demo import lan_ip
+        if settings.input_mode == "camera":
+            # A phone needs a routable address, not localhost.
+            from tutor.scripts.live_demo import lan_ip
 
-        ip = lan_ip()
-        say(f"  camera device: ws://{ip}:{settings.ws_port}/camera")
-        if tls is not None:
-            say(f"  phone camera: https://{ip}:{settings.tls_listen_port}/phone")
-            say("         (self-signed: accept the warning once, then allow the camera)")
+            ip = lan_ip()
+            say(f"  worksheet: camera device — ws://{ip}:{settings.ws_port}/camera")
+            if tls is not None:
+                say(f"  phone camera: https://{ip}:{settings.tls_listen_port}/phone")
+                say("         (self-signed: accept the warning once, then allow the camera)")
+            else:
+                # Say it here rather than let the phone fail with a blank screen.
+                say("  phone camera: off (no TLS_CERT/TLS_KEY in .env)")
+                say("         python -m tutor.scripts.make_cert   (getUserMedia needs HTTPS)")
         else:
-            # Say it here rather than let the phone fail with a blank screen.
-            say("  phone camera: off (no TLS_CERT/TLS_KEY in .env)")
-            say("         python -m tutor.scripts.make_cert   (getUserMedia needs HTTPS)")
+            say("  worksheet: uploaded in the browser page (choose, drag, or Ctrl+V)")
+            say("             INPUT_MODE=camera to use the phone camera on /camera instead")
         await asyncio.Future()
 
 

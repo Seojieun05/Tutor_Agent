@@ -10,8 +10,21 @@ else stays on the server:
 Which is the same conversation as simulator/voice_device.py with the VAD moved
 across the socket: TurnDetector/TurnTaker are reused verbatim, so prefix
 padding, onset debounce, endpointing and the four states behave identically.
-The mic is gated for the whole PROCESSING+AGENT_SPEAKING span (browser-side
-too), so barge-in is out of scope by construction.
+
+Barge-in lives here. While the tutor speaks, the mic stays open on both sides
+and the VAD keeps judging at a higher bar; when the student cuts in, three
+things happen in this order and the order is the point:
+
+    1. the browser is told to stop and empty its audio queue — first, because
+       every millisecond after this is the tutor talking over a student
+    2. the utterance in flight is abandoned: no more of it is spoken, and the
+       rest of that turn says nothing
+    3. the interrupting words — which began before we noticed them, and are
+       already in the detector's prefix buffer — become the next turn
+
+What does NOT happen is a rollback. A hint that was half spoken was still
+given: it stays in the history, so the policy does not offer it again as if
+the student had never heard it.
 """
 
 from __future__ import annotations
@@ -39,6 +52,9 @@ class BrowserSession(Session):
         self._playback: asyncio.Future | None = None
         self._sent_state: TurnState | None = None
         self._utterances = 0
+        # Set when the student cuts in; every _say for the rest of that turn
+        # returns without speaking. Cleared when the next turn starts.
+        self._interrupted = False
 
     @staticmethod
     def _now_ms() -> float:
@@ -48,9 +64,50 @@ class BrowserSession(Session):
         if self.taker is None:
             # loading Silero takes a moment: keep it off the event loop
             detector = await asyncio.to_thread(TurnDetector, self._vad, self.config)
-            self.taker = TurnTaker(detector)
-            log.info("server-side VAD ready for browser session")
+            self.taker = TurnTaker(detector, on_barge_in=self._barged_in)
+            log.info(
+                "server-side VAD ready (barge-in %s)",
+                "on" if self.config.barge_in else "off",
+            )
         return self.taker
+
+    # --- barge-in ------------------------------------------------------------
+
+    def _barged_in(self) -> None:
+        """The student took the floor. Called from inside the VAD, so it must
+        not await — it schedules the stop and returns."""
+        if self._interrupted:
+            return
+        self._interrupted = True
+        log.info("barge-in: stopping playback and abandoning the rest of the turn")
+        # Wake whoever is waiting on playback_done. The browser will never send
+        # it now — it is being told to throw that audio away.
+        if self._playback is not None and not self._playback.done():
+            self._playback.set_result(False)
+        self._spawn(self._stop_playback())
+
+    async def _wait_for_the_floor(self, timeout_s: float = 3.0) -> None:
+        """Let the abandoned turn finish unwinding before starting the new one.
+
+        Without this the interruption is self-defeating: the old turn is still
+        marked busy while it walks out of _deliver, the question the student
+        just interrupted with arrives, and Session drops it as "already
+        handling one" — so cutting in would lose the very thing it was for.
+        It is a short wait because nothing slow is left; the speaking already
+        stopped.
+        """
+        deadline = time.monotonic() + timeout_s
+        while self._busy and time.monotonic() < deadline:
+            await asyncio.sleep(0.02)
+        if self._busy:
+            log.warning("previous turn is still running after %.0fs", timeout_s)
+
+    async def _stop_playback(self) -> None:
+        try:
+            await self.ws.send(make_event("barge_in", {}))
+            await self.ws.send(make_event("speech_state", {"state": "idle"}))
+        except Exception:
+            log.debug("could not tell the browser to stop (connection gone)")
 
     async def _push_state(self) -> None:
         """Mirror the turn state to the browser (UI + its own mic gate)."""
@@ -75,6 +132,9 @@ class BrowserSession(Session):
         if ev.event == "hello":
             await self._ensure_taker()
             await super()._on_event(raw)
+            # The browser gates its own mic too, and needs to know whether it
+            # may keep it open while the tutor talks.
+            await self.ws.send(make_event("config", {"barge_in": self.config.barge_in}))
             await self._push_state()
             return
         await super()._on_event(raw)
@@ -107,6 +167,11 @@ class BrowserSession(Session):
         await self._push_state()
 
     async def _handle_utterance(self, pcm: bytes, sample_rate: int) -> None:
+        # A fresh turn: the tutor may speak again. Cleared here rather than at
+        # the barge-in, so everything still unwinding from the abandoned turn
+        # stays silent until this one actually begins.
+        self._interrupted = False
+        await self._wait_for_the_floor()
         try:
             await super()._handle_utterance(pcm, sample_rate)
         finally:
@@ -118,10 +183,17 @@ class BrowserSession(Session):
 
     # --- tutor speech: to the browser, never to the server's speaker --------
 
-    async def _speak(self, text: str) -> None:
+    async def _say(self, text: str) -> None:
         # a hint_request can arrive before any audio (button-driven client)
         taker = await self._ensure_taker()
+        if self._interrupted:
+            # Already cut off in this turn. Whatever else it was going to say —
+            # the closing praise, a second sentence — is not said over someone.
+            log.info("skipping speech after a barge-in: %r", text[:40])
+            return
         audio = await asyncio.to_thread(self.deps.speaker.synthesize, text)
+        if self._interrupted:  # interrupted while TTS was being fetched
+            return
         await self.ws.send(make_event("tutor_says", {"text": text}))
 
         if not audio:  # echo mode / no TTS configured: text only, keep talking
@@ -148,14 +220,18 @@ class BrowserSession(Session):
             log.warning("no playback_done in %.0fs; resuming anyway", self.playback_timeout_s)
         finally:
             self._playback = None
+            if self._interrupted:
+                # The student is already speaking. Sending idle would be a lie
+                # and reopening the mic would reset the turn they have started.
+                await self._push_state()
+                return
             try:
                 await self.ws.send(make_event("speech_state", {"state": "idle"}))
             except Exception:
                 log.debug("could not send speech_state idle (connection gone)")
-            # The browser gates its own mic, so no frame will arrive to expire
-            # the tail guard lazily (as it does on the local-mic device): wait
-            # it out here, then reopen — the browser starts sending again when
-            # it sees LISTENING.
+            # With barge-in off the browser gates its own mic, so no frame will
+            # arrive to expire the tail guard lazily (as it does on the
+            # local-mic device): wait it out here, then reopen.
             await asyncio.sleep(self.config.tail_guard_ms / 1000)
             taker.listen()
             await self._push_state()

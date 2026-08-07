@@ -64,15 +64,44 @@ the VAD runs.
 
 ```text
 LISTENING --onset--> USER_SPEAKING --800ms silence--> PROCESSING
-    ^                                                     |
+    ^                    ^                                |
+    |                    +--- barge-in ---+               |
     +---- tail guard <---- AGENT_SPEAKING <---- TTS starts
 ```
 
-The VAD only runs in the first two states, so the tutor cannot transcribe its
-own voice (barge-in is deliberately not implemented); `tail_guard_ms` covers
-room decay after playback. Tuning (`.env`): `VAD_PREFIX_MS` 300,
-`VAD_MIN_SPEECH_MS` 250, `VAD_SILENCE_MS` 800, `VAD_THRESHOLD` 0.5,
-`VAD_TAIL_GUARD_MS` 250.
+`tail_guard_ms` covers room decay after playback. Tuning (`.env`):
+`VAD_PREFIX_MS` 300, `VAD_MIN_SPEECH_MS` 250, `VAD_SILENCE_MS` 800,
+`VAD_THRESHOLD` 0.5, `VAD_TAIL_GUARD_MS` 250.
+
+### Barge-in
+
+Talk over the tutor and it stops. The audio being played is cut, anything
+queued behind it is dropped, the rest of that turn goes unsaid, and the words
+you interrupted with become the next question — they are already in the VAD's
+prefix buffer when the interruption is noticed, so nothing of "왜 그렇게 해요?"
+is lost.
+
+What makes it survivable is echo cancellation: `getUserMedia` subtracts what
+the browser is playing from what it hears, so an open mic during playback does
+not feed the tutor its own voice. What is left of it is handled by a higher
+onset bar — taking the floor needs `BARGE_IN_FRAMES` (8, ~250 ms) of sustained
+speech against the 3 frames it takes to start a turn in silence, so a cough or
+a leaked syllable does not interrupt.
+
+```bash
+BARGE_IN=0            # if the tutor interrupts itself (external speaker, bad AEC)
+BARGE_IN_FRAMES=12    # or just make it harder
+```
+
+Two places it deliberately does not apply. **PROCESSING** stays deaf: there is
+nothing to interrupt while the tutor thinks, and a half-turn must not survive
+into the answer. And the **local-mic device** ([simulator/voice_device.py](simulator/voice_device.py))
+forces it off whatever the setting says — its speaker feeds straight into its
+own microphone with no browser in between, so an open mic there would have the
+tutor interrupt itself, every time.
+
+A hint that was half-spoken is not rolled back: it stays in the history, so the
+policy does not offer it again as though it had never been heard.
 
 ### A. Browser client — works over SSH (recommended)
 
@@ -157,13 +186,45 @@ a hint request, because the camera has to see the page first either way.
 Ambiguous phrasings the keyword rules miss go to one small no-tools LLM call;
 `AnswerEvaluator` can also redirect a mis-routed answer to a work check.
 
-## Phone camera
+## The worksheet photo
+
+By default the picture comes from the browser page: choose a file, drag one in,
+or paste a screenshot with `Ctrl+V`. A thumbnail shows what the tutor is
+actually looking at, which is the fastest way to catch the usual problem — a
+photo that turns out blurred, cropped short, or of the wrong page.
+
+Cropping happens server-side before the model sees the frame, because a vision
+model resizes whatever it is given into a fixed budget and a photo of a desk
+spends most of that budget on the desk:
+
+```bash
+WORKSHEET_ROI=0.18,0.36,0.36,0.55   # exact region, for a fixed camera mount
+AUTO_CROP=0                          # or turn the automatic one off
+```
+
+The automatic crop refuses rather than guesses: anything that is not
+page-shaped, page-sized and brighter than the rest of the frame is passed
+through whole. See [tutor/vision/framing.py](tutor/vision/framing.py).
+
+### Phone camera (opt-in)
+
+```bash
+INPUT_MODE=camera python server.py
+```
 
 The phone is the eyes only — mic and speaker stay on the laptop, where the sound
 comes out. It connects to `wss://<laptop>:8766/camera` and answers each
 `capture_request` with one JPEG; the voice session borrows it whenever it has no
 camera of its own. It says hello and waits, and never starts a turn, so the
 pedagogy needs to know nothing about the camera at all.
+
+Live capture was shelved once for a measured reason, and it was a sensor
+problem rather than a plumbing one: on a desk mount the ESP32 board's 2 MP
+fixed-focus camera put an A4 page across ~540 px, about 65 DPI, with
+handwriting 25-30 px tall. Handwriting recognition wants 150+ DPI, and no model
+reads pixels that were never captured. A phone asks for a 2560 px-wide frame
+and autofocuses, which is several times that — enough to be worth trying, but
+upload stays the default until it has been measured the same way.
 
 Before a demo:
 
@@ -254,7 +315,35 @@ stay on Grok:
 VISION_PROVIDER=gemini python server.py
 ```
 
-Needs `GOOGLE_API_KEY` in `.env` and `pip install -e ".[vision-gemini]"`. The
+Hints can move too — Gemini carries Google's LearnLM tuning, which is about
+following pedagogical system instructions rather than styling them:
+
+```bash
+HINT_PROVIDER=gemini python server.py     # GEMINI_HINT_MODEL, default gemini-3.6-flash
+```
+
+`gemini-3.1-pro-preview` phrases hints better — it reached for an everyday
+analogy where flash restated the rule — but at 8-12s per hint against flash's
+4-6s it takes a turn from 11s to 18s, so flash is the default.
+
+The policy that picks the hint level and the leak guard that checks the result
+are deterministic and do not move with the model, so this changes the wording
+and nothing about how much is given away.
+
+**Two doors, and the billing differs.** An AI Studio key spends prepaid credits
+and answers `429 ... prepayment credits are depleted` when they run out; a
+Cloud project spends its own:
+
+```bash
+VERTEX_PROJECT=gen-lang-client-0586206831   # + gcloud auth application-default login
+VERTEX_LOCATION=global                       # not us-central1: 3.1-pro-preview 404s there
+```
+
+Set `VERTEX_PROJECT` and it wins over `GOOGLE_API_KEY`. Either way, if the
+model is unreachable mid-lesson the turn falls back to the chat model for 60
+seconds rather than being lost ([tutor/llm/fallback.py](tutor/llm/fallback.py)).
+
+Needs `GOOGLE_API_KEY` in `.env` and `pip install -e ".[gemini]"`. The
 model is `GEMINI_VISION_MODEL` (default `gemini-3.6-flash`). A missing key or
 package logs an error and falls back to Grok rather than refusing to start.
 

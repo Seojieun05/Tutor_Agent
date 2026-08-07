@@ -25,7 +25,7 @@ rag = ["sentence-transformers>=3.0"]
 sim = ["pillow>=10"]
 # VISION_PROVIDER=gemini: read the worksheet with Gemini instead of Grok.
 # Optional on purpose — the tutor's default vision path needs nothing extra.
-vision-gemini = ["google-genai>=1.0"]
+gemini = ["google-genai>=1.0"]
 mic = ["sounddevice>=0.4"]
 # phone camera page: getUserMedia needs a secure context, so the LAN needs a
 # certificate (tutor/scripts/make_cert.py). openssl works too, if it is on PATH.

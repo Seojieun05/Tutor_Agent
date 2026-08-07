@@ -45,13 +45,55 @@ class TestSemanticIsOptional:
 
     def test_the_kb_tool_still_answers_without_it(self, db, monkeypatch):
         monkeypatch.setattr(domain_kb, "load_semantic_retriever", lambda _db: None)
-        tool = DomainKBTool(db)
+        # semantic_in_background=False: load it here and now, so "not available"
+        # is observable rather than a thread that has not finished yet.
+        tool = DomainKBTool(db, semantic_in_background=False)
         assert tool.semantic is None
         # concept retrieval is unaffected...
         hits = tool.search(kind="problems", concepts=["linear_equation"])
         assert hits["problems"]
         # ...and a query that would have gone semantic degrades to empty, not a crash
         assert tool.search(kind="problems", query="전혀 없는 문제") == {"problems": []}
+
+    def test_the_index_loads_without_holding_the_port_shut(self, db, monkeypatch):
+        """Importing torch and reading the 22 MB index took ~15s, and it used to
+        happen before the socket was open — so the server looked hung and an
+        early connection was refused. Construction must not wait for it."""
+        import threading
+        import time
+
+        from tutor.tools.domain_kb import LazySemantic
+
+        started = threading.Event()
+
+        def slow(_db):
+            started.set()
+            time.sleep(0.4)
+            return _Retriever()
+
+        monkeypatch.setattr(domain_kb, "load_semantic_retriever", slow)
+
+        t = time.monotonic()
+        lazy = LazySemantic(db)
+        assert time.monotonic() - t < 0.2, "construction blocked on the index"
+        assert started.wait(1.0), "loading never started"
+        # A search waits for it rather than silently dropping the tier.
+        assert lazy.search("3*x + 5 = 20", limit=1) == ["hit"]
+
+    def test_a_search_that_outwaits_the_index_degrades_instead_of_hanging(
+        self, db, monkeypatch, caplog
+    ):
+        import time
+
+        from tutor.tools.domain_kb import LazySemantic
+
+        monkeypatch.setattr(
+            domain_kb, "load_semantic_retriever", lambda _db: (time.sleep(2), None)[1]
+        )
+        lazy = LazySemantic(db, timeout_s=0.1)
+        with caplog.at_level("WARNING"):
+            assert lazy.search("anything") == []
+        assert "not ready" in caplog.text
 
     def test_the_matcher_skips_the_semantic_tier(self, db, monkeypatch):
         from tutor.knowledge.matching import Matcher
@@ -277,3 +319,10 @@ class TestPhoneCamera:
         assert "subjectAltName=IP:192.168.0.2,IP:127.0.0.1,DNS:localhost" in (
             openssl_command(Path("c"), Path("k"), "192.168.0.2")
         )
+
+
+class _Retriever:
+    """Stands in for SemanticRetriever: only .search is ever called."""
+
+    def search(self, *args, **kwargs):
+        return ["hit"]

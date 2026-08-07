@@ -35,7 +35,11 @@ import time
 from dataclasses import dataclass, field
 
 from tutor.config import Settings
-from tutor.hints.generator import HintGenerator, strip_leading_acknowledgement
+from tutor.hints.generator import (
+    HintGenerator,
+    strip_leading_acknowledgement,
+    visible_to_student,
+)
 from tutor.hints.guard import leaks_answer
 from tutor.knowledge import mathnorm
 from tutor.knowledge.matching import Matcher, problem_hash
@@ -101,6 +105,7 @@ class Deps:
     evaluator: AnswerEvaluator | None = None  # None → answers fall back to a hint request
     tagger: ConceptTagger | None = None  # None → Recognition keeps "unknown"/[]
     cameras: object | None = None  # CameraHub: eyes on another socket (the phone)
+    fillers: object | None = None  # FillerBank: what to say while thinking
     # what each utterance is FOR; without an LLM it still routes by rule
     classifier: IntentClassifier = field(default_factory=IntentClassifier)
     store: SessionStore = field(default_factory=SessionStore)
@@ -119,6 +124,8 @@ class Session:
         self._audio_buffers: dict[str, list[bytes]] = {}
         self._busy = False
         self._tasks: set[asyncio.Task] = set()
+        self._filler: asyncio.Task | None = None
+        self._filler_spoke = False
 
     def _spawn(self, coro) -> None:
         """Run the hint flow concurrently with the receive loop — it awaits
@@ -285,6 +292,13 @@ class Session:
         eye = "session device"
         if not jpeg:
             cameras = self.deps.cameras
+            if self.deps.settings.input_mode != "camera":
+                # INPUT_MODE=upload: the picture comes from the browser's file
+                # picker and nowhere else. Falling through to a camera device
+                # here would silently hand the tutor a different photo from the
+                # one the student just chose.
+                log.warning("no worksheet photo attached (INPUT_MODE=upload)")
+                return None
             if not cameras:
                 log.warning("no eye at all: the session device has no camera and none "
                             "is connected on /camera")
@@ -344,6 +358,7 @@ class Session:
             log.info("hint request ignored: already handling one")
             return
         self._busy = True
+        self._start_filler()
         try:
             await self._handle_hint_request(question)
         except Exception:
@@ -356,6 +371,8 @@ class Session:
             except Exception:
                 log.exception("recovery delivery failed (connection likely gone)")
         finally:
+            # A turn that says nothing (WAIT) still owes the filler an ending.
+            await self._settle_filler()
             self._busy = False
 
     async def handle_answer(self, transcript: str, pending: HintRecord) -> None:
@@ -364,6 +381,7 @@ class Session:
             log.info("answer ignored: a turn is already running")
             return
         self._busy = True
+        self._start_filler()
         try:
             await self._handle_answer(transcript, pending)
         except Exception:
@@ -377,6 +395,7 @@ class Session:
             except Exception:
                 log.exception("recovery delivery failed (connection likely gone)")
         finally:
+            await self._settle_filler()
             self._busy = False
 
     async def _handle_answer(self, transcript: str, pending: HintRecord) -> None:
@@ -495,7 +514,9 @@ class Session:
         context — the next capture starts a fresh problem.
         """
         feedback = (verdict.feedback or "").strip()
-        if feedback and leaks_answer(feedback, ctx.reference, target_step):
+        if feedback and leaks_answer(
+            feedback, ctx.reference, target_step, visible_to_student(ctx.recognition)
+        ):
             feedback = ""
         try:
             await self._speak(" ".join(part for part in (feedback, PROBLEM_DONE) if part))
@@ -517,7 +538,10 @@ class Session:
         # "네," makes the tutor say it twice in one breath.
         combined = f"{feedback} {strip_leading_acknowledgement(hint)}"
         reference = self.ctx.reference if self.ctx is not None else None
-        if reference is not None and leaks_answer(combined, reference, decision.target_step):
+        seen = visible_to_student(self.ctx.recognition) if self.ctx is not None else []
+        if reference is not None and leaks_answer(
+            combined, reference, decision.target_step, seen
+        ):
             log.warning("answer feedback leaked; dropping it")
             return hint
         return combined
@@ -678,6 +702,57 @@ class Session:
         return self.ctx
 
     async def _speak(self, text: str) -> None:
+        """Say something to the student, after the filler has had its say."""
+        await self._settle_filler()
+        await self._say(text)
+
+    # --- filling the thinking silence ----------------------------------------
+
+    def _start_filler(self) -> None:
+        """Begin a filler that will play only if the thinking outlasts it.
+
+        Deliberately not awaited: this runs *beside* the pipeline, which is the
+        whole point. It costs the student nothing when the answer is quick,
+        because the phrase does not start until FILLER_DELAY_MS has passed with
+        no answer, and _settle_filler cancels it if the answer arrives first.
+        """
+        bank = self.deps.fillers
+        if bank is None or not self.deps.settings.filler_enabled or self._filler is not None:
+            return
+        self._filler_spoke = False
+        self._filler = asyncio.create_task(self._fill_silence(bank))
+
+    async def _fill_silence(self, bank) -> None:
+        try:
+            await asyncio.sleep(max(0.0, self.deps.settings.filler_delay_ms / 1000))
+            text = bank.pick()
+            if not text:
+                return
+            # Past this point the filler owns the speaker, so _settle_filler
+            # must wait for it rather than cancel it — cancelling mid-utterance
+            # is how you get half a word followed by the real answer.
+            self._filler_spoke = True
+            log.info("filler: %s", text)
+            await self._say(text)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — a filler failure is not a lesson failure
+            log.exception("filler playback failed; continuing in silence")
+
+    async def _settle_filler(self) -> None:
+        """Never talk over the filler, and never make the student wait for one
+        that has not started."""
+        task, self._filler = self._filler, None
+        if task is None or task.done():
+            return
+        if not self._filler_spoke:
+            task.cancel()  # thinking won the race: stay quiet
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+
+    async def _say(self, text: str) -> None:
         """Say it on the machine running the server (same room as the student).
 
         BrowserSession overrides this to ship the audio to the device instead.

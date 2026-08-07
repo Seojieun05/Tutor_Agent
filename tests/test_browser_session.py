@@ -79,6 +79,12 @@ class FakeBrowser:
         self.gated = True  # like the page: stop sending unless LISTENING/USER_SPEAKING
         self.state = ""
         self._listening = asyncio.Event()
+        # Barge-in bookkeeping, mirroring the page's audio queue.
+        self.barge_in = False       # told by the server's `config` event
+        self.hold_playback = False  # True = the clip is still playing
+        self.queue: list = []       # clips received but not finished
+        self.interruptions = 0
+        self.dropped = 0
 
     async def __aenter__(self):
         self._ws = await connect(self.url, max_size=16 * 1024 * 1024).__aenter__()
@@ -99,6 +105,10 @@ class FakeBrowser:
                 frame = decode(raw)
                 assert isinstance(frame, TtsAudioFrame)
                 self.audio.append(frame)
+                self.queue.append(frame)
+                if self.hold_playback:
+                    continue  # still playing: the server waits for playback_done
+                self.queue.clear()
                 await self._ws.send(make_event("playback_done"))  # "finished playing"
                 continue
             ev = parse_event(raw)
@@ -113,6 +123,14 @@ class FakeBrowser:
                 self.heard.append(ev.data["text"])
             elif ev.event == "tutor_says":
                 self.tutor_said.append(ev.data["text"])
+            elif ev.event == "config":
+                self.barge_in = bool(ev.data.get("barge_in"))
+            elif ev.event == "barge_in":
+                # stopSpeaking(): drop what is playing and everything queued,
+                # and deliberately send no playback_done.
+                self.interruptions += 1
+                self.dropped += len(self.queue)
+                self.queue.clear()
             elif ev.event == "capture_request":
                 self.captures += 1
                 capture_id = ev.data["capture_id"]
@@ -124,7 +142,10 @@ class FakeBrowser:
                     )
 
     def _mic_open(self) -> bool:
-        return self.state in ("LISTENING", "USER_SPEAKING")
+        if self.state in ("LISTENING", "USER_SPEAKING"):
+            return True
+        # With barge-in the page keeps the mic open while the tutor talks.
+        return self.barge_in and self.state == "AGENT_SPEAKING"
 
     async def wait_until(self, predicate, timeout: float = 15.0) -> None:
         loop = asyncio.get_running_loop()
@@ -240,8 +261,12 @@ async def test_without_a_worksheet_the_tutor_asks_for_one(deps):
     assert browser.states[-1] == "LISTENING"
 
 
-async def test_vad_ignores_mic_while_the_tutor_answers(deps):
-    """An ungated client keeps streaming speech; the server must not hear it."""
+async def test_without_barge_in_the_mic_is_ignored_while_the_tutor_answers(deps):
+    """BARGE_IN=0 restores the old guarantee. An ungated client keeps streaming
+    speech; the server must not hear a frame of it."""
+    from dataclasses import replace
+
+    deps.settings = replace(SETTINGS, barge_in=False)
     vad = ScriptedVAD()
     async with await browser_server(deps, vad) as server:
         port = server.sockets[0].getsockname()[1]
@@ -260,6 +285,7 @@ async def test_vad_ignores_mic_while_the_tutor_answers(deps):
     assert vad.seen == seen_after_turn  # not one frame reached the model
     assert len(browser.audio) == 1  # and no second turn was triggered
     assert browser.states[-1] == "LISTENING"
+    assert browser.interruptions == 0
 
 
 async def test_no_tts_audio_still_returns_to_listening(deps):
@@ -399,3 +425,90 @@ async def test_filler_utterance_is_answered_and_the_mic_reopens(db):
             assert deps.store.get_history()[0].level == 1
 
     assert browser.states[-1] == "LISTENING"  # never left deaf
+
+
+# --- barge-in ----------------------------------------------------------------
+#
+# The student cuts in mid-sentence. Three things have to happen, and the order
+# matters: the audio stops, the queued audio is dropped, and the words that did
+# the interrupting become the next turn.
+
+
+async def _cut_in(deps, *, then=None):
+    """Let the tutor start speaking, hold the audio as if it were playing, then
+    talk over it."""
+    vad = ScriptedVAD()
+    async with await browser_server(deps, vad) as server:
+        port = server.sockets[0].getsockname()[1]
+        async with FakeBrowser(f"ws://127.0.0.1:{port}/browser", vad, JPEG) as browser:
+            browser.hold_playback = True  # the clip keeps playing until we say
+            await browser.send_frames([True] * 30 + [False] * SILENCE_FRAMES)
+            await browser.wait_until(lambda: browser.state == "AGENT_SPEAKING")
+            assert browser.barge_in, "the server never advertised barge-in"
+
+            # Talk over it. More than barge_in_frames, then a pause to endpoint.
+            await browser.send_frames(
+                [True] * (CFG.barge_in_frames + 25) + [False] * SILENCE_FRAMES
+            )
+            if then is not None:
+                await then(browser)
+            return browser
+
+
+async def test_the_tutor_stops_when_the_student_cuts_in(deps):
+    browser = await _cut_in(
+        deps, then=lambda b: b.wait_until(lambda: b.interruptions > 0)
+    )
+    assert browser.interruptions == 1
+
+
+async def test_the_queued_audio_is_dropped(deps):
+    """A turn can be a filler then a hint. Stopping the clip that is playing is
+    not enough if the next one is already sitting in the queue."""
+    async def wait(browser):
+        await browser.wait_until(lambda: browser.interruptions > 0)
+
+    browser = await _cut_in(deps, then=wait)
+    assert browser.queue == [], "audio survived the interruption"
+
+
+async def test_the_interrupting_question_is_handled(deps):
+    """The whole point. Cutting in and then being ignored is worse than not
+    being able to cut in at all."""
+    async def wait(browser):
+        await browser.wait_until(lambda: len(browser.heard) >= 2, timeout=20)
+
+    browser = await _cut_in(deps, then=wait)
+    assert len(browser.heard) >= 2, browser.heard
+
+
+async def test_the_tutor_does_not_finish_its_sentence_afterwards(deps):
+    """Everything left in the abandoned turn stays silent — no closing praise
+    spoken over the student who just took the floor."""
+    async def wait(browser):
+        await browser.wait_until(lambda: browser.interruptions > 0)
+        said_at_cut = len(browser.tutor_said)
+        await asyncio.sleep(0.2)
+        browser.said_at_cut = said_at_cut
+
+    browser = await _cut_in(deps, then=wait)
+    # The next turn may speak; the abandoned one may not add to what it said.
+    assert browser.tutor_said[browser.said_at_cut:] in ([], browser.tutor_said[-1:])
+
+
+async def test_a_cough_does_not_take_the_floor(deps):
+    """Short bursts are what echo cancellation leaks. The bar is higher than a
+    normal onset for exactly this."""
+    vad = ScriptedVAD()
+    async with await browser_server(deps, vad) as server:
+        port = server.sockets[0].getsockname()[1]
+        async with FakeBrowser(f"ws://127.0.0.1:{port}/browser", vad, JPEG) as browser:
+            browser.hold_playback = True
+            await browser.send_frames([True] * 30 + [False] * SILENCE_FRAMES)
+            await browser.wait_until(lambda: browser.state == "AGENT_SPEAKING")
+            # enough to start a turn in silence, not enough to take the floor
+            await browser.send_frames([True] * CFG.onset_frames)
+            await asyncio.sleep(0.15)
+
+    assert browser.interruptions == 0
+    assert browser.state == "AGENT_SPEAKING"

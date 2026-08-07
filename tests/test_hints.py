@@ -1,5 +1,7 @@
+import pytest
+
 from tutor.hints.guard import leaks_answer
-from tutor.hints.generator import HintGenerator
+from tutor.hints.generator import HintGenerator, PhrasedHint
 from tutor.knowledge.models import (
     Answer,
     MatchResult,
@@ -135,10 +137,22 @@ class TestGenerator:
 
     def test_fixed_actions(self, db):
         gen = HintGenerator(EchoLLMClient(), db)
-        d = Decision(Action.ASK_RECAPTURE, 0, 1, None, "r")
-        assert "카메라" in gen.generate(d, lin_match(), LIN_REF, Recognition(problem_text=""), [])
         d = Decision(Action.WAIT, 0, 1, None, "r")
         assert gen.generate(d, lin_match(), LIN_REF, Recognition(problem_text=""), []) == ""
+
+    @pytest.mark.parametrize("mode, word, absent", [
+        ("upload", "사진", "카메라"),
+        ("camera", "카메라", "올려"),
+    ])
+    def test_recapture_asks_for_the_picture_the_student_can_actually_give(
+        self, db, mode, word, absent
+    ):
+        """Telling a student to hold their worksheet up to a camera that is not
+        connected is worse than saying nothing at all."""
+        gen = HintGenerator(EchoLLMClient(), db, input_mode=mode)
+        d = Decision(Action.ASK_RECAPTURE, 0, 1, None, "r")
+        text = gen.generate(d, lin_match(), LIN_REF, Recognition(problem_text=""), [])
+        assert word in text and absent not in text
 
     def test_completed_problem_gets_praise(self, db):
         gen = HintGenerator(EchoLLMClient(), db)
@@ -217,3 +231,76 @@ class TestStudentAnswerInThePrompt:
         assert len(llm.prompts) == 2  # first leaked, second is the retry
         assert all("5를 빼요" in p for p in llm.prompts)
         assert not leaks_answer(text, LIN_REF, 1)
+
+
+class TestVisibleNumbersAreNotSecrets:
+    """In `3x + 5 = 20` the answer is 5 and so is a coefficient.
+
+    The guard used to reject any hint containing 5, which banned the most
+    natural L1 question on that problem ("5를 어떻게 없앨까요?") and pushed the
+    tutor onto a generic template exactly where it had something useful to say.
+    Telling a student a number they are looking at is not telling them anything
+    — but saying it AS the answer, or computing it, still is.
+    """
+
+    REF = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="양변에서 5를 뺀다", expression="3*x = 15"),
+            SolutionStep(idx=2, description="양변을 3으로 나눈다", expression="x = 5"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="5"),
+        concepts=["linear_equation"], verified=True, origin="db",
+    )
+    GIVEN = ["3x + 5 = 20 일 때 x는?", "3*x + 5 = 20"]
+
+    @pytest.mark.parametrize("hint", [
+        "5를 어떻게 없애면 x만 남을까요?",
+        "양변에서 5를 빼면 어떻게 될까요?",
+        "x 옆에 있는 더하기 5를 어떻게 정리하면 좋을까요?",
+        "왼쪽의 20에서 5를 어떻게 다뤄야 할까요?",
+    ])
+    def test_a_number_on_their_page_may_be_named(self, hint):
+        assert not leaks_answer(hint, self.REF, 1, given=self.GIVEN)
+
+    @pytest.mark.parametrize("hint", [
+        "답은 5예요.",
+        "정답은 5입니다.",
+        "x는 5예요.",
+        "x = 5 가 나와요.",
+        "계산하면 5가 돼요.",
+    ])
+    def test_saying_it_as_the_answer_is_still_a_leak(self, hint):
+        assert leaks_answer(hint, self.REF, 1, given=self.GIVEN)
+
+    @pytest.mark.parametrize("hint", ["15/3을 하면 되겠죠?", "(20 - 5)/3 를 해보세요."])
+    def test_computing_it_is_still_a_leak(self, hint):
+        """The given numbers are theirs; the arithmetic between them is the step."""
+        assert leaks_answer(hint, self.REF, 1, given=self.GIVEN)
+
+    def test_a_number_not_on_their_page_is_still_a_leak(self):
+        """Same hint, a problem where 5 is not written down."""
+        assert leaks_answer("5를 생각해 보세요.", self.REF, 1, given=["3*x + 7 = 22"])
+
+    def test_without_the_problem_the_guard_stays_strict(self):
+        """Callers that cannot say what is visible lose nothing they had."""
+        assert leaks_answer("5를 어떻게 없애면 x만 남을까요?", self.REF, 1)
+
+    def test_a_later_step_is_still_rejected(self):
+        assert leaks_answer("x = 5 로 정리돼요.", self.REF, 1, given=self.GIVEN)
+
+    def test_the_generator_now_keeps_the_good_question(self, db):
+        """End to end: the phrasing that used to be thrown away survives."""
+        class Writer:
+            def run_with_tools(self, **kw):
+                return PhrasedHint(hint="x 옆에 있는 5를 어떻게 없애면 좋을까요?")
+            complete_json = run_with_tools
+
+        text = HintGenerator(Writer(), db).generate(
+            Decision(Action.SOCRATIC_QUESTION, 1, 1, None, "t"),
+            # a concept with no seeded template, so the LLM path is taken
+            MatchResult(tier=Tier.NEW, concepts=["unknown_concept"], reference=self.REF),
+            self.REF,
+            Recognition(problem_text="3x + 5 = 20 일 때 x는?", equations=["3*x + 5 = 20"]),
+            [],
+        )
+        assert "5를 어떻게 없애면" in text

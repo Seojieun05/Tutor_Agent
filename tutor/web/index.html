@@ -12,10 +12,15 @@
     OUT: turn_state / transcript / tutor_says events + a TTS_AUDIO frame with
          the tutor's speech → <audio> → "playback_done" back to the server
 
-  The one line that keeps the tutor from hearing itself:
-      if (!micOpen()) return;   in onSamples()
-  The server drops those frames as well — barge-in is deliberately not
-  implemented, so both sides stay muted until playback is over.
+  Barge-in: the mic stays open while the tutor speaks so the student can cut
+  in. What keeps the tutor from hearing itself is echoCancellation in
+  getUserMedia — the browser subtracts what it is playing from what it hears —
+  plus a higher onset bar on the server for those frames. Without working AEC
+  (an external speaker, a bad driver) the tutor will interrupt itself; that is
+  what BARGE_IN=0 is for.
+
+  The mic still shuts during PROCESSING: there is nothing to interrupt while it
+  thinks, and a half-turn must not survive into the answer.
 
   Chrome/Edge recommended (AudioWorklet at a 16 kHz AudioContext).
 -->
@@ -54,6 +59,18 @@
   }
   #tools label:hover, #tools button:hover { color:var(--text); border-color:var(--dim); }
   #sheet { display:none; }
+  /* The photo is not a nice-to-have: without it the tutor has nothing to read. */
+  #drop {
+    width:100%; max-width:38rem; margin-top:1.2rem; padding:1rem;
+    border:1px dashed var(--line); border-radius:12px; color:var(--dim);
+    font:500 .85rem system-ui; text-align:center; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; gap:.9rem;
+  }
+  #drop:hover, #drop.over { border-color:var(--you); color:var(--text); }
+  #drop.has { border-style:solid; border-color:var(--tutor); color:var(--text); }
+  #thumb { max-height:5rem; border-radius:6px; display:none; }
+  #thumb.has { display:block; }
+  #drophint { text-align:left; line-height:1.5; }
   #log { width:100%; max-width:38rem; margin-top:2rem; }
   .turn { background:var(--panel); border-radius:10px; padding:.7rem 1rem; margin-bottom:.7rem; }
   .who { font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); }
@@ -68,11 +85,15 @@
 
   <button id="orb">시작</button>
 
-  <div id="tools">
-    <label for="sheet">📄 문제 사진 선택 (선택)</label>
-    <input type="file" id="sheet" accept="image/*">
-    <span id="sheetname" class="meta"></span>
+  <div id="drop">
+    <img id="thumb" alt="">
+    <div id="drophint">
+      📄 <b>문제 사진을 올려 주세요</b><br>
+      클릭해서 고르거나, 여기로 끌어다 놓거나, <b>Ctrl+V</b>로 붙여넣기<br>
+      <span id="sheetname" class="meta"></span>
+    </div>
   </div>
+  <input type="file" id="sheet" accept="image/*">
 
   <div id="log"></div>
   <audio id="player"></audio>
@@ -91,7 +112,15 @@ let turnState = "";                 // LISTENING | USER_SPEAKING | PROCESSING | 
 let streamSeq = 0;
 let worksheet = null;               // optional jpeg bytes for capture_request
 
-const micOpen = () => turnState === "LISTENING" || turnState === "USER_SPEAKING";
+// With barge-in the mic stays open while the tutor talks, so the student can
+// cut in; the server judges those frames at a higher bar. It stays shut during
+// PROCESSING either way — there is nothing to interrupt while it thinks, and a
+// half-turn must not survive into the answer.
+let bargeIn = false;
+const micOpen = () =>
+  turnState === "LISTENING" ||
+  turnState === "USER_SPEAKING" ||
+  (bargeIn && turnState === "AGENT_SPEAKING");
 
 // --- the project's binary framing, in ~15 lines ----------------------------
 function encodeFrame(type, header, payload) {
@@ -194,6 +223,8 @@ function onEvent(msg) {
   switch (msg.event) {
     case "hello_ack":   setStatus("연결됨. 말을 시작하세요."); break;
     case "turn_state":  setState(d.state); break;
+    case "config":      bargeIn = !!d.barge_in; break;
+    case "barge_in":    stopSpeaking(); break;
     case "transcript":  addTurn("you", d.text || "(인식 실패)"); break;
     case "tutor_says":  addTurn("tutor", d.text); break;
     case "hint_issued": note(`힌트 L${d.level} · ${d.action}`); break;
@@ -244,15 +275,33 @@ async function unlockAudio() {
   }
 }
 
+// The tutor's audio is a queue, not a single clip: a turn can be a filler
+// followed by the hint, and a barge-in has to be able to throw away the part
+// that has not started playing as well as the part that has.
+let audioQueue = [];
+let playingUrl = null;
+
 function play(bytes) {
+  audioQueue.push(bytes);
+  if (!playingUrl) playNext();
+}
+
+function playNext() {
+  const bytes = audioQueue.shift();
+  if (!bytes) { playingUrl = null; return; }
+
   const player = $("player");
   const url = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+  playingUrl = url;
   const done = () => {
+    if (playingUrl !== url) return;      // already dropped by a barge-in
     URL.revokeObjectURL(url);
-    sendEvent("playback_done");   // the server reopens the mic after its tail guard
+    playingUrl = null;
+    if (audioQueue.length) { playNext(); return; }
+    sendEvent("playback_done");          // the server reopens the mic after its tail guard
   };
   player.onended = done;
-  player.onerror = done;          // never leave the server waiting
+  player.onerror = done;                 // never leave the server waiting
   player.src = url;
   player.play().catch(() => {
     setStatus("자동 재생이 차단되었습니다 — 페이지를 한 번 클릭한 뒤 다시 말해주세요.");
@@ -260,17 +309,70 @@ function play(bytes) {
   });
 }
 
-// --- 4. the optional worksheet photo (not a turn-taking button) ------------
-$("sheet").addEventListener("change", async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
+/** The student cut in. Stop mid-word and drop everything not yet played. */
+function stopSpeaking() {
+  const player = $("player");
+  const dropped = audioQueue.length;
+  audioQueue = [];
+  if (playingUrl) {
+    URL.revokeObjectURL(playingUrl);
+    playingUrl = null;
+  }
+  player.pause();
+  // Detach the source, or the element keeps buffering what we just cancelled.
+  player.removeAttribute("src");
+  player.load();
+  // Deliberately no playback_done: the server already knows, it told us to stop.
+  addTurn("err", dropped ? `끼어들기 — 재생 중단, 대기 ${dropped}개 삭제` : "끼어들기 — 재생 중단");
+}
+
+// --- 4. the worksheet photo ------------------------------------------------
+// Three ways in, because the one that fits the moment is the one that gets
+// used: choosing a file, dragging it, or pasting a screenshot straight from
+// the clipboard — which is how most photos actually arrive on a laptop.
+async function useWorksheet(file) {
+  if (!file || !file.type.startsWith("image/")) return;
   worksheet = new Uint8Array(await file.arrayBuffer());
-  $("sheetname").textContent = `${file.name} (${Math.round(worksheet.length / 1024)} KB)`;
+  $("sheetname").textContent =
+    `${file.name || "붙여넣은 이미지"} · ${Math.round(worksheet.length / 1024)} KB`;
+  // Show it back: the commonest failure is not a bad model but a photo that
+  // turns out to be blurred, cropped short, or of the wrong page.
+  const thumb = $("thumb");
+  thumb.src = URL.createObjectURL(file);
+  thumb.classList.add("has");
+  $("drop").classList.add("has");
+  setStatus("사진을 받았습니다. 이제 힌트를 물어보세요.");
+}
+
+$("sheet").addEventListener("change", (e) => useWorksheet(e.target.files[0]));
+$("drop").addEventListener("click", () => $("sheet").click());
+
+for (const type of ["dragenter", "dragover"]) {
+  $("drop").addEventListener(type, (e) => {
+    e.preventDefault();
+    $("drop").classList.add("over");
+  });
+}
+for (const type of ["dragleave", "drop"]) {
+  $("drop").addEventListener(type, (e) => {
+    e.preventDefault();
+    $("drop").classList.remove("over");
+  });
+}
+$("drop").addEventListener("drop", (e) => useWorksheet(e.dataTransfer.files[0]));
+
+document.addEventListener("paste", (e) => {
+  for (const item of e.clipboardData.files) {
+    if (item.type.startsWith("image/")) { useWorksheet(item); return; }
+  }
 });
 
 function sendWorksheet(captureId) {
-  if (!worksheet) {           // no camera here: the server falls back gracefully
+  if (!worksheet) {
+    // Nothing to read. The server turns this into "사진을 다시 올려 줄래요?",
+    // so say the same thing here where the student is actually looking.
     sendEvent("capture_failed", { capture_id: captureId });
+    setStatus("문제 사진이 아직 없어요 — 위에 사진을 올려 주세요.");
     return;
   }
   ws.send(encodeFrame(IMAGE_FRAME, { capture_id: captureId, format: "jpeg" }, worksheet));

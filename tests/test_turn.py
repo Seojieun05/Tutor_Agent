@@ -159,10 +159,26 @@ def test_new_turn_resets_the_stateful_vad(detector):
 
 @pytest.fixture
 def taker():
+    """The gate with barge-in OFF — the local-mic device, where the tutor's
+    voice reaches the tutor's own microphone with nothing in between."""
     vad = ScriptedVAD()
-    det = TurnDetector(vad=vad, config=TurnConfig())
+    det = TurnDetector(vad=vad, config=TurnConfig(barge_in=False))
     seen: list[TurnState] = []
     return TurnTaker(det, on_change=seen.append), vad, seen
+
+
+@pytest.fixture
+def interruptible():
+    """The gate with barge-in ON — the browser, where echo cancellation makes
+    an open mic during playback survivable."""
+    vad = ScriptedVAD()
+    det = TurnDetector(vad=vad, config=TurnConfig(barge_in=True))
+    seen: list[TurnState] = []
+    cuts: list[int] = []
+    return (
+        TurnTaker(det, on_change=seen.append, on_barge_in=lambda: cuts.append(1)),
+        vad, seen, cuts,
+    )
 
 
 def feed(taker: TurnTaker, vad: ScriptedVAD, script: list[bool], now_ms: float = 0.0):
@@ -201,7 +217,8 @@ def test_states_follow_a_full_turn(taker):
     ]
 
 
-def test_vad_never_runs_while_the_agent_speaks(taker):
+def test_vad_never_runs_while_the_agent_speaks_without_barge_in(taker):
+    """BARGE_IN=0 restores the old guarantee, which the local device needs."""
     tt, vad, _ = taker
     tt.agent_speaking()
     seen_before = vad.seen
@@ -263,3 +280,84 @@ def test_multi_turn_conversation_needs_no_button(taker):
         now += CFG.tail_guard_ms
         feed(tt, vad, silence(1), now_ms=now)
         assert tt.state is TurnState.LISTENING
+
+
+# --- barge-in ----------------------------------------------------------------
+#
+# Cutting the tutor off is the one place where "did the VAD hear speech?" is not
+# enough. The microphone can hear the loudspeaker, so the bar to take the floor
+# mid-sentence is higher than the bar to start a turn in silence — and the words
+# that did it began before anyone noticed, so they have to come back with it.
+
+
+def bfeed(tt, vad, script, now_ms=0.0):
+    out = []
+    for flag in script:
+        vad.script.append(flag)
+        utterance = tt.feed(bytes(CFG.frame_bytes), now_ms=now_ms)
+        if utterance is not None:
+            out.append(utterance)
+    return out
+
+
+def test_a_short_burst_does_not_take_the_floor(interruptible):
+    """A cough, or a syllable of the tutor leaking past echo cancellation."""
+    tt, vad, _, cuts = interruptible
+    tt.agent_speaking()
+    bfeed(tt, vad, speech(CFG.onset_frames))  # enough to start a turn in silence
+    assert tt.state is TurnState.AGENT_SPEAKING
+    assert cuts == []
+
+
+def test_sustained_speech_takes_the_floor(interruptible):
+    tt, vad, _, cuts = interruptible
+    tt.agent_speaking()
+    bfeed(tt, vad, speech(CFG.barge_in_frames))
+    assert tt.state is TurnState.USER_SPEAKING
+    assert cuts == [1], "the session was not told to stop the audio"
+
+
+def test_the_interrupting_words_are_not_lost(interruptible):
+    """The student's question starts before the barge-in is noticed. A turn
+    that begins at the moment we react hears '그렇게 해요?' and misses '왜'."""
+    tt, vad, _, _ = interruptible
+    tt.agent_speaking()
+    bfeed(tt, vad, speech(CFG.barge_in_frames))
+    committed = bfeed(
+        tt, vad, speech(20) + silence(ms_to_frames(CFG.silence_ms) + 2)
+    )
+    assert committed, "the interrupting utterance never came back"
+    spoken_frames = len(committed[0]) // CFG.frame_bytes
+    assert spoken_frames > CFG.barge_in_frames + 20, spoken_frames
+
+
+def test_the_bar_drops_back_once_the_floor_is_taken(interruptible):
+    """Only the FIRST onset is hard. Mid-turn pauses must not need shouting."""
+    tt, vad, _, _ = interruptible
+    tt.agent_speaking()
+    bfeed(tt, vad, speech(CFG.barge_in_frames))
+    assert tt.detector.onset_required is None
+
+
+def test_the_floor_is_taken_once_per_utterance(interruptible):
+    tt, vad, _, cuts = interruptible
+    tt.agent_speaking()
+    bfeed(tt, vad, speech(CFG.barge_in_frames + 30))
+    assert cuts == [1]
+
+
+def test_thinking_is_still_not_interruptible(interruptible):
+    """Nothing is being said, so there is nothing to cut off — and a half turn
+    must not survive into the answer."""
+    tt, vad, _, cuts = interruptible
+    tt.processing()
+    bfeed(tt, vad, speech(60))
+    assert tt.state is TurnState.PROCESSING
+    assert cuts == []
+
+
+def test_a_normal_turn_still_starts_easily(interruptible):
+    """The higher bar applies only over the tutor's voice."""
+    tt, vad, _, _ = interruptible
+    bfeed(tt, vad, speech(CFG.onset_frames))
+    assert tt.state is TurnState.USER_SPEAKING

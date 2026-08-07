@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from tutor.config import Settings
 from tutor.llm.client import LLMClient
 
 
@@ -40,14 +41,32 @@ Return ONLY the JSON object."""
 
 
 class Recognizer:
-    def __init__(self, llm: LLMClient):
+    def __init__(self, llm: LLMClient, settings: Settings | None = None):
         self.llm = llm
+        # Optional so tests and scripts can build a recognizer with nothing but
+        # a model. Without settings the frame is sent exactly as photographed.
+        self.settings = settings
 
     def recognize(self, jpeg: bytes) -> Recognition:
+        jpeg = self._framed(jpeg)
         return self.llm.complete_json(
             purpose="recognize",
             system=_SYSTEM,
             user="Transcribe this worksheet photo into the JSON schema.",
             images=[jpeg],
             schema=Recognition,
+        )
+
+    def _framed(self, jpeg: bytes) -> bytes:
+        """Crop the desk away before the model spends its tile budget on it."""
+        settings = self.settings
+        if settings is None or not (settings.worksheet_roi or settings.auto_crop):
+            return jpeg
+        from tutor.vision import framing
+
+        return framing.prepare_for_reading(
+            jpeg,
+            roi=settings.worksheet_roi,
+            auto=settings.auto_crop,
+            target_px=settings.crop_target_px,
         )

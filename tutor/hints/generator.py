@@ -23,44 +23,102 @@ from tutor.vision.recognizer import Recognition
 
 log = logging.getLogger(__name__)
 
+# "Show me again" means different things depending on where the picture comes
+# from, and telling a student to hold a worksheet up to a camera that is not
+# there is worse than saying nothing.
+RECAPTURE_TEXTS: dict[str, str] = {
+    "upload": "문제와 지금까지 쓴 풀이가 잘 보이게 사진을 다시 올려 줄래요?",
+    "camera": "문제와 지금까지 쓴 풀이가 잘 보이게 카메라에 다시 보여 줄래요?",
+}
+DEFAULT_INPUT_MODE = "upload"
+
 FIXED_ACTIONS: dict[Action, str] = {
-    Action.ASK_RECAPTURE: "문제와 지금까지 쓴 풀이가 잘 보이게 카메라에 다시 보여 줄래요?",
+    Action.ASK_RECAPTURE: RECAPTURE_TEXTS[DEFAULT_INPUT_MODE],
     Action.PROBE: "방금 쓴 줄을 소리 내어 읽어 줄래요? 어떻게 생각했는지 듣고 싶어요.",
     Action.WAIT: "",
 }
 
-_PHRASE_SYSTEM = """You are a Socratic math tutor speaking Korean to a student.
-Produce exactly ONE short spoken hint (1-2 sentences) at the requested level:
-L1 = a Socratic question, L2 = a concept reminder, L3 = a procedural nudge,
-L4 = reveal only the given next step.
+# Written on Google's LearnLM prompt guide (PARTS: Persona, Act, Recipient,
+# Theme, Structure) and its five learning-science principles. The guide's own
+# math-coach exemplar is "use one step per turn, encourage them to explain their
+# thinking, if they're stuck give a gentle nudge, not the answer" — which is the
+# behaviour this tutor's policy engine already decides. So the prompt states the
+# role and the pedagogy first and the prohibitions second, rather than being the
+# wall of NEVERs it was: a model told what to do holds the line better than one
+# told only what to avoid.
+_PHRASE_SYSTEM = """PERSONA
+You are a warm, confidence-building math tutor speaking Korean out loud to one
+student sitting beside you. You coach; you do not solve.
 
-Hard rules:
-- NEVER state the final answer or any result beyond the given step.
-- NEVER solve the problem. Guide with questions and concepts.
-- Korean 존댓말(해요체), friendly, spoken style — never 반말.
-- Never repeat an earlier hint: the ones already given are listed, and the student
-  may have moved on to a later step since then.
-- The student's latest answer may be given. Build on what they already said
-  correctly — never ask for it again — but do NOT judge it a second time:
-  the reaction ("맞아요", "음, 조금 달라요") is written separately and spoken first.
-- So never begin with 네 / 맞아요 / 좋아요 / 그렇죠 / 음. Start straight at the
-  next question or idea.
-- You may look up hint templates and misconceptions in the knowledge base.
+ACT
+Write exactly ONE spoken hint for this student's current moment, at the hint
+level you are given. Someone else has already decided that level from evidence
+of how the student is doing — your job is to phrase it, not to re-choose it:
+  L1  a question that makes them think, not a hint
+  L2  the concept or principle they need, no procedure
+  L3  the procedure to try, no result
+  L4  say the one given step, and nothing past it
+
+RECIPIENT
+A student mid-problem who can hear you. They may have just said something, and
+they may have a diagnosed misconception — both are given below. Meet them where
+they are: build on the part they already got right, and never ask again for
+something they have already told you.
+
+THEME
+Only the problem in front of them, the concepts it needs, and the single step
+they are stuck on. Everything else is out of scope.
+
+STRUCTURE
+One or two short spoken sentences. Korean 존댓말(해요체), never 반말. No lists,
+no markdown, no symbols read aloud badly — say "3 x 더하기 5" rather than
+"3x + 5" when it is easier to hear.
+
+HOW TO TEACH (this is the part that matters)
+- Active learning: leave the thinking to them. The best hint is the weakest one
+  that still unblocks — productive struggle is the lesson, not an obstacle.
+- Cognitive load: one idea per turn. One question, not two. Never a checklist.
+- Metacognition: prefer asking how they got there or why they chose that, over
+  asking only for the next number. At L1 especially, "왜 그렇게 했어요?" and
+  "어디까지는 확실해요?" teach more than a nudge toward the answer.
+- Adapt: use their own words back. If they are on their third attempt, be
+  warmer and more concrete, not more repetitive.
+- Curiosity: an open question beats a yes/no one.
+
+NEVER
+- Never state the final answer, or any result beyond the given step — not as a
+  check, not as an example, not "so it becomes 15".
+- Never solve the problem for them, even partially, except the one step L4 gives.
+- Never repeat a hint already given; they are listed, and the student has moved
+  on since.
+- Never open with 네 / 맞아요 / 좋아요 / 그렇죠 / 음. The reaction to their answer
+  is written separately and is spoken just before yours; starting with your own
+  makes the tutor say it twice.
 
 Return ONLY JSON: {"hint": "..."}"""
 
-_EXPLAIN_SYSTEM = """You are a Socratic math tutor speaking Korean to a student.
+_EXPLAIN_SYSTEM = """PERSONA
+You are a warm math tutor speaking Korean out loud to one student.
 
+ACT
 The student did NOT attempt your question — they asked one of their own, usually
-"why do we do it this way?". Answer THEIR question, then hand the turn back.
+"왜 그렇게 해요?". Answer THEIR question, then hand the turn back to them.
 
-Hard rules:
-- Explain the reason or the principle in 1-2 short spoken sentences.
-- NEVER state the final answer, the result of the current step, or a later step.
-  Explain WHY the step works; do not carry it out for them.
-- End by inviting them back to the question you had asked.
-- Korean 존댓말(해요체), spoken, friendly. Never 반말.
-- Do not open with a filler acknowledgement (네 / 맞아요 / 궁금하시죠). Answer directly.
+RECIPIENT
+A curious student mid-problem. A question is engagement, not failure: treat it
+as the opening it is, and reward it with a real reason rather than a redirect.
+
+STRUCTURE
+One or two short spoken sentences, then the question you had asked, again.
+Korean 존댓말(해요체), never 반말.
+
+HOW TO TEACH
+- Explain WHY the step works — the principle, the reason, an everyday parallel.
+  Understanding the reason is what they will still have next week.
+- One idea. A second reason is a second turn.
+- Never state the final answer, the result of this step, or any later step.
+  Motivate the step; do not carry it out for them.
+- Do not open with 네 / 맞아요 / 궁금하시죠. Answer directly.
 
 Return ONLY JSON: {"hint": "..."}"""
 
@@ -91,10 +149,27 @@ class PhrasedHint(BaseModel):
     hint: str
 
 
+def visible_to_student(rec: Recognition | None) -> list[str]:
+    """What is printed on the page in front of them.
+
+    The leak guard uses this to tell "you already know this number" from
+    "here is the answer": in `3x + 5 = 20` the answer 5 is also a coefficient,
+    and refusing to let the tutor say it costs the best question on that
+    problem.
+    """
+    if rec is None:
+        return []
+    return [rec.problem_text, *rec.equations, *rec.choices, *rec.diagram_conditions]
+
+
 class HintGenerator:
-    def __init__(self, llm: LLMClient, db: KnowledgeDB):
+    def __init__(self, llm: LLMClient, db: KnowledgeDB, input_mode: str = DEFAULT_INPUT_MODE):
         self.llm = llm
         self.db = db
+        self.fixed = dict(FIXED_ACTIONS)
+        self.fixed[Action.ASK_RECAPTURE] = RECAPTURE_TEXTS.get(
+            input_mode, FIXED_ACTIONS[Action.ASK_RECAPTURE]
+        )
 
     def generate(
         self,
@@ -105,8 +180,8 @@ class HintGenerator:
         history: list[HintRecord],
         student_answer: str | None = None,
     ) -> str:
-        if decision.action in FIXED_ACTIONS:
-            return FIXED_ACTIONS[decision.action]
+        if decision.action in self.fixed:
+            return self.fixed[decision.action]
 
         if reference is not None and decision.target_step > len(reference.steps):
             # every reference step is done — nothing left to hint at
@@ -131,7 +206,9 @@ class HintGenerator:
                 continue  # a slot we cannot fill
             if text in given:
                 continue
-            if reference is not None and leaks_answer(text, reference, decision.target_step):
+            if reference is not None and leaks_answer(
+                text, reference, decision.target_step, visible_to_student(rec)
+            ):
                 continue
             return text
 
@@ -139,13 +216,16 @@ class HintGenerator:
         text = self._phrase(
             decision, match, slots, history, rec, reference, student_answer=student_answer
         )
-        if reference is not None and leaks_answer(text, reference, decision.target_step):
+        seen = visible_to_student(rec)
+        if reference is not None and leaks_answer(
+            text, reference, decision.target_step, seen
+        ):
             log.warning("hint leaked answer; regenerating once")
             text = self._phrase(
                 decision, match, slots, history, rec, reference,
                 stronger=True, student_answer=student_answer,
             )
-            if leaks_answer(text, reference, decision.target_step):
+            if leaks_answer(text, reference, decision.target_step, seen):
                 return self._generic_fallback(decision, slots)
         return text
 
@@ -185,7 +265,9 @@ class HintGenerator:
                 schema=PhrasedHint,
             ).hint.strip()
         )
-        if reference is not None and leaks_answer(text, reference, target_step):
+        if reference is not None and leaks_answer(
+            text, reference, target_step, visible_to_student(rec)
+        ):
             log.warning("explanation leaked the answer; falling back")
             return (
                 "좋은 질문이에요. 지금 단계에서 왜 그렇게 하는지 먼저 같이 생각해 볼까요? "

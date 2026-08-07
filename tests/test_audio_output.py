@@ -46,7 +46,7 @@ class TestSilentFailureIsLoud:
         monkeypatch.setattr(tts.subprocess, "run", lambda *a, **k: ran.append(a))
 
         with caplog.at_level("ERROR"):
-            speaker._play(b"fake-mp3")
+            speaker.play(b"fake-mp3")
 
         assert ran == []  # no pointless subprocess, no ALSA spew
         assert caplog.records, "silence with no explanation is the bug"
@@ -57,7 +57,7 @@ class TestSilentFailureIsLoud:
         speaker = self._speaker(monkeypatch, can_play=True)
         ran = []
         monkeypatch.setattr(tts.subprocess, "run", lambda *a, **k: ran.append(a[0]))
-        speaker._play(b"fake-mp3")
+        speaker.play(b"fake-mp3")
         assert ran and ran[0][0] == "/usr/bin/ffplay"
 
     def test_synthesize_is_independent_of_local_playback(self, monkeypatch):

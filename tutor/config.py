@@ -19,8 +19,27 @@ class Settings:
     # Reading the worksheet is the one job that can be moved to another model
     # without touching the pedagogy: "grok" (default) or "gemini".
     vision_provider: str = "grok"
+    # What the tutor SAYS is the other job worth moving. Gemini carries Google's
+    # LearnLM fine-tuning, which is specifically about following pedagogical
+    # system instructions — "nudge, not the answer" as behaviour rather than as
+    # a style note. The policy that picks the hint level and the leak guard that
+    # checks the result are deterministic and do not move with it.
+    hint_provider: str = "grok"
     google_api_key: str = ""
+    # Set VERTEX_PROJECT to reach the same models through Google Cloud instead
+    # of an AI Studio key — different billing, and a Cloud project can spend its
+    # own credits. Auth is ADC (`gcloud auth application-default login`).
+    # `global` is not a default to be tidy about: gemini-3.1-pro-preview is only
+    # published there, and answers 404 in us-central1.
+    vertex_project: str = ""
+    vertex_location: str = "global"
     gemini_vision_model: str = "gemini-3.6-flash"
+    # Flash, not pro. Pro phrased hints noticeably better — it reached for an
+    # everyday analogy ("등식은 양팔저울과 같아서") where flash restated the rule —
+    # but it took 8-12s per hint against flash's 4-6s, pushing a turn from 11s
+    # to 18s. A tutor the student is waiting on is a worse tutor. Set
+    # GEMINI_HINT_MODEL=gemini-3.1-pro-preview to trade back.
+    gemini_hint_model: str = "gemini-3.6-flash"
     tts_voice: str = "eve"
     ws_host: str = "0.0.0.0"
     ws_port: int = 8765
@@ -43,6 +62,30 @@ class Settings:
     # Where to drop every received frame, for when the tutor says it cannot read
     # the worksheet and you want to know what it was actually looking at.
     save_captures_dir: Path | None = None
+    # Something to say while the pipeline thinks. The delay is the whole design:
+    # a turn that answers sooner than this stays silent, so the filler only ever
+    # replaces a wait the student would have had anyway.
+    filler_enabled: bool = True
+    filler_delay_ms: int = 400
+    # Pre-rendered phrases live here between runs; a warm cache means the filler
+    # itself costs no TTS round trip.
+    tts_cache_dir: Path | None = field(
+        default_factory=lambda: PROJECT_ROOT / "data" / "tts_cache"
+    )
+    # Where the worksheet picture comes from. "upload" is the browser page's
+    # file picker (paste, drag or choose); "camera" borrows a XIAO on /camera.
+    # Upload is the default because it is the one that always works: a 2 MP
+    # fixed-focus sensor on a desk mount gave ~65 DPI across an A4 page, and
+    # handwriting OCR wants 150+.
+    input_mode: str = "upload"
+    # A camera on a desk photographs mostly desk. Cropping to the page before
+    # the reading model sees it is worth 2-3x in effective resolution, because
+    # the model's tile budget stops being spent on an empty table.
+    # WORKSHEET_ROI="x,y,w,h" (fractions) is exact; auto-crop is best-effort and
+    # returns the whole frame whenever it is unsure. See tutor/vision/framing.py.
+    worksheet_roi: tuple[float, float, float, float] | None = None
+    auto_crop: bool = True
+    crop_target_px: int = 1024
     audio_sample_rate: int = 16000
     # Reasoning effort for the conversational LLM calls (see llm.client
     # FAST_PURPOSES). Empty string = the model's default.
@@ -53,6 +96,12 @@ class Settings:
     vad_min_speech_ms: int = 250
     vad_silence_ms: int = 800
     vad_tail_guard_ms: int = 250
+    # Barge-in: let the student cut the tutor off mid-sentence. Needs the
+    # browser's echo cancellation to be doing its job — without it the tutor
+    # interrupts itself. BARGE_IN_FRAMES is how much sustained speech it takes
+    # (frames of 32 ms), and it is the knob to raise if that happens anyway.
+    barge_in: bool = True
+    barge_in_frames: int = 8
 
     @property
     def echo_mode(self) -> bool:
@@ -76,7 +125,17 @@ def load_settings(env_file: Path | None = None) -> Settings:
     s.vision_provider = (
         os.getenv("VISION_PROVIDER", s.vision_provider).strip().lower() or s.vision_provider
     )
+    s.hint_provider = (
+        os.getenv("HINT_PROVIDER", s.hint_provider).strip().lower() or s.hint_provider
+    )
     s.google_api_key = os.getenv("GOOGLE_API_KEY", "").strip()
+    s.vertex_project = os.getenv("VERTEX_PROJECT", "").strip()
+    s.vertex_location = (
+        os.getenv("VERTEX_LOCATION", s.vertex_location).strip() or s.vertex_location
+    )
+    s.gemini_hint_model = (
+        os.getenv("GEMINI_HINT_MODEL", s.gemini_hint_model).strip() or s.gemini_hint_model
+    )
     s.gemini_vision_model = (
         os.getenv("GEMINI_VISION_MODEL", s.gemini_vision_model).strip()
         or s.gemini_vision_model
@@ -95,6 +154,17 @@ def load_settings(env_file: Path | None = None) -> Settings:
     s.capture_timeout_s = float(os.getenv("CAPTURE_TIMEOUT_S", str(s.capture_timeout_s)))
     captures = os.getenv("SAVE_CAPTURES_DIR", "").strip()
     s.save_captures_dir = Path(captures) if captures else None
+    s.filler_enabled = os.getenv("FILLER", "1").strip().lower() not in {"0", "false", "no"}
+    s.filler_delay_ms = int(os.getenv("FILLER_DELAY_MS", str(s.filler_delay_ms)))
+    cache = os.getenv("TTS_CACHE_DIR", str(s.tts_cache_dir or "")).strip()
+    s.tts_cache_dir = Path(cache) if cache else None
+    mode = os.getenv("INPUT_MODE", s.input_mode).strip().lower()
+    s.input_mode = mode if mode in {"upload", "camera"} else s.input_mode
+    from tutor.vision.framing import parse_roi
+
+    s.worksheet_roi = parse_roi(os.getenv("WORKSHEET_ROI", ""))
+    s.auto_crop = os.getenv("AUTO_CROP", "1").strip().lower() not in {"0", "false", "no"}
+    s.crop_target_px = int(os.getenv("CROP_TARGET_PX", str(s.crop_target_px)))
     s.llm_reasoning_effort = os.getenv(
         "LLM_REASONING_EFFORT", s.llm_reasoning_effort
     ).strip()
@@ -103,4 +173,6 @@ def load_settings(env_file: Path | None = None) -> Settings:
     s.vad_min_speech_ms = int(os.getenv("VAD_MIN_SPEECH_MS", str(s.vad_min_speech_ms)))
     s.vad_silence_ms = int(os.getenv("VAD_SILENCE_MS", str(s.vad_silence_ms)))
     s.vad_tail_guard_ms = int(os.getenv("VAD_TAIL_GUARD_MS", str(s.vad_tail_guard_ms)))
+    s.barge_in = os.getenv("BARGE_IN", "1").strip().lower() not in {"0", "false", "no"}
+    s.barge_in_frames = int(os.getenv("BARGE_IN_FRAMES", str(s.barge_in_frames)))
     return s
