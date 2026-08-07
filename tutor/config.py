@@ -88,6 +88,12 @@ class Settings:
     vad_min_speech_ms: int = 250
     vad_silence_ms: int = 800
     vad_tail_guard_ms: int = 250
+    # Barge-in: let the student cut the tutor off mid-sentence. Needs the
+    # browser's echo cancellation to be doing its job — without it the tutor
+    # interrupts itself. BARGE_IN_FRAMES is how much sustained speech it takes
+    # (frames of 32 ms), and it is the knob to raise if that happens anyway.
+    barge_in: bool = True
+    barge_in_frames: int = 8
 
     @property
     def echo_mode(self) -> bool:
@@ -146,4 +152,6 @@ def load_settings(env_file: Path | None = None) -> Settings:
     s.vad_min_speech_ms = int(os.getenv("VAD_MIN_SPEECH_MS", str(s.vad_min_speech_ms)))
     s.vad_silence_ms = int(os.getenv("VAD_SILENCE_MS", str(s.vad_silence_ms)))
     s.vad_tail_guard_ms = int(os.getenv("VAD_TAIL_GUARD_MS", str(s.vad_tail_guard_ms)))
+    s.barge_in = os.getenv("BARGE_IN", "1").strip().lower() not in {"0", "false", "no"}
+    s.barge_in_frames = int(os.getenv("BARGE_IN_FRAMES", str(s.barge_in_frames)))
     return s

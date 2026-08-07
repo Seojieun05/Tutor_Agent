@@ -34,7 +34,9 @@ WORKSHEET = {
     "confidence": 0.95,
 }
 
-CFG = TurnConfig()
+# The local-mic device forces barge-in off (see simulator/voice_device.py):
+# its speaker feeds straight into its own microphone.
+CFG = TurnConfig(barge_in=False)
 SILENCE_FRAMES = math.ceil(CFG.silence_ms / CFG.frame_ms)
 
 

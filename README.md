@@ -63,15 +63,44 @@ the VAD runs.
 
 ```text
 LISTENING --onset--> USER_SPEAKING --800ms silence--> PROCESSING
-    ^                                                     |
+    ^                    ^                                |
+    |                    +--- barge-in ---+               |
     +---- tail guard <---- AGENT_SPEAKING <---- TTS starts
 ```
 
-The VAD only runs in the first two states, so the tutor cannot transcribe its
-own voice (barge-in is deliberately not implemented); `tail_guard_ms` covers
-room decay after playback. Tuning (`.env`): `VAD_PREFIX_MS` 300,
-`VAD_MIN_SPEECH_MS` 250, `VAD_SILENCE_MS` 800, `VAD_THRESHOLD` 0.5,
-`VAD_TAIL_GUARD_MS` 250.
+`tail_guard_ms` covers room decay after playback. Tuning (`.env`):
+`VAD_PREFIX_MS` 300, `VAD_MIN_SPEECH_MS` 250, `VAD_SILENCE_MS` 800,
+`VAD_THRESHOLD` 0.5, `VAD_TAIL_GUARD_MS` 250.
+
+### Barge-in
+
+Talk over the tutor and it stops. The audio being played is cut, anything
+queued behind it is dropped, the rest of that turn goes unsaid, and the words
+you interrupted with become the next question — they are already in the VAD's
+prefix buffer when the interruption is noticed, so nothing of "왜 그렇게 해요?"
+is lost.
+
+What makes it survivable is echo cancellation: `getUserMedia` subtracts what
+the browser is playing from what it hears, so an open mic during playback does
+not feed the tutor its own voice. What is left of it is handled by a higher
+onset bar — taking the floor needs `BARGE_IN_FRAMES` (8, ~250 ms) of sustained
+speech against the 3 frames it takes to start a turn in silence, so a cough or
+a leaked syllable does not interrupt.
+
+```bash
+BARGE_IN=0            # if the tutor interrupts itself (external speaker, bad AEC)
+BARGE_IN_FRAMES=12    # or just make it harder
+```
+
+Two places it deliberately does not apply. **PROCESSING** stays deaf: there is
+nothing to interrupt while the tutor thinks, and a half-turn must not survive
+into the answer. And the **local-mic device** ([simulator/voice_device.py](simulator/voice_device.py))
+forces it off whatever the setting says — its speaker feeds straight into its
+own microphone with no browser in between, so an open mic there would have the
+tutor interrupt itself, every time.
+
+A hint that was half-spoken is not rolled back: it stays in the history, so the
+policy does not offer it again as though it had never been heard.
 
 ### A. Browser client — works over SSH (recommended)
 

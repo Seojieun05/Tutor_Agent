@@ -28,6 +28,14 @@ class TurnConfig:
     onset_frames: int = 3
     onset_window: int = 5
     max_utterance_ms: int = 30_000  # force-commit guard for a turn that never ends
+    # Barge-in: keep listening while the tutor talks, so a student can cut in.
+    # The bar is higher than a normal onset for a physical reason — the mic can
+    # hear the speaker. Browser echo cancellation removes most of it, but not
+    # all, so a cough or a leaked syllable must not take the floor: barge_in
+    # asks for sustained speech, roughly half a second of it.
+    barge_in: bool = True
+    barge_in_frames: int = 8
+    barge_in_window: int = 12
 
     @property
     def frame_samples(self) -> int:
@@ -55,6 +63,8 @@ class TurnConfig:
             silence_ms=settings.vad_silence_ms,
             threshold=settings.vad_threshold,
             tail_guard_ms=settings.vad_tail_guard_ms,
+            barge_in=settings.barge_in,
+            barge_in_frames=settings.barge_in_frames,
         )
 
 
@@ -73,13 +83,20 @@ class TurnDetector:
 
             vad = SileroVAD(self.config.threshold, self.config.sample_rate)
         self.vad = vad
+        # How hard it is to open a turn right now. None = the usual bar; the
+        # taker raises it while the tutor is speaking. A mode, not state, so it
+        # deliberately survives reset().
+        self.onset_required: int | None = None
+        self.onset_window: int | None = None
         self.reset()
 
     def reset(self) -> None:
         self.speaking = False
         self._frames: list[bytes] = []
         self._prefix: deque[bytes] = deque(maxlen=self.config.prefix_frames)
-        self._onset: deque[bool] = deque(maxlen=self.config.onset_window)
+        self._onset: deque[bool] = deque(
+            maxlen=self.onset_window or self.config.onset_window
+        )
         self._quiet_ms = 0.0
         self._speech_ms = 0.0
         reset = getattr(self.vad, "reset", None)
@@ -97,7 +114,7 @@ class TurnDetector:
             # so a single noisy frame cannot open a turn.
             self._prefix.append(frame)
             self._onset.append(is_speech)
-            if sum(self._onset) >= cfg.onset_frames:
+            if sum(self._onset) >= (self.onset_required or cfg.onset_frames):
                 self.speaking = True
                 self._frames = list(self._prefix)  # the first syllables survive
                 self._speech_ms = sum(self._onset) * cfg.frame_ms
@@ -147,10 +164,15 @@ class TurnTaker:
         self,
         detector: TurnDetector,
         on_change: Callable[[TurnState], None] | None = None,
+        on_barge_in: Callable[[], None] | None = None,
     ):
         self.detector = detector
         self.config = detector.config
         self._on_change = on_change
+        # Called the moment the student takes the floor back, synchronously,
+        # from inside feed(). Everything that has to stop — the audio in the
+        # browser, the utterance still being spoken — stops from here.
+        self._on_barge_in = on_barge_in
         self._state = TurnState.LISTENING
         self._resume_at_ms: float | None = None
 
@@ -174,12 +196,15 @@ class TurnTaker:
     def feed(self, frame: bytes, now_ms: float | None = None) -> bytes | None:
         """Returns a finished utterance, or None.
 
-        Frames arriving while the tutor is thinking or speaking are dropped
-        here — the VAD never sees them, so the agent cannot trigger on its own
-        voice, and half-turns cannot survive across a response.
+        Frames arriving while the tutor is THINKING are still dropped: there is
+        nothing to interrupt yet, and a half-turn must not survive across a
+        response. Frames arriving while the tutor is SPEAKING are judged, at a
+        higher bar — that is barge-in.
         """
         if now_ms is not None:
             self._maybe_resume(now_ms)
+        if self._state is TurnState.AGENT_SPEAKING and self.config.barge_in:
+            return self._feed_over_the_tutor(frame)
         if not self.listening:
             return None
 
@@ -192,15 +217,39 @@ class TurnTaker:
         )
         return None
 
+    def _feed_over_the_tutor(self, frame: bytes) -> bytes | None:
+        """Listen while the tutor talks, and hand the floor over if cut off.
+
+        The detector is the ordinary one, with the onset bar raised — which
+        means the interrupting words are already in its prefix buffer when it
+        fires. That matters: the student's question does not start at the
+        moment we notice it, and a barge-in that swallows "왜" and hears
+        "그렇게 해요?" is worse than no barge-in.
+        """
+        utterance = self.detector.feed(frame)
+        if not self.detector.speaking:
+            return utterance  # None, unless a short burst just committed
+        log.info("[BARGE-IN] the student took the floor")
+        self.detector.onset_required = None
+        self.detector.onset_window = None
+        self._resume_at_ms = None
+        self._set(TurnState.USER_SPEAKING)
+        if self._on_barge_in is not None:
+            self._on_barge_in()
+        return utterance
+
     def processing(self) -> None:
         """The utterance is in the pipeline (STT → tutor → TTS)."""
         self._resume_at_ms = None
-        self.detector.reset()
+        self._normal_onset()
         self._set(TurnState.PROCESSING)
 
     def agent_speaking(self) -> None:
-        """TTS started: mute the VAD until the tail guard expires."""
+        """TTS started. With barge-in on, keep listening at a higher bar; with
+        it off, this is a mute until the tail guard expires."""
         self._resume_at_ms = None
+        self.detector.onset_required = self.config.barge_in_frames
+        self.detector.onset_window = self.config.barge_in_window
         self.detector.reset()
         self._set(TurnState.AGENT_SPEAKING)
 
@@ -217,8 +266,13 @@ class TurnTaker:
     def listen(self) -> None:
         """Back to LISTENING now (turn finished without speech, or aborted)."""
         self._resume_at_ms = None
-        self.detector.reset()
+        self._normal_onset()
         self._set(TurnState.LISTENING)
+
+    def _normal_onset(self) -> None:
+        self.detector.onset_required = None
+        self.detector.onset_window = None
+        self.detector.reset()
 
     def _maybe_resume(self, now_ms: float) -> None:
         if self._resume_at_ms is not None and now_ms >= self._resume_at_ms:

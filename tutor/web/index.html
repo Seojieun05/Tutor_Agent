@@ -12,10 +12,15 @@
     OUT: turn_state / transcript / tutor_says events + a TTS_AUDIO frame with
          the tutor's speech → <audio> → "playback_done" back to the server
 
-  The one line that keeps the tutor from hearing itself:
-      if (!micOpen()) return;   in onSamples()
-  The server drops those frames as well — barge-in is deliberately not
-  implemented, so both sides stay muted until playback is over.
+  Barge-in: the mic stays open while the tutor speaks so the student can cut
+  in. What keeps the tutor from hearing itself is echoCancellation in
+  getUserMedia — the browser subtracts what it is playing from what it hears —
+  plus a higher onset bar on the server for those frames. Without working AEC
+  (an external speaker, a bad driver) the tutor will interrupt itself; that is
+  what BARGE_IN=0 is for.
+
+  The mic still shuts during PROCESSING: there is nothing to interrupt while it
+  thinks, and a half-turn must not survive into the answer.
 
   Chrome/Edge recommended (AudioWorklet at a 16 kHz AudioContext).
 -->
@@ -107,7 +112,15 @@ let turnState = "";                 // LISTENING | USER_SPEAKING | PROCESSING | 
 let streamSeq = 0;
 let worksheet = null;               // optional jpeg bytes for capture_request
 
-const micOpen = () => turnState === "LISTENING" || turnState === "USER_SPEAKING";
+// With barge-in the mic stays open while the tutor talks, so the student can
+// cut in; the server judges those frames at a higher bar. It stays shut during
+// PROCESSING either way — there is nothing to interrupt while it thinks, and a
+// half-turn must not survive into the answer.
+let bargeIn = false;
+const micOpen = () =>
+  turnState === "LISTENING" ||
+  turnState === "USER_SPEAKING" ||
+  (bargeIn && turnState === "AGENT_SPEAKING");
 
 // --- the project's binary framing, in ~15 lines ----------------------------
 function encodeFrame(type, header, payload) {
@@ -210,6 +223,8 @@ function onEvent(msg) {
   switch (msg.event) {
     case "hello_ack":   setStatus("연결됨. 말을 시작하세요."); break;
     case "turn_state":  setState(d.state); break;
+    case "config":      bargeIn = !!d.barge_in; break;
+    case "barge_in":    stopSpeaking(); break;
     case "transcript":  addTurn("you", d.text || "(인식 실패)"); break;
     case "tutor_says":  addTurn("tutor", d.text); break;
     case "hint_issued": note(`힌트 L${d.level} · ${d.action}`); break;
@@ -260,20 +275,55 @@ async function unlockAudio() {
   }
 }
 
+// The tutor's audio is a queue, not a single clip: a turn can be a filler
+// followed by the hint, and a barge-in has to be able to throw away the part
+// that has not started playing as well as the part that has.
+let audioQueue = [];
+let playingUrl = null;
+
 function play(bytes) {
+  audioQueue.push(bytes);
+  if (!playingUrl) playNext();
+}
+
+function playNext() {
+  const bytes = audioQueue.shift();
+  if (!bytes) { playingUrl = null; return; }
+
   const player = $("player");
   const url = URL.createObjectURL(new Blob([bytes], { type: "audio/mpeg" }));
+  playingUrl = url;
   const done = () => {
+    if (playingUrl !== url) return;      // already dropped by a barge-in
     URL.revokeObjectURL(url);
-    sendEvent("playback_done");   // the server reopens the mic after its tail guard
+    playingUrl = null;
+    if (audioQueue.length) { playNext(); return; }
+    sendEvent("playback_done");          // the server reopens the mic after its tail guard
   };
   player.onended = done;
-  player.onerror = done;          // never leave the server waiting
+  player.onerror = done;                 // never leave the server waiting
   player.src = url;
   player.play().catch(() => {
     setStatus("자동 재생이 차단되었습니다 — 페이지를 한 번 클릭한 뒤 다시 말해주세요.");
     done();
   });
+}
+
+/** The student cut in. Stop mid-word and drop everything not yet played. */
+function stopSpeaking() {
+  const player = $("player");
+  const dropped = audioQueue.length;
+  audioQueue = [];
+  if (playingUrl) {
+    URL.revokeObjectURL(playingUrl);
+    playingUrl = null;
+  }
+  player.pause();
+  // Detach the source, or the element keeps buffering what we just cancelled.
+  player.removeAttribute("src");
+  player.load();
+  // Deliberately no playback_done: the server already knows, it told us to stop.
+  addTurn("err", dropped ? `끼어들기 — 재생 중단, 대기 ${dropped}개 삭제` : "끼어들기 — 재생 중단");
 }
 
 // --- 4. the worksheet photo ------------------------------------------------

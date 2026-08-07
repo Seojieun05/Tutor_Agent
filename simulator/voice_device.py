@@ -27,6 +27,7 @@ import asyncio
 import logging
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from simulator.device_sim import DeviceSim
@@ -168,7 +169,12 @@ def main() -> None:
     if isinstance(device, str) and device.isdigit():
         device = int(device)
 
-    config = TurnConfig.from_settings(load_settings())
+    # Barge-in is a browser feature, not a global one. It works there because
+    # getUserMedia subtracts the speaker from the microphone; here the tutor's
+    # voice comes out of the laptop and straight back into the laptop's own
+    # mic with nothing in between, so an open mic during playback would have
+    # the tutor interrupt itself, every time, forever.
+    config = replace(TurnConfig.from_settings(load_settings()), barge_in=False)
     try:
         voice = VoiceDevice(args.server, args.images, config, device, args.timeout)
         asyncio.run(voice.run())
