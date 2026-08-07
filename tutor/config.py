@@ -40,6 +40,12 @@ class Settings:
     # to 18s. A tutor the student is waiting on is a worse tutor. Set
     # GEMINI_HINT_MODEL=gemini-3.1-pro-preview to trade back.
     gemini_hint_model: str = "gemini-3.6-flash"
+    # Grading a spoken answer (evaluate) is the gate of the ANSWER turn — the
+    # one that has to feel like conversation. EVAL_PROVIDER=gemini moves it to
+    # flash; the verdict feeds the same deterministic policy either way, and a
+    # FallbackLLM keeps Grok on standby exactly as with hints and vision.
+    eval_provider: str = "grok"
+    gemini_eval_model: str = "gemini-3.6-flash"
     tts_voice: str = "eve"
     ws_host: str = "0.0.0.0"
     ws_port: int = 8765
@@ -135,6 +141,12 @@ def load_settings(env_file: Path | None = None) -> Settings:
     )
     s.gemini_hint_model = (
         os.getenv("GEMINI_HINT_MODEL", s.gemini_hint_model).strip() or s.gemini_hint_model
+    )
+    s.eval_provider = (
+        os.getenv("EVAL_PROVIDER", s.eval_provider).strip().lower() or s.eval_provider
+    )
+    s.gemini_eval_model = (
+        os.getenv("GEMINI_EVAL_MODEL", s.gemini_eval_model).strip() or s.gemini_eval_model
     )
     s.gemini_vision_model = (
         os.getenv("GEMINI_VISION_MODEL", s.gemini_vision_model).strip()

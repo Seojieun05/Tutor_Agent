@@ -113,12 +113,12 @@ def build_shared(settings: Settings):
     semantic = getattr(getattr(registry, "kb", None), "semantic", None)
     vision_llm = build_vision_llm(settings, llm)
     hint_llm = build_hint_llm(settings, llm)
+    eval_llm = build_eval_llm(settings, llm)
     # One log line per model call, always on. The tutor's latency is almost
     # entirely other people's servers, so the only useful question is which
     # call — and that is not answerable after the fact without this.
     return (db, timed(llm, settings.chat_model), transcriber, speaker, semantic,
-            timed(vision_llm, settings.gemini_vision_model),
-            timed(hint_llm, settings.gemini_hint_model))
+            timed(vision_llm), timed(hint_llm), timed(eval_llm))
 
 
 def wrap_with_cache(settings: Settings, speaker):
@@ -162,6 +162,17 @@ def build_hint_llm(settings: Settings, llm):
                       settings.gemini_hint_model, "HINT_PROVIDER")
 
 
+def build_eval_llm(settings: Settings, llm):
+    """Whichever model grades a spoken answer. Only AnswerEvaluator sees this.
+
+    The verdict feeds the same deterministic policy either way (correct → next
+    step, wrong → escalate), so swapping the model changes grading judgement
+    and nothing about what the tutor is allowed to do with it.
+    """
+    return _gemini_or(settings, llm, settings.eval_provider,
+                      settings.gemini_eval_model, "EVAL_PROVIDER")
+
+
 def _gemini_or(settings: Settings, llm, provider: str, model: str, knob: str):
     """A bad key or a missing package must not cost the student the whole
     lesson, so a failure here falls back to the chat model rather than
@@ -185,7 +196,7 @@ def _gemini_or(settings: Settings, llm, provider: str, model: str, knob: str):
 
 def make_deps(
     settings: Settings, db, llm, transcriber, speaker, semantic=None, cameras=None,
-    vision_llm=None, hint_llm=None,
+    vision_llm=None, hint_llm=None, eval_llm=None,
 ) -> Deps:
     """Per-connection dependencies (fresh SessionStore each time)."""
     return Deps(
@@ -197,7 +208,7 @@ def make_deps(
         hint_gen=HintGenerator(hint_llm or llm, db, settings.input_mode),
         transcriber=transcriber,
         speaker=speaker,
-        evaluator=AnswerEvaluator(llm, db),
+        evaluator=AnswerEvaluator(eval_llm or llm, db),
         cameras=cameras,
         fillers=FillerBank() if settings.filler_enabled else None,
         classifier=IntentClassifier(llm),
@@ -247,7 +258,8 @@ async def amain(settings: Settings) -> None:
     for port in ports:
         if not port_is_free(settings.ws_host, port):
             raise PortInUse(port)
-    db, llm, transcriber, speaker, semantic, vision_llm, hint_llm = build_shared(settings)
+    (db, llm, transcriber, speaker, semantic,
+     vision_llm, hint_llm, eval_llm) = build_shared(settings)
 
     cameras = CameraHub()
 
@@ -274,7 +286,7 @@ async def amain(settings: Settings) -> None:
             return
         deps = make_deps(
             settings, db, llm, transcriber, speaker, semantic, cameras,
-            vision_llm, hint_llm,
+            vision_llm, hint_llm, eval_llm,
         )
         if path.rstrip("/") == "/browser":
             from tutor.server.browser import BrowserSession

@@ -94,6 +94,44 @@ class TestProviderChoice:
         assert deps.hint_gen.llm is chat
 
 
+class TestEvalProvider:
+    """Grading a spoken answer can move to flash: measured 3.6s against Grok's
+    5.4s, and the verdict feeds the same deterministic policy either way."""
+
+    def test_grading_stays_on_grok_by_default(self):
+        from tutor.server.app import build_eval_llm
+
+        llm = EchoLLMClient()
+        assert build_eval_llm(Settings(xai_api_key="k"), llm) is llm
+
+    def test_the_knob_reads_from_the_environment(self, env, monkeypatch):
+        monkeypatch.setenv("EVAL_PROVIDER", "gemini")
+        monkeypatch.setenv("GEMINI_EVAL_MODEL", "gemini-3.6-flash")
+        s = load_settings(env)
+        assert (s.eval_provider, s.gemini_eval_model) == ("gemini", "gemini-3.6-flash")
+
+    def test_a_missing_key_degrades_instead_of_refusing_to_start(self, caplog):
+        from tutor.server.app import build_eval_llm
+
+        llm = EchoLLMClient()
+        settings = Settings(xai_api_key="k", eval_provider="gemini", google_api_key="")
+        with caplog.at_level(logging.ERROR):
+            assert build_eval_llm(settings, llm) is llm
+        assert "EVAL_PROVIDER" in caplog.text
+
+    def test_only_the_evaluator_changes_judge(self, db):
+        """Swapping the grader must not move the solver, the diagnosis or the
+        hint voice — the eval model judges, and judges only."""
+        from tutor.server.app import make_deps
+
+        llm, eval_llm = EchoLLMClient(), EchoLLMClient()
+        deps = make_deps(Settings(), db, llm, None, None, eval_llm=eval_llm)
+        assert deps.evaluator.llm is eval_llm
+        assert deps.solver.llm is llm
+        assert deps.estimator.llm is llm
+        assert deps.hint_gen.llm is llm
+
+
 class TestHintProvider:
     """What the tutor SAYS can move to Gemini for its LearnLM tuning. What
     decides how much it may say cannot move anywhere."""
