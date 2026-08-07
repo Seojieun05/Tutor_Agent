@@ -27,7 +27,7 @@ from tutor.state.models import Status
 log = logging.getLogger(__name__)
 
 Verdict = Literal["CORRECT", "INCORRECT", "UNCLEAR"]
-Intent = Literal["ANSWER", "QUESTION"]
+Intent = Literal["ANSWER", "QUESTION", "WORK_CHECK"]
 
 _SYSTEM = """You grade a student's SPOKEN answer to a tutor's Socratic question.
 
@@ -53,7 +53,13 @@ intent — decide this FIRST, it matters more than the verdict:
                They are asking for an explanation, not attempting the step.
                Set intent "QUESTION" even if their words also contain a guess;
                a question that is not answered will be asked again.
-For "QUESTION" the verdict is ignored — use "UNCLEAR" and leave feedback empty.
+- "WORK_CHECK" — the student asks you to LOOK at what they have written on the
+               page and react to it ("이렇게 하는 거 맞아요?", "내가 쓴 거 봐 주세요",
+               "여기서 뭐가 틀렸어요?", "제 풀이 좀 봐 주세요"). They are pointing at
+               the worksheet, not answering. The tutor will take a fresh photo,
+               so do not guess what they wrote.
+For "QUESTION" and "WORK_CHECK" the verdict is ignored — use "UNCLEAR" and
+leave feedback empty.
 
 feedback: ONE short spoken Korean sentence reacting to the answer (친근한 반말체
 금지, 존댓말). For CORRECT confirm briefly ("맞아요, 그렇게 하면 돼요!").

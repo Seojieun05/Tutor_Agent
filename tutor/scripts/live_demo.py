@@ -16,6 +16,7 @@ import socket
 from pathlib import Path
 
 from tutor.config import Settings, load_settings
+from tutor.console import soften_stdout
 from tutor.knowledge.db import KnowledgeDB
 from tutor.scripts.gen_assets import ASSETS_DIR
 
@@ -61,6 +62,7 @@ def firewall_hint(port: int) -> str:
 
 
 def main() -> None:
+    soften_stdout()  # a cp949 console cannot encode this preflight's punctuation
     settings = load_settings()
     checks: list[tuple[str, bool, str]] = []
 

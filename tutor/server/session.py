@@ -1,17 +1,26 @@
 """Per-connection session orchestrator.
 
-Owns ALL SessionStore writes. Two turns, deliberately asymmetric:
+Owns ALL SessionStore writes. Every utterance is first classified
+(tutor/speech/intent.py) into the turn it asks for, because the same words
+mean different things depending on whether a tutor question is pending:
 
-HINT REQUEST (the student wants help, their work is the evidence)
+HINT REQUEST / WORK CHECK (the worksheet is the evidence — the camera looks)
     capture → recognize → match (cached by problem_hash) → solver if needed →
     estimate → set_state + resolve pending hint effectiveness → prefetch
     state/history → policy.decide → generate hint (leak-guarded) → speak.
+
+    One method serves both. "이 문제 힌트 줄래?" and "이렇게 하는 거 맞아?" want
+    the same pipeline over a fresh photo; the only difference is that the
+    second one asked something, so their question reaches the hint phrasing and
+    the tutor confirms what it saw before hinting (`question=`).
 
 ANSWER (the student is replying to the question the tutor just asked)
     evaluate transcript against the reference solution → resolve the pending
     hint → prefetch state/history → policy.decide → speak.
     No capture, no VLM, no matching: the student spoke, they did not write, so
     re-reading the worksheet only adds latency and re-recognition noise.
+
+NONE (thinking out loud) — nothing happens. Spec rule 7.
 
 The verdict feeds the unchanged policy rules through the store, which is what
 produces the intended ladder: correct → next step L1, wrong → same step L2,
@@ -36,7 +45,8 @@ from tutor.policy.engine import Action, Decision, Trigger, decide
 from tutor.protocol.events import make_event, parse_event
 from tutor.protocol.frames import AudioFrame, ImageFrame, ProtocolError, decode
 from tutor.solver.grok_solver import GrokSolver
-from tutor.speech.stt import classify_transcript, wants_hint
+from tutor.speech.intent import IntentClassifier
+from tutor.speech.stt import classify_transcript
 from tutor.state.answer import AnswerEvaluator
 from tutor.state.estimator import StudentStateEstimator, hint_was_effective
 from tutor.state.models import StudentState
@@ -54,6 +64,20 @@ RETRY_PROMPTS = {
 
 # Said after the evaluator's own "맞아요!" when the last step lands.
 PROBLEM_DONE = "문제를 끝까지 풀었네요! 또 모르는 문제가 있으면 알려주세요."
+
+# The student asked about their own work ("풀이 맞아?"), and the answer to that
+# question is yes or no — not a hint. When the work IS right, say so and stop:
+# a hint would push them at a step they have not reached, and the student asked
+# to be checked, not helped.
+WORK_CONFIRMED = "맞아요! 이대로 하면 돼요. 또 궁금한 게 있으면 물어봐 주세요."
+
+# When it is not right, the tutor still has to say it looked before it hints.
+# Fixed text, never generated: it may say THAT the tutor looked, never WHAT is
+# wrong. Naming the mistake is the hint's job, and the leak guard's.
+WORK_CHECK_REACTIONS: dict[str, str] = {
+    "UNCERTAIN": "",  # ASK_RECAPTURE already says it cannot see the page
+}
+WORK_CHECK_DEFAULT = "음, 지금 쓴 줄을 같이 볼까요?"
 
 
 @dataclass
@@ -76,7 +100,9 @@ class Deps:
     speaker: object  # .speak(text) -> None
     evaluator: AnswerEvaluator | None = None  # None → answers fall back to a hint request
     tagger: ConceptTagger | None = None  # None → Recognition keeps "unknown"/[]
-    cameras: object | None = None  # CameraHub: eyes on another socket (XIAO)
+    cameras: object | None = None  # CameraHub: eyes on another socket (XIAO, phone)
+    # what each utterance is FOR; without an LLM it still routes by rule
+    classifier: IntentClassifier = field(default_factory=IntentClassifier)
     store: SessionStore = field(default_factory=SessionStore)
 
 
@@ -198,23 +224,39 @@ class Session:
             return
 
         log.info("utterance: %r", text)
-        self.last_transcript = text
-        asks_hint = wants_hint(text)
         pending = (
             self.store.pending_hint(self.ctx.hash) if self.ctx is not None else None
         )
-        # A question is on the table: whatever the student said is their answer
-        # to it — including "모르겠어요", which the evaluator reads as "escalate".
-        answering = (
-            pending is not None
-            and self.deps.evaluator is not None
-            and bool(text.strip())
+        # What is this utterance FOR? The same sentence means different turns
+        # depending on what is already on the table, so the two flags decide as
+        # much as the words do. Off the loop: it may cost one small LLM call.
+        intent = await asyncio.to_thread(
+            self.deps.classifier.classify,
+            text,
+            has_problem=self.ctx is not None,
+            has_pending=pending is not None,
         )
-        await self._send_transcript(text, answering or asks_hint)
+        if intent == "ANSWER" and (pending is None or self.deps.evaluator is None):
+            # Nothing to grade the answer against: treat it as asking for help
+            # rather than dropping the student's turn on the floor.
+            intent = "HINT_REQUEST"
 
-        if answering:
+        if intent == "NONE":
+            # Not addressed to the tutor. It is not evidence either, so it must
+            # not linger and be read into the next diagnosis.
+            await self._send_transcript(text, False)
+            return
+
+        self.last_transcript = text
+        await self._send_transcript(text, True)
+
+        if intent == "ANSWER":
             await self.handle_answer(text, pending)
-        elif asks_hint or pending is not None:
+        elif intent == "WORK_CHECK":
+            # Same turn as a hint request, but they asked something about what
+            # they wrote — so the camera looks again and the answer is to them.
+            await self.handle_hint_request(question=text)
+        else:
             await self.handle_hint_request()
 
     async def _send_transcript(self, text: str, responding: bool) -> None:
@@ -297,13 +339,13 @@ class Session:
 
     # --- the main flow --------------------------------------------------------
 
-    async def handle_hint_request(self) -> None:
+    async def handle_hint_request(self, question: str | None = None) -> None:
         if self._busy:
             log.info("hint request ignored: already handling one")
             return
         self._busy = True
         try:
-            await self._handle_hint_request()
+            await self._handle_hint_request(question)
         except Exception:
             log.exception("hint request failed")
             try:
@@ -350,6 +392,17 @@ class Session:
             transcript=transcript,
         )
         self.last_transcript = None  # graded; not evidence for the next turn
+
+        if verdict.intent == "WORK_CHECK":
+            # The keyword rules read this as an answer, but the student was
+            # pointing at their page ("여기 이거 어떡해요?"). Nothing was
+            # attempted, so nothing is graded: go and look instead. Not the
+            # public entry point — this turn already holds the busy flag.
+            log.info("answer turn redirected to a work check: %r", transcript[:40])
+            # ungraded, so it is still evidence — the estimator reads it too
+            self.last_transcript = transcript
+            await self._handle_hint_request(transcript)
+            return
 
         if verdict.intent == "QUESTION":
             # They asked, they did not attempt. Explain and leave the hint
@@ -409,7 +462,9 @@ class Session:
             history,
             transcript,
         )
-        await self._deliver(decision, self._with_feedback(verdict, text, decision), ctx.hash)
+        await self._deliver(
+            decision, self._with_feedback(verdict.feedback, text, decision), ctx.hash
+        )
 
     async def _answer_question(
         self, ctx: ProblemContext, pending: HintRecord, question: str
@@ -451,9 +506,11 @@ class Session:
             self.last_transcript = None
             self.store.clear_state()
 
-    def _with_feedback(self, verdict, hint: str, decision: Decision) -> str:
-        """Prefix the tutor's reaction to the answer, if it leaks nothing."""
-        feedback = (verdict.feedback or "").strip()
+    def _with_feedback(self, feedback: str, hint: str, decision: Decision) -> str:
+        """Prefix the tutor's reaction — to an answer, or to what it just saw —
+        if it leaks nothing. Both turns react before they hint, and both owe the
+        student exactly one acknowledgement."""
+        feedback = (feedback or "").strip()
         if not feedback or not hint:
             return feedback or hint
         # The feedback IS this turn's reaction; a hint that opens with its own
@@ -465,7 +522,15 @@ class Session:
             return hint
         return combined
 
-    async def _handle_hint_request(self) -> None:
+    async def _handle_hint_request(self, question: str | None = None) -> None:
+        """Capture → recognize → diagnose → hint, over a fresh photo.
+
+        `question` is set when the student asked about their own work
+        ("이렇게 하는 거 맞아?"). The pipeline is identical — that is the point:
+        checking work IS re-reading the worksheet and re-diagnosing. It only
+        changes what comes out: their question reaches the hint phrasing, and
+        the tutor says what it saw before hinting.
+        """
         jpeg = await self._request_capture()
         state = self.store.get_state() or StudentState()
         if jpeg is None:
@@ -527,6 +592,17 @@ class Session:
 
         # Always read state/history through the store right before the policy.
         current = self.store.get_state() or new_state
+
+        if question and current.status == "CORRECT":
+            # They asked whether their work is right, and it is. That question
+            # deserves an answer, not a hint: hinting here would push them at a
+            # step they have not reached and imply something was wrong.
+            # Deliberately not _deliver(): no hint was given, so nothing should
+            # enter the hint history or move the L1-L4 ladder.
+            log.info("work check at step %d: correct so far", current.last_correct_step)
+            await self._speak(WORK_CONFIRMED)
+            return
+
         fresh_history = self.store.get_history(problem_hash=ctx.hash)
         if current.status == "UNCERTAIN" and not fresh_history:
             # An unreadable photo has no trustworthy identity: problem_hash is
@@ -539,9 +615,17 @@ class Session:
         log.info("decision: %s", decision)
 
         text = await asyncio.to_thread(
-            self.deps.hint_gen.generate, decision, ctx.match, ctx.reference, rec, fresh_history
+            self.deps.hint_gen.generate,
+            decision, ctx.match, ctx.reference, rec, fresh_history, question,
         )
+        if question:
+            text = self._with_feedback(self._work_reaction(current), text, decision)
         await self._deliver(decision, text, ctx.hash)
+
+    @staticmethod
+    def _work_reaction(state: StudentState) -> str:
+        """What the tutor says it saw, before it hints. Never what is wrong."""
+        return WORK_CHECK_REACTIONS.get(state.status, WORK_CHECK_DEFAULT)
 
     def _same_problem(self, rec: Recognition) -> bool:
         """Is this the worksheet we are already working on?

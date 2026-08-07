@@ -6,9 +6,10 @@ necessary Socratic hint — never the answer** — through the laptop speaker.
 Spec: [CLAUDE.md](CLAUDE.md).
 
 ```text
-XIAO camera (ws /camera) ─┐
+XIAO camera / phone camera (ws /camera) ─┐
 Device (laptop mic · browser) → WebSocket → server.py
   → Silero VAD turn detection (hands-free) → STT
+  → utterance intent (hint request / work check / answer / stay quiet)
   → Grok VLM recognition → Grok ConceptTagger (problem_type + concepts)
   → Domain KB (EXACT/TEMPLATE/CONCEPT/SEMANTIC/NEW)
   → Grok Solver fallback → Student State Estimator
@@ -116,6 +117,46 @@ client-side and TTS plays on the machine running the server, so both must be
 the same room (the XIAO setup). `--list-devices` lists microphones,
 `--input-device` selects one, `--images` replays a worksheet.
 
+## What the student says, and what the tutor does about it
+
+The same sentence means different things depending on what is already on the
+table, so every utterance is classified first
+([tutor/speech/intent.py](tutor/speech/intent.py)) and only then routed:
+
+| 발화 | 의도 | 카메라 |
+|---|---|---|
+| "이 문제 힌트 줄래?" · "도와줘" · "모르겠어" | `HINT_REQUEST` | 새로 촬영 → VLM |
+| "풀이 맞아?" · "풀이 봐줘" · "내가 쓴 거 봐줘" | `WORK_CHECK` | 새로 촬영 → VLM |
+| "5예요" · "네, 맞아요" · "그렇게 하면 돼요" | `ANSWER` | 촬영 안 함 |
+| 혼잣말·잡담 | `NONE` | 무응답 |
+
+A work check has to **name the written work** — 풀이, 내가 쓴 거, 이렇게 하는 거,
+어디가 틀렸 — or ask for it to be looked at (봐 줘). A bare "맞아?" is
+deliberately not enough: "네, 맞아요" is how a student *agrees* with the tutor,
+and treating that as a work check stopped the lesson to photograph the page
+every time they did.
+
+A hint request and a work check otherwise run the **same** turn — checking work
+*is* re-reading the worksheet and re-diagnosing. The one difference is what
+comes out of it: if the work is **correct**, the tutor says
+"맞아요! 이대로 하면 돼요." and stops — the student asked a yes/no question, and
+a hint would push them at a step they have not reached and imply something was
+wrong. No hint record either, so the L1–L4 ladder does not move. If the work is
+**wrong**, the unchanged hint generator runs, behind a short "지금 쓴 줄을 같이
+볼까요?".
+
+An answer is graded from the transcript alone: no capture, no VLM, and no
+classifier call either — that is what makes it fast enough to feel like a
+conversation. `AnswerEvaluator` can still redirect one to a work check if the
+keywords misread it.
+
+Two things the rules deliberately keep as they were: "모르겠어요" or "힌트 더
+주세요" against a pending question is still an *answer* (the evaluator reads it
+as "escalate"), and "이렇게 하는 거 맞아?" before any photo exists is promoted to
+a hint request, because the camera has to see the page first either way.
+Ambiguous phrasings the keyword rules miss go to one small no-tools LLM call;
+`AnswerEvaluator` can also redirect a mis-routed answer to a work check.
+
 ## XIAO camera
 
 The board is the eyes only — mic and speaker stay on the laptop, where the
@@ -152,6 +193,66 @@ which asks the board for one photo, saves it, and sends that photo to the VLM �
 so you can tell "no frame arrived" from "the frame was unreadable" instead of
 guessing. See [firmware/README.md](firmware/README.md#6-카메라에-다시-보여-줄래요-and-nothing-else).
 
+## Phone camera
+
+The phone is a **drop-in replacement for the XIAO**: same `/camera` socket, same
+framing, same passive contract. It says hello and waits; on `capture_request` it
+grabs whatever the preview is pointing at and sends one JPEG. Nothing about the
+pedagogy knows whether the eye is a board or a phone. Voice stays on the laptop.
+
+`getUserMedia` only exists in a **secure context**, and `http://<lan-ip>:8765` is
+not one — `navigator.mediaDevices` is undefined there, so the page can never work
+over the plain port. Mint a certificate for this machine's LAN address:
+
+```bash
+.venv/bin/python -m tutor.scripts.make_cert
+```
+
+Add the two `TLS_CERT` / `TLS_KEY` lines it prints to `.env` and restart. The
+plain port is untouched — the XIAO keeps speaking `ws://` and `localhost` is
+already secure — so this only *adds* a listener on `TLS_PORT` (default
+`WS_PORT + 1`):
+
+1. laptop: <http://localhost:8765/> → press 시작 (mic + speaker)
+2. phone, same Wi-Fi: `https://<lan-ip>:8766/phone` → accept the certificate
+   warning once (self-signed) → allow the camera → press 시작
+3. point it at the worksheet and talk **to the laptop**
+
+`certs/` needs `cryptography` (`pip install -e ".[phone]"`) or `openssl` on
+PATH. The cert carries the LAN IP in `subjectAltName` — without an `IP:` entry
+browsers reject an IP address URL no matter how many warnings you click through.
+Allow the TLS port through the firewall too (the rule
+`python -m tutor.scripts.live_demo` prints, with the port changed).
+
+### Blurry photos
+
+**The lens is the focus fix.** A four-camera phone exposes all of them and only
+some can focus on paper held close; `facingMode: environment` gets you whichever
+the browser calls the default rear camera, which on real hardware could not. The
+page therefore picks the **lowest-numbered rear camera by label** —
+`camera2 0, facing back`, the main lens on Android. Not `videoinput[0]`: that
+index is the *selfie* camera on this phone. There is no picker; this is not a
+decision to hand a student mid-lesson.
+
+On top of that, continuous autofocus is requested explicitly (advanced
+constraints are dropped inside `getUserMedia`, so it has to be
+`applyConstraints` on the live track), and **tapping the preview focuses there**
+— continuous AF often locks onto the desk rather than the page.
+
+Framing: only a **width** is requested (2560) plus a *soft* `aspectRatio` of
+16:9. Naming a height would pin the ratio and make the browser crop the sensor
+to reach it, which cut the sides off the page; `ideal` lets the camera use a
+native 16:9 mode if it has one and ignore the request if it does not. The
+preview is `object-fit: contain`, so what the student frames is what gets sent.
+
+The line under the button reports what the phone actually gave us — lens label,
+stream size, and focus mode — so "초점이 안 맞는다" does not have to be a guess.
+
+If a photo is still blurry: hold ~20 cm away (most phones cannot focus nearer),
+keep still for a moment, and turn a light on — a dim room means a long exposure,
+and the resulting motion blur looks exactly like a focus failure. To see what
+the tutor actually received, set `SAVE_CAPTURES_DIR=data/captures` in `.env`.
+
 ### Reading the worksheet with Gemini
 
 Vision is the one job that can move to another model without touching the
@@ -176,9 +277,11 @@ Fully offline: LLM calls are mocked (`EchoLLMClient`), audio is a `NullSpeaker`,
 the VAD is a scripted stub. Covers the wire protocol, sympy matching
 (EXACT/TEMPLATE/CONCEPT/NEW), the policy rule table, hint-effectiveness
 lifecycle, per-purpose tool allowlists, the answer-leak guard, turn taking
-(prefix padding, onset debounce, endpointing, the four-state gate), and
-end-to-end websocket smoke tests including full hands-free voice turns on both
-the local-mic device and the browser client.
+(prefix padding, onset debounce, endpointing, the four-state gate), utterance
+intent routing (including that an answer never costs a classifier call and a
+work check always costs a capture), and end-to-end websocket smoke tests
+including full hands-free voice turns on both the local-mic device and the
+browser client.
 
 ## Design highlights
 

@@ -50,6 +50,9 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
     },
     "phrase": {"hint": "지금 단계에서 어떤 등식의 성질을 쓸 수 있을지 생각해 볼까요?"},
     "tag": {"problem_type": "linear_equation", "concepts": ["linear_equation"]},
+    # echo mode transcribes every utterance as "힌트 주세요", which the rules
+    # already resolve — this only covers a test that forces the ambiguous path
+    "intent": {"intent": "HINT_REQUEST", "reason": "echo"},
     # echo mode cannot judge an answer: stay neutral so the tutor re-asks the
     # same level instead of pretending the student was right or wrong
     "explain": {"hint": "그렇게 하면 양쪽이 똑같이 유지되기 때문이에요. 다시 한번 해 볼까요?"},

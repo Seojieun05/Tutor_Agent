@@ -24,6 +24,14 @@ class Settings:
     tts_voice: str = "eve"
     ws_host: str = "0.0.0.0"
     ws_port: int = 8765
+    # HTTPS/WSS, for the phone camera only. getUserMedia runs in a secure
+    # context or not at all, and a phone reaching the laptop by LAN IP has
+    # none — `navigator.mediaDevices` is simply undefined there. Off unless a
+    # cert is given, and it never replaces the plain port: the XIAO speaks ws://
+    # and localhost is already a secure context, so both keep working as they are.
+    tls_cert: Path | None = None
+    tls_key: Path | None = None
+    tls_port: int = 0  # 0 → ws_port + 1
     db_path: Path = field(default_factory=lambda: PROJECT_ROOT / "data" / "knowledge.db")
     tutor_language: str = "ko"
     recog_conf_threshold: float = 0.6
@@ -50,6 +58,14 @@ class Settings:
     def echo_mode(self) -> bool:
         return not self.xai_api_key
 
+    @property
+    def tls_enabled(self) -> bool:
+        return self.tls_cert is not None and self.tls_key is not None
+
+    @property
+    def tls_listen_port(self) -> int:
+        return self.tls_port or self.ws_port + 1
+
 
 def load_settings(env_file: Path | None = None) -> Settings:
     load_dotenv(env_file or PROJECT_ROOT / ".env")
@@ -68,6 +84,11 @@ def load_settings(env_file: Path | None = None) -> Settings:
     s.tts_voice = os.getenv("TTS_VOICE", s.tts_voice).strip() or s.tts_voice
     s.ws_host = os.getenv("WS_HOST", s.ws_host).strip() or s.ws_host
     s.ws_port = int(os.getenv("WS_PORT", str(s.ws_port)))
+    cert, key = os.getenv("TLS_CERT", "").strip(), os.getenv("TLS_KEY", "").strip()
+    # both or neither: half a pair would start a listener that cannot handshake
+    if cert and key:
+        s.tls_cert, s.tls_key = Path(cert), Path(key)
+    s.tls_port = int(os.getenv("TLS_PORT", str(s.tls_port)))
     s.db_path = Path(os.getenv("DB_PATH", str(s.db_path)))
     s.tutor_language = os.getenv("TUTOR_LANGUAGE", s.tutor_language).strip() or s.tutor_language
     s.recog_conf_threshold = float(os.getenv("RECOG_CONF_THRESHOLD", str(s.recog_conf_threshold)))

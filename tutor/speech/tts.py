@@ -19,6 +19,8 @@ from pathlib import Path
 
 import httpx
 
+from tutor.console import say
+
 from tutor.config import Settings
 
 log = logging.getLogger(__name__)
@@ -124,7 +126,9 @@ class EchoSpeaker:
 
     def speak(self, text: str) -> None:
         if text:
-            print(f"[TUTOR 🔊] {text}", flush=True)
+            # say(), not print(): a cp949 console cannot encode the emoji, and
+            # echo mode dying on its own output makes the whole mode useless
+            say(f"[TUTOR 🔊] {text}")
 
 
 class NullSpeaker:

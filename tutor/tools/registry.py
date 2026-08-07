@@ -23,6 +23,10 @@ KB_KINDS_BY_PURPOSE: dict[str, frozenset[str]] = {
     # concept tagging: the whitelists are in the prompt, so there is nothing
     # to look up — and a KB lookup could only tempt it to invent ids
     "tag": frozenset(),
+    # deciding what an utterance is FOR: it reads one transcript and two flags,
+    # and it runs before every turn — a tool round trip would cost the latency
+    # the rule fast-path exists to save
+    "intent": frozenset(),
     "solve": frozenset({"problems", "solutions", "concepts"}),
     "estimate": frozenset({"misconceptions"}),
     "phrase": frozenset({"hint_templates", "misconceptions"}),

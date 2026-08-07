@@ -21,6 +21,7 @@ from pathlib import Path
 
 from websockets.asyncio.client import connect
 
+from tutor.console import soften_stdout
 from tutor.protocol.events import make_event, parse_event
 from tutor.protocol.frames import AudioHeader, ImageHeader, encode_audio, encode_image
 
@@ -153,6 +154,7 @@ class DeviceSim:
 
 
 def main() -> None:
+    soften_stdout()  # this docstring becomes --help, and cp949 cannot hold it
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--server", default="ws://localhost:8765")
     parser.add_argument("--images", nargs="+", required=True, type=Path)

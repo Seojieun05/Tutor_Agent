@@ -4,7 +4,9 @@ Two device kinds share the port (and, over SSH, a single forwarded tunnel):
 
     ws://host:8765/          XIAO (or simulator): VAD on the device
     ws://host:8765/browser   browser: VAD on the server (BrowserSession)
+    ws://host:8765/camera    a camera device: XIAO, or a phone running /phone
     http://host:8765/        the browser client page + its AudioWorklet
+    https://host:8766/phone  the phone camera page — TLS only, see tls_context()
 """
 
 from __future__ import annotations
@@ -13,7 +15,9 @@ import asyncio
 import errno
 import logging
 import socket
+import ssl
 import sys
+from contextlib import AsyncExitStack
 from pathlib import Path
 
 from websockets.asyncio.server import serve
@@ -21,6 +25,7 @@ from websockets.datastructures import Headers
 from websockets.http11 import Response
 
 from tutor.config import Settings
+from tutor.console import say, soften_stdout
 from tutor.hints.generator import HintGenerator
 from tutor.knowledge.db import KnowledgeDB
 from tutor.knowledge.matching import Matcher
@@ -29,6 +34,7 @@ from tutor.server.camera import CameraConnection, CameraHub
 from tutor.llm.echo import EchoLLMClient
 from tutor.server.session import Deps, Session
 from tutor.solver.grok_solver import GrokSolver
+from tutor.speech.intent import IntentClassifier
 from tutor.state.answer import AnswerEvaluator
 from tutor.state.estimator import StudentStateEstimator
 from tutor.store.session_store import SessionStore
@@ -43,6 +49,8 @@ STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/index.html": ("index.html", "text/html; charset=utf-8"),
     "/worklet.js": ("worklet.js", "text/javascript; charset=utf-8"),
+    "/phone": ("phone.html", "text/html; charset=utf-8"),
+    "/phone.html": ("phone.html", "text/html; charset=utf-8"),
 }
 
 
@@ -139,6 +147,7 @@ def make_deps(
         evaluator=AnswerEvaluator(llm, db),
         tagger=ConceptTagger(llm),
         cameras=cameras,
+        classifier=IntentClassifier(llm),
         store=SessionStore(),
     )
 
@@ -156,9 +165,36 @@ def port_is_free(host: str, port: int) -> bool:
     return True
 
 
+def tls_context(settings: Settings) -> ssl.SSLContext | None:
+    """The phone's secure context, or None.
+
+    This never replaces the plain listener — it is an ADDITIONAL port. The XIAO
+    speaks ws:// and would need a CA bundle to do otherwise, and localhost is
+    already a secure context without any of this. Only the phone, reaching the
+    laptop by LAN IP, has no other way to get at getUserMedia.
+    """
+    if not settings.tls_enabled:
+        return None
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(settings.tls_cert, settings.tls_key)
+    return ctx
+
+
+class PortInUse(OSError):
+    """Which port, so the advice names the one that is actually taken."""
+
+    def __init__(self, port: int):
+        super().__init__(errno.EADDRINUSE, "address already in use")
+        self.port = port
+
+
 async def amain(settings: Settings) -> None:
-    if not port_is_free(settings.ws_host, settings.ws_port):
-        raise OSError(errno.EADDRINUSE, "address already in use")
+    ports = [settings.ws_port]
+    if settings.tls_enabled:
+        ports.append(settings.tls_listen_port)
+    for port in ports:
+        if not port_is_free(settings.ws_host, port):
+            raise PortInUse(port)
     db, llm, transcriber, speaker, semantic, vision_llm = build_shared(settings)
 
     cameras = CameraHub()
@@ -187,19 +223,25 @@ async def amain(settings: Settings) -> None:
             log.info("disconnected: %s", path)
 
     # 16 MiB: a high-quality JPEG frame easily exceeds the 1 MiB default
-    async with serve(
-        handler,
-        settings.ws_host,
-        settings.ws_port,
+    common = dict(
         max_size=16 * 1024 * 1024,
         process_request=serve_static,
         ping_interval=20,
         ping_timeout=120,
-    ):
+    )
+    tls = tls_context(settings)
+    async with AsyncExitStack() as stack:
+        await stack.enter_async_context(
+            serve(handler, settings.ws_host, settings.ws_port, **common)
+        )
+        if tls is not None:
+            # Same handler, same CameraHub: a phone on the TLS port and a XIAO
+            # on the plain one are both just cameras to the voice session.
+            await stack.enter_async_context(
+                serve(handler, settings.ws_host, settings.tls_listen_port,
+                      ssl=tls, **common)
+            )
         mode = "ECHO (no XAI_API_KEY: canned hints, no API calls)" if settings.echo_mode else "LIVE"
-        # flush: redirected to a log file this banner would otherwise sit in the
-        # buffer, and it is the one thing the operator is waiting to read.
-        say = lambda line: print(line, flush=True)  # noqa: E731
         say(f"Visual Socratic Tutor server on ws://{settings.ws_host}:{settings.ws_port} [{mode}]")
         say(f"  hands-free browser client: http://localhost:{settings.ws_port}/")
         # Say where the tutor's voice will come out, before anyone waits for it.
@@ -215,17 +257,26 @@ async def amain(settings: Settings) -> None:
         # The board needs a routable address, not localhost.
         from tutor.scripts.live_demo import lan_ip
 
-        say(f"  camera device (XIAO): ws://{lan_ip()}:{settings.ws_port}/camera")
+        ip = lan_ip()
+        say(f"  camera device (XIAO): ws://{ip}:{settings.ws_port}/camera")
+        if tls is not None:
+            say(f"  phone camera: https://{ip}:{settings.tls_listen_port}/phone")
+            say("         (self-signed: accept the warning once, then allow the camera)")
+        else:
+            # Say it here rather than let the phone fail with a blank screen.
+            say("  phone camera: off (no TLS_CERT/TLS_KEY in .env)")
+            say("         python -m tutor.scripts.make_cert   (getUserMedia needs HTTPS)")
         await asyncio.Future()
 
 
-def port_in_use_help(settings: Settings) -> str:
+def port_in_use_help(settings: Settings, port: int | None = None) -> str:
     """The commonest restart mistake: the previous server is still running."""
+    port = port or settings.ws_port
     return "\n".join(
         [
-            f"포트 {settings.ws_port}이(가) 이미 사용 중입니다 — 이전 서버가 아직 떠 있어요.",
+            f"포트 {port}이(가) 이미 사용 중입니다 — 이전 서버가 아직 떠 있어요.",
             "",
-            f"  누가 쓰는지 확인:  ss -ltnp | grep {settings.ws_port}",
+            f"  누가 쓰는지 확인:  ss -ltnp | grep {port}",
             "  이전 서버 종료:    pkill -f 'python server.py'",
             f"  또는 다른 포트로:  WS_PORT={settings.ws_port + 1} python server.py",
         ]
@@ -233,6 +284,7 @@ def port_in_use_help(settings: Settings) -> str:
 
 
 def main(settings: Settings) -> None:
+    soften_stdout()  # the banner must never be the reason the server fails to start
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s"
     )
@@ -244,5 +296,5 @@ def main(settings: Settings) -> None:
         # a traceback here says nothing an operator can act on
         if e.errno != errno.EADDRINUSE:
             raise
-        print(port_in_use_help(settings), file=sys.stderr, flush=True)
+        say(port_in_use_help(settings, getattr(e, "port", None)), sys.stderr)
         raise SystemExit(1) from None

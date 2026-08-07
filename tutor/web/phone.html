@@ -1,0 +1,370 @@
+<!doctype html>
+<!--
+  The phone as the tutor's eye — a drop-in replacement for the XIAO board.
+
+  Same socket (/camera), same binary framing, same passive contract: say hello,
+  then wait. On capture_request, grab whatever the preview is pointing at right
+  now and send one JPEG. That is the whole device.
+
+    시작 → getUserMedia(rear camera) + ws /camera
+    server: capture_request  →  <video> → <canvas> → JPEG → IMAGE frame
+
+  Nothing here starts a turn. The student talks to the LAPTOP (mic, speaker,
+  http://localhost:8765/); when they ask for a hint or ask whether their work is
+  right, the server issues a capture_request and this page answers. So the
+  pedagogy never learns whether the eye is a board or a phone.
+
+  THE LENS IS THE FOCUS FIX, and it is not a choice the student should have to
+  make. A four-camera phone exposes all of them and only some can focus on paper
+  held close; `facingMode: environment` hands out whichever the browser calls
+  the default rear camera, which here could not. So the page picks the
+  lowest-numbered rear camera by label — "camera2 0, facing back" — which is the
+  main lens on Android, and the one that focuses at worksheet distance.
+
+  HTTPS IS REQUIRED. getUserMedia only exists in a secure context, and
+  http://<lan-ip>:8765 is not one — navigator.mediaDevices is undefined there.
+  Run `python -m tutor.scripts.make_cert` and open the TLS port instead.
+-->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Visual Socratic Tutor — 카메라</title>
+<style>
+  :root {
+    --bg:#0f1117; --panel:#181b24; --line:#2a2f3c; --text:#e8eaf0; --dim:#8b90a0;
+    --ok:#4ecf8a; --warn:#ff7a6b; --shot:#4e9af1;
+  }
+  * { box-sizing:border-box; }
+  html, body { height:100%; }
+  body {
+    margin:0; background:var(--bg); color:var(--text);
+    font:16px/1.6 system-ui, sans-serif;
+    display:flex; flex-direction:column;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right)
+            env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  header { padding:.8rem 1rem .4rem; text-align:center; }
+  h1 { font-size:1rem; font-weight:600; margin:0; }
+  #status { color:var(--dim); font-size:.85rem; min-height:1.5em; }
+  #status.ok   { color:var(--ok); }
+  #status.warn { color:var(--warn); }
+
+  #stage {
+    position:relative; flex:1; margin:.5rem 1rem 0;
+    border:1px solid var(--line); border-radius:14px; overflow:hidden;
+    background:#000; display:flex; align-items:center; justify-content:center;
+  }
+  /* contain, never cover. The frame the student sees has to BE the frame that
+     gets sent: cover crops the stream to the middle of a portrait box and
+     scales it up, which looks both zoomed in and out of focus while the actual
+     photo is neither. Letterboxing is the honest option. */
+  video { width:100%; height:100%; object-fit:contain; display:block; }
+  #placeholder { color:var(--dim); font-size:.9rem; text-align:center; padding:2rem; }
+
+  /* the shutter: the student has to know the tutor just looked */
+  #flash {
+    position:absolute; inset:0; background:#fff; opacity:0; pointer-events:none;
+  }
+  #flash.fire { animation:flash .45s ease-out; }
+  @keyframes flash { 0% { opacity:.85; } 100% { opacity:0; } }
+
+  /* where they tapped to focus */
+  #reticle {
+    position:absolute; width:4.5rem; height:4.5rem; margin:-2.25rem 0 0 -2.25rem;
+    border:2px solid var(--ok); border-radius:8px; opacity:0; pointer-events:none;
+  }
+  #reticle.fire { animation:reticle 1s ease-out; }
+  @keyframes reticle { 0% { opacity:1; transform:scale(1.3); } 100% { opacity:0; } }
+
+  #shots {
+    position:absolute; left:.6rem; bottom:.6rem; padding:.25rem .6rem;
+    border-radius:999px; background:rgba(15,17,23,.75); color:var(--dim);
+    font-size:.75rem;
+  }
+  #live {
+    position:absolute; right:.6rem; top:.6rem; padding:.25rem .6rem;
+    border-radius:999px; background:rgba(15,17,23,.75);
+    font-size:.75rem; color:var(--dim);
+  }
+  #live.on { color:var(--ok); }
+
+  footer { padding:1rem; }
+  button {
+    width:100%; padding:1rem; border:none; border-radius:12px;
+    background:var(--shot); color:#fff; font:600 1rem system-ui; cursor:pointer;
+  }
+  button:disabled { background:#2e3442; color:var(--dim); cursor:default; }
+  .hint { color:var(--dim); font-size:.8rem; text-align:center; margin-top:.7rem; }
+  #diag { color:var(--dim); font-size:.7rem; text-align:center; margin-top:.4rem; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>튜터의 눈</h1>
+    <div id="status">시작을 누르면 카메라가 켜지고 튜터와 연결됩니다.</div>
+  </header>
+
+  <div id="stage">
+    <div id="placeholder">문제와 지금까지 쓴 풀이가<br>한 화면에 들어오게 비춰 주세요.</div>
+    <video id="preview" autoplay playsinline muted hidden></video>
+    <div id="reticle"></div>
+    <div id="flash"></div>
+    <div id="live">연결 안 됨</div>
+    <div id="shots" hidden></div>
+  </div>
+
+  <footer>
+    <button id="go">시작</button>
+    <div class="hint" id="tip">말은 노트북에 대고 하세요. 사진은 튜터가 필요할 때 알아서 찍습니다.</div>
+    <div id="diag"></div>
+  </footer>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const setStatus = (msg, kind = "") => { $("status").textContent = msg; $("status").className = kind; };
+
+const IMAGE_FRAME = 0x01;
+const JPEG_QUALITY = 0.9;
+
+const SIZE = {
+  // Detail, because the handwriting has to survive the VLM.
+  width: { ideal: 2560 },
+  // A wider frame, asked for softly. `ideal` lets the browser use a native 16:9
+  // mode if the camera has one and quietly ignore this if it does not — naming
+  // a height instead would PIN the ratio and crop the sensor to fake it, which
+  // is what cut the sides off the page.
+  aspectRatio: { ideal: 16 / 9 },
+};
+
+let ws = null;
+let stream = null;
+let track = null;
+let shots = 0;
+
+// --- the project's binary framing (same 15 lines as index.html) -------------
+function encodeFrame(type, header, payload) {
+  const head = new TextEncoder().encode(JSON.stringify(header));
+  const out = new Uint8Array(5 + head.length + payload.length);
+  new DataView(out.buffer).setUint32(1, head.length, false);  // big endian
+  out[0] = type;
+  out.set(head, 5);
+  out.set(payload, 5 + head.length);
+  return out;
+}
+
+const sendEvent = (event, data = {}) => {
+  if (ws && ws.readyState === WebSocket.OPEN)
+    ws.send(JSON.stringify({ type: "EVENT", event, data, ts: Date.now() }));
+};
+
+const caps = () => (track && track.getCapabilities ? track.getCapabilities() : {});
+
+// --- 1. the camera ---------------------------------------------------------
+const REAR = /back|rear|environment|후면/i;
+
+function lensIndex(label) {
+  // Android labels read "camera2 0, facing back" — the number before the comma
+  // is the camera index. parseInt() on the whole string reads NaN (it starts
+  // with a letter), and the "2" in "camera2" is not the index either.
+  const match = /(\d+)\s*,/.exec(label) || /(\d+)(?!.*\d)/.exec(label);
+  return match ? parseInt(match[1], 10) : 99;
+}
+
+function rearLensId(cams) {
+  // "camera2 0, facing back" — the lowest-numbered rear camera is the main lens
+  // on Android, and the only one here that focuses at worksheet distance.
+  // Not videoinput[0]: that index is the selfie camera on this phone.
+  const rear = cams
+    .filter((c) => REAR.test(c.label || ""))
+    .sort((a, b) => lensIndex(a.label) - lensIndex(b.label));
+  return rear.length ? rear[0].deviceId : null;
+}
+
+async function open(video) {
+  if (stream) stream.getTracks().forEach((t) => t.stop());   // one camera at a time
+  stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
+  track = stream.getVideoTracks()[0];
+}
+
+async function startCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    // The single most likely failure, and it is silent otherwise: on plain HTTP
+    // over a LAN IP the API does not exist at all.
+    setStatus(
+      "이 주소에서는 카메라를 열 수 없습니다. https:// 주소로 다시 열어 주세요 " +
+      "(python -m tutor.scripts.make_cert 로 인증서 생성).", "warn");
+    return false;
+  }
+  try {
+    // Permission first: labels and deviceIds stay hidden until it is granted,
+    // so the right lens cannot be identified before this call.
+    await open({ facingMode: { ideal: "environment" }, ...SIZE });
+    const cams = (await navigator.mediaDevices.enumerateDevices().catch(() => []))
+      .filter((d) => d.kind === "videoinput");
+    const wanted = rearLensId(cams);
+    if (wanted && wanted !== track.getSettings().deviceId) {
+      try {
+        await open({ deviceId: { exact: wanted }, ...SIZE });
+      } catch (e) {
+        await open({ facingMode: { ideal: "environment" }, ...SIZE });  // stay usable
+      }
+    }
+  } catch (e) {
+    setStatus("카메라 권한이 필요합니다: " + e.message, "warn");
+    return false;
+  }
+
+  const video = $("preview");
+  video.srcObject = stream;
+  await video.play().catch(() => {});          // playsinline + muted: iOS allows it
+  video.hidden = false;
+  $("placeholder").hidden = true;
+  await applyAutofocus();
+  showDiagnostics();
+  keepAwake();
+  return true;
+}
+
+async function applyAutofocus() {
+  // Advanced constraints are silently dropped inside getUserMedia; they only
+  // take effect through applyConstraints on the live track.
+  const c = caps();
+  if (!c.focusMode || !c.focusMode.includes("continuous")) return;
+  try {
+    await track.applyConstraints({ advanced: [{ focusMode: "continuous" }] });
+  } catch (e) { /* the phone keeps whatever it was already doing */ }
+}
+
+async function focusAt(nx, ny) {
+  // Continuous AF often locks onto the desk rather than the page; this is how
+  // the student says "here".
+  const c = caps();
+  const advanced = [];
+  // normalized, and a tap on the letterbox must not send the camera a point
+  // outside the frame
+  const clamp = (v) => Math.min(1, Math.max(0, v));
+  if (c.pointsOfInterest)
+    advanced.push({ pointsOfInterest: [{ x: clamp(nx), y: clamp(ny) }] });
+  if (c.focusMode && c.focusMode.includes("single-shot")) advanced.push({ focusMode: "single-shot" });
+  else if (c.focusMode && c.focusMode.includes("continuous")) advanced.push({ focusMode: "continuous" });
+  if (!advanced.length) {
+    setStatus("이 브라우저는 탭 초점을 지원하지 않아요. 20cm쯤 띄우고 잠깐 멈춰 보세요.");
+    return;
+  }
+  try {
+    await track.applyConstraints({ advanced });
+    setStatus("그 지점에 초점을 맞췄어요.", "ok");
+  } catch (e) {
+    setStatus("초점 조정을 적용하지 못했어요.", "warn");
+  }
+}
+
+function showDiagnostics() {
+  // What the phone actually handed over, so "안 맞는다"는 말이 추측이 되지 않게.
+  const s = track.getSettings ? track.getSettings() : {};
+  const c = caps();
+  $("diag").textContent = [
+    (track.label || "camera").slice(0, 26),
+    `${s.width || "?"}×${s.height || "?"}`,
+    c.focusMode ? `AF:${s.focusMode || c.focusMode.join("/")}` : "AF:제어불가",
+  ].join(" · ");
+}
+
+async function keepAwake() {
+  // A screen that sleeps mid-lesson answers capture_request with a black frame.
+  try { await navigator.wakeLock.request("screen"); } catch (e) { /* optional */ }
+}
+
+// --- 2. one frame, on demand ----------------------------------------------
+function grabJpeg() {
+  const video = $("preview");
+  if (!video.videoWidth) return null;          // preview not running yet
+  const canvas = document.createElement("canvas");
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext("2d").drawImage(video, 0, 0);
+  return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", JPEG_QUALITY));
+}
+
+async function onCaptureRequest(captureId) {
+  const blob = await grabJpeg();
+  if (!blob) {                                 // the server falls back gracefully
+    sendEvent("capture_failed", { capture_id: captureId });
+    return;
+  }
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const video = $("preview");
+  ws.send(encodeFrame(IMAGE_FRAME, {
+    capture_id: captureId, format: "jpeg",
+    width: video.videoWidth, height: video.videoHeight,
+  }, bytes));
+
+  shots += 1;
+  $("flash").classList.remove("fire");
+  void $("flash").offsetWidth;                 // restart the animation
+  $("flash").classList.add("fire");
+  $("shots").hidden = false;
+  $("shots").textContent =
+    `튜터가 ${shots}번 봤어요 · ${video.videoWidth}×${video.videoHeight} · ` +
+    `${Math.round(bytes.length / 1024)} KB`;
+  setStatus("튜터가 지금 문제를 보고 있어요.", "ok");
+}
+
+// --- 3. the socket ---------------------------------------------------------
+function connect() {
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${scheme}://${location.host}/camera`);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () =>
+    sendEvent("hello", { device_id: "phone", proto: 1, caps: ["camera"] });
+  ws.onclose = () => {
+    setLive(false);
+    setStatus("연결이 끊어졌습니다 — 새로고침 해주세요.", "warn");
+  };
+  ws.onerror = () => setStatus("서버에 연결할 수 없습니다. 같은 Wi-Fi인지 확인해 주세요.", "warn");
+  ws.onmessage = (e) => {
+    if (typeof e.data !== "string") return;    // a camera receives events only
+    const msg = JSON.parse(e.data);
+    if (msg.event === "hello_ack") {
+      setLive(true);
+      setStatus("준비됐어요. 노트북에 대고 말하면 됩니다.", "ok");
+    } else if (msg.event === "capture_request") {
+      onCaptureRequest((msg.data || {}).capture_id);
+    }
+  };
+}
+
+function setLive(on) {
+  $("live").className = on ? "on" : "";
+  $("live").textContent = on ? "튜터와 연결됨" : "연결 안 됨";
+}
+
+// --- 4. 시작 ---------------------------------------------------------------
+$("go").addEventListener("click", async () => {
+  $("go").disabled = true;
+  setStatus("카메라를 켜는 중…");
+  if (!(await startCamera())) {
+    $("go").disabled = false;                  // let them retry after granting
+    return;
+  }
+  $("tip").textContent = "초점이 안 맞으면 화면을 탭하세요. 말은 노트북에 대고 하세요.";
+  setStatus("튜터에 연결하는 중…");
+  connect();
+  $("go").textContent = "카메라 켜짐";
+});
+
+$("stage").addEventListener("click", (e) => {
+  if (!track) return;
+  const box = $("stage").getBoundingClientRect();
+  const reticle = $("reticle");
+  reticle.style.left = `${e.clientX - box.left}px`;
+  reticle.style.top = `${e.clientY - box.top}px`;
+  reticle.classList.remove("fire");
+  void reticle.offsetWidth;
+  reticle.classList.add("fire");
+  focusAt((e.clientX - box.left) / box.width, (e.clientY - box.top) / box.height);
+});
+</script>
+</body>
+</html>

@@ -27,6 +27,9 @@ sim = ["pillow>=10"]
 # Optional on purpose — the tutor's default vision path needs nothing extra.
 vision-gemini = ["google-genai>=1.0"]
 mic = ["sounddevice>=0.4"]
+# phone camera page: getUserMedia needs a secure context, so the LAN needs a
+# certificate (tutor/scripts/make_cert.py). openssl works too, if it is on PATH.
+phone = ["cryptography>=42"]
 # server-side VAD: needed by the browser client (tutor/server/browser.py)
 vad = ["silero-vad>=5.1"]
 # hands-free laptop mic device (simulator/voice_device.py): Silero VAD + capture
