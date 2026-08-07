@@ -1,7 +1,7 @@
 """Text-to-speech via the xAI /v1/tts endpoint (JSON, no model name).
 
 ``speak()`` plays on the machine running the server (ffplay) — right for the
-XIAO setup, where laptop and student share a room. ``synthesize()`` returns the
+local-mic setup, where laptop and student share a room. ``synthesize()`` returns
 same audio instead, for devices that own the speaker: the browser client gets
 the bytes over its WebSocket and plays them itself (so nothing is played on an
 SSH host nobody is sitting at). Speakers with no audio return None.

@@ -1,4 +1,4 @@
-"""Device simulator: speaks the exact XIAO wire protocol over one WebSocket.
+"""Device simulator: speaks the exact device wire protocol over one WebSocket.
 
 Usage:
     python -m simulator.device_sim --server ws://localhost:8765 \

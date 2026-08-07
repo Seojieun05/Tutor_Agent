@@ -27,18 +27,18 @@ class Settings:
     # HTTPS/WSS, for the phone camera only. getUserMedia runs in a secure
     # context or not at all, and a phone reaching the laptop by LAN IP has
     # none — `navigator.mediaDevices` is simply undefined there. Off unless a
-    # cert is given, and it never replaces the plain port: the XIAO speaks ws://
-    # and localhost is already a secure context, so both keep working as they are.
+    # cert is given, and it never replaces the plain port: localhost is already
+    # a secure context, so the browser client keeps working as it is.
     tls_cert: Path | None = None
     tls_key: Path | None = None
     tls_port: int = 0  # 0 → ws_port + 1
     db_path: Path = field(default_factory=lambda: PROJECT_ROOT / "data" / "knowledge.db")
     tutor_language: str = "ko"
     recog_conf_threshold: float = 0.6
-    # A XIAO sends ~300 KB of UXGA JPEG over 2.4 GHz Wi-Fi, and it grabs two
-    # throwaway frames first so the exposure is right. Five seconds is enough
-    # on a good link and never on a busy one — and a capture that times out is
-    # indistinguishable, to the student, from a camera that cannot see the page.
+    # A phone sends a multi-megapixel JPEG over Wi-Fi after letting autofocus
+    # settle. Five seconds is enough on a good link and never on a busy one —
+    # and a capture that times out is indistinguishable, to the student, from a
+    # camera that cannot see the page.
     capture_timeout_s: float = 15.0
     # Where to drop every received frame, for when the tutor says it cannot read
     # the worksheet and you want to know what it was actually looking at.

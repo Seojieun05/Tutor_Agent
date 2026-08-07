@@ -35,7 +35,7 @@ def env(monkeypatch, tmp_path):
 
 class TestSettings:
     def test_capture_timeout_is_readable_from_the_environment(self, env, monkeypatch):
-        # It was hardcoded at 5.0, which is under the time a XIAO needs to push
+        # It was hardcoded at 5.0, which is under the time a phone needs to push
         # a UXGA frame over a busy 2.4 GHz link — and unreachable to the operator.
         monkeypatch.setenv("CAPTURE_TIMEOUT_S", "25")
         assert load_settings(env).capture_timeout_s == 25.0

@@ -1,7 +1,7 @@
-"""Running the server on the laptop, with a XIAO on the same Wi-Fi.
+"""Running the server on the laptop, with a phone on the same Wi-Fi.
 
-The demo topology: server.py on the laptop, the browser page on localhost,
-the board connecting to the laptop's LAN IP. Nothing here may require the
+The demo topology: server.py on the laptop, the browser page on localhost, the
+phone reaching the laptop's LAN IP over TLS. Nothing here may require the
 optional RAG stack — a laptop should not need a 2 GB torch download to start.
 """
 
@@ -65,23 +65,15 @@ class TestSemanticIsOptional:
         assert result.tier == Tier.NEW  # falls through, does not raise
 
 
-class TestFirmwareSettings:
-    """The preflight has to hand over settings you can paste into the sketch."""
+class TestPreflight:
+    """The preflight has to hand over an address the phone can actually reach."""
 
     def test_it_reports_a_reachable_address(self):
         from tutor.scripts.live_demo import lan_ip
 
         ip = lan_ip()
         assert ip.count(".") == 3
-        assert not ip.startswith("127.")  # the board cannot reach loopback
-
-    def test_the_sketch_block_matches_the_running_port(self):
-        from tutor.config import Settings
-        from tutor.scripts.live_demo import firmware_settings
-
-        block = firmware_settings(Settings(ws_port=8765))
-        assert "#define SERVER_PORT   8765" in block
-        assert "SERVER_HOST" in block and "/camera" not in block  # host, not path
+        assert not ip.startswith("127.")  # the phone cannot reach loopback
 
 
 class TestConsoleEncoding:
@@ -110,10 +102,10 @@ class TestConsoleEncoding:
         from tutor.console import say
 
         raw, console = self._cp949_console()
-        say("  camera device (XIAO): ws://10.0.0.2:8765/camera", console)
+        say("  camera device: ws://10.0.0.2:8765/camera", console)
         console.flush()
         assert raw.getvalue().decode("cp949").strip() == (
-            "camera device (XIAO): ws://10.0.0.2:8765/camera"
+            "camera device: ws://10.0.0.2:8765/camera"
         )
 
     def test_softening_a_stream_that_cannot_be_reconfigured_is_harmless(self):
@@ -133,7 +125,7 @@ class TestPhoneCamera:
         assert (WEB_DIR / STATIC["/phone"][0]).exists()
 
     def test_the_page_connects_to_the_camera_socket(self):
-        """Not /browser: the phone has no session, it is borrowed like the board."""
+        """Not /browser: the phone has no session of its own, it is borrowed."""
         from tutor.server.app import STATIC, WEB_DIR
 
         page = (WEB_DIR / STATIC["/phone"][0]).read_text(encoding="utf-8")
@@ -257,7 +249,7 @@ class TestPhoneCamera:
         assert tls_context(settings) is not None
 
     def test_the_server_decodes_what_the_page_writes(self):
-        """The page builds frames by hand in JS, as the board does in C.
+        """The page builds its frames by hand in JavaScript.
 
         These bytes came out of encodeFrame() in a real browser running
         tutor/web/phone.html; kept here so a change to the framing breaks loudly

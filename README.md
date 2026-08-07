@@ -6,7 +6,7 @@ necessary Socratic hint — never the answer** — through the laptop speaker.
 Spec: [CLAUDE.md](CLAUDE.md).
 
 ```text
-XIAO camera / phone camera (ws /camera) ─┐
+Phone camera (wss /camera) ───────────────┐
 Device (laptop mic · browser) → WebSocket → server.py
   → Silero VAD turn detection (hands-free) → STT
   → utterance intent (hint request / work check / answer / stay quiet)
@@ -114,7 +114,7 @@ on `capture_request`; without one the tutor asks to see the problem.
 
 Here the mic is just another device on the existing wire protocol: VAD runs
 client-side and TTS plays on the machine running the server, so both must be
-the same room (the XIAO setup). `--list-devices` lists microphones,
+the same room. `--list-devices` lists microphones,
 `--input-device` selects one, `--images` replays a worksheet.
 
 ## What the student says, and what the tutor does about it
@@ -157,27 +157,26 @@ a hint request, because the camera has to see the page first either way.
 Ambiguous phrasings the keyword rules miss go to one small no-tools LLM call;
 `AnswerEvaluator` can also redirect a mis-routed answer to a work check.
 
-## XIAO camera
+## Phone camera
 
-The board is the eyes only — mic and speaker stay on the laptop, where the
-sound comes out. It connects to `ws://<laptop>:8765/camera` and answers each
-`capture_request` with one JPEG; the voice session borrows it whenever it has
-no camera of its own. Flashing, wiring and network notes:
-[firmware/README.md](firmware/README.md).
+The phone is the eyes only — mic and speaker stay on the laptop, where the sound
+comes out. It connects to `wss://<laptop>:8766/camera` and answers each
+`capture_request` with one JPEG; the voice session borrows it whenever it has no
+camera of its own. It says hello and waits, and never starts a turn, so the
+pedagogy needs to know nothing about the camera at all.
 
-Running the server on the laptop (the demo setup — no tunnel, sound just works):
+Before a demo:
 
 ```bash
 python -m tutor.scripts.live_demo
 ```
 
-prints what is missing plus the sketch's `SERVER_HOST` / `SERVER_PORT` with
-this machine's LAN IP filled in, and the firewall rule the board needs. On
-Windows use `.venv\Scripts\python` in place of `.venv/bin/python`, and skip the
-`[rag]` extra unless you want semantic retrieval — the tutor runs without it
-(that extra pulls torch).
+prints what is missing, this machine's LAN IP, and the firewall rule the phone
+needs. On Windows use `.venv\Scripts\python` in place of `.venv/bin/python`, and
+skip the `[rag]` extra unless you want semantic retrieval — the tutor runs
+without it (that extra pulls torch).
 
-Try the pairing without hardware:
+Try the pairing without a phone:
 
 ```bash
 .venv/bin/python -m simulator.camera_device --server ws://localhost:8765 --images simulator/assets/lin_001_wrong_sign.jpg
@@ -189,16 +188,9 @@ If the tutor keeps saying it cannot see the worksheet, stop the server and run
 .venv/bin/python -m tutor.scripts.camera_check
 ```
 
-which asks the board for one photo, saves it, and sends that photo to the VLM —
+which asks the camera for one photo, saves it, and sends that photo to the VLM —
 so you can tell "no frame arrived" from "the frame was unreadable" instead of
-guessing. See [firmware/README.md](firmware/README.md#6-카메라에-다시-보여-줄래요-and-nothing-else).
-
-## Phone camera
-
-The phone is a **drop-in replacement for the XIAO**: same `/camera` socket, same
-framing, same passive contract. It says hello and waits; on `capture_request` it
-grabs whatever the preview is pointing at and sends one JPEG. Nothing about the
-pedagogy knows whether the eye is a board or a phone. Voice stays on the laptop.
+guessing.
 
 `getUserMedia` only exists in a **secure context**, and `http://<lan-ip>:8765` is
 not one — `navigator.mediaDevices` is undefined there, so the page can never work
@@ -209,9 +201,8 @@ over the plain port. Mint a certificate for this machine's LAN address:
 ```
 
 Add the two `TLS_CERT` / `TLS_KEY` lines it prints to `.env` and restart. The
-plain port is untouched — the XIAO keeps speaking `ws://` and `localhost` is
-already secure — so this only *adds* a listener on `TLS_PORT` (default
-`WS_PORT + 1`):
+plain port is untouched — `localhost` is already a secure context — so this
+only *adds* a listener on `TLS_PORT` (default `WS_PORT + 1`):
 
 1. laptop: <http://localhost:8765/> → press 시작 (mic + speaker)
 2. phone, same Wi-Fi: `https://<lan-ip>:8766/phone` → accept the certificate
@@ -313,8 +304,5 @@ browser client.
 
 ## Later
 
-- XIAO ESP32S3 Sense firmware (the simulator speaks the exact wire protocol
-  the firmware will use: JPEG on `capture_request`, 16 kHz/16-bit mono PCM
-  push-to-talk, JSON events).
 - Mathpix fallback if Grok recognition proves insufficient.
 - Proactive stuck detection ("힌트 필요해요?") and richer fading.

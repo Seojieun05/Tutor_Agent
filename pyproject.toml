@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tutor"
 version = "0.1.0"
-description = "Visual Socratic Tutor - voice math tutor server (XIAO ESP32S3 Sense camera/mic + Grok)"
+description = "Visual Socratic Tutor - voice math tutor server (phone camera + laptop mic + Grok)"
 requires-python = ">=3.11"
 dependencies = [
     "websockets>=12",

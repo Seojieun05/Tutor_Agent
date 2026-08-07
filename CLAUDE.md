@@ -2,12 +2,12 @@
 
 ## Goal
 
-Voice tutor using XIAO ESP32S3 Sense camera/mic. Observe math problem + student work, detect where the student is stuck, and give the **minimum necessary Socratic hint instead of the answer**.
+Voice tutor: a phone camera watches the page, the laptop listens and speaks. Observe math problem + student work, detect where the student is stuck, and give the **minimum necessary Socratic hint instead of the answer**.
 
 ## Architecture
 
 ```text
-XIAO Camera/Mic
+Phone Camera (browser page)
   → Wi-Fi/WebSocket
   → Laptop Server
     → STT
@@ -113,7 +113,7 @@ Capture a high-quality frame on hint/problem requests; cache recognized problem 
 
 ## MVP
 
-1. XIAO camera/mic → server
+1. Phone camera → server
 2. Grok VLM recognition
 3. Domain DB retrieval
 4. Grok Solver fallback

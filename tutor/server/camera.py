@@ -1,10 +1,10 @@
 """Camera devices as their own connection, shared with the voice session.
 
-The XIAO ESP32S3 Sense is the eyes; the laptop (browser page or local mic) is
+The phone is the eyes; the laptop (browser page or local mic) is
 the ears and the mouth. They are two WebSockets, so a hint request arriving on
 the voice session has to be able to reach the camera sitting on the other one:
 
-    XIAO  ──ws /camera──►  CameraHub  ◄──borrowed by──  Session (/browser, /)
+    phone ──ws /camera──►  CameraHub  ◄──borrowed by──  Session (/browser, /)
 
 A camera connection is passive. It says hello, then waits: on capture_request
 it answers with one IMAGE frame (or capture_failed). It never drives the tutor,

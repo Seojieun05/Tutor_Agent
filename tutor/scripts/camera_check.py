@@ -1,4 +1,4 @@
-"""Ask the XIAO for one photo and say exactly what came back.
+"""Ask the camera for one photo and say exactly what came back.
 
 The tutor answering "카메라에 다시 보여 줄래요?" forever has two completely
 different causes that look identical from the outside:
@@ -75,7 +75,7 @@ async def one_capture(hub: CameraHub, timeout: float, index: int, budget: float)
         return None
 
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
-    path = SAVE_DIR / f"xiao-{int(time.time())}-{index}.jpg"
+    path = SAVE_DIR / f"camera-{int(time.time())}-{index}.jpg"
     path.write_bytes(jpeg)
     rate = len(jpeg) / 1024 / max(elapsed / 1000, 1e-6)
     print(f"[{index}] ✓ {len(jpeg):,} bytes · {describe_jpeg(jpeg)} · "
@@ -164,7 +164,7 @@ async def amain(args) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="XIAO 카메라 한 장 받아보기")
+    parser = argparse.ArgumentParser(description="카메라 사진 한 장 받아보기")
     parser.add_argument("--port", type=int, default=load_settings().ws_port)
     parser.add_argument("--timeout", type=float, default=30.0,
                         help="한 장을 기다리는 시간(초). 서버 기본값은 5초입니다")

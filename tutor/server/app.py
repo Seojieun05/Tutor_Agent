@@ -2,9 +2,9 @@
 
 Two device kinds share the port (and, over SSH, a single forwarded tunnel):
 
-    ws://host:8765/          XIAO (or simulator): VAD on the device
+    ws://host:8765/          local-mic device (or simulator): VAD on the device
     ws://host:8765/browser   browser: VAD on the server (BrowserSession)
-    ws://host:8765/camera    a camera device: XIAO, or a phone running /phone
+    ws://host:8765/camera    a camera device: a phone running /phone
     http://host:8765/        the browser client page + its AudioWorklet
     https://host:8766/phone  the phone camera page — TLS only, see tls_context()
 """
@@ -168,10 +168,9 @@ def port_is_free(host: str, port: int) -> bool:
 def tls_context(settings: Settings) -> ssl.SSLContext | None:
     """The phone's secure context, or None.
 
-    This never replaces the plain listener — it is an ADDITIONAL port. The XIAO
-    speaks ws:// and would need a CA bundle to do otherwise, and localhost is
-    already a secure context without any of this. Only the phone, reaching the
-    laptop by LAN IP, has no other way to get at getUserMedia.
+    This never replaces the plain listener — it is an ADDITIONAL port, because
+    localhost is already a secure context without any of this. Only the phone,
+    reaching the laptop by LAN IP, has no other way to get at getUserMedia.
     """
     if not settings.tls_enabled:
         return None
@@ -202,7 +201,7 @@ async def amain(settings: Settings) -> None:
     async def handler(ws):
         path = ws.request.path.split("?", 1)[0]
         if path.rstrip("/") == "/camera":
-            # A camera device (XIAO) has no session of its own: it is an eye
+            # A camera device has no session of its own: it is an eye
             # that voice sessions borrow. See tutor/server/camera.py.
             await CameraConnection(ws, cameras).run()
             return
@@ -235,8 +234,8 @@ async def amain(settings: Settings) -> None:
             serve(handler, settings.ws_host, settings.ws_port, **common)
         )
         if tls is not None:
-            # Same handler, same CameraHub: a phone on the TLS port and a XIAO
-            # on the plain one are both just cameras to the voice session.
+            # Same handler, same CameraHub: a camera on the TLS port and one on
+            # the plain port are both just eyes to the voice session.
             await stack.enter_async_context(
                 serve(handler, settings.ws_host, settings.tls_listen_port,
                       ssl=tls, **common)
@@ -258,7 +257,7 @@ async def amain(settings: Settings) -> None:
         from tutor.scripts.live_demo import lan_ip
 
         ip = lan_ip()
-        say(f"  camera device (XIAO): ws://{ip}:{settings.ws_port}/camera")
+        say(f"  camera device: ws://{ip}:{settings.ws_port}/camera")
         if tls is not None:
             say(f"  phone camera: https://{ip}:{settings.tls_listen_port}/phone")
             say("         (self-signed: accept the warning once, then allow the camera)")

@@ -1,11 +1,11 @@
-"""Preflight for a live demo: what is missing, and what to paste into the XIAO.
+"""Preflight for a live demo: what is missing, and how the phone reaches this box.
 
     python -m tutor.scripts.live_demo
 
 Run it on the machine that will run server.py. It checks the pieces that
-silently degrade (API key, pedagogy, audio, embedding index) and prints the
-firmware settings block with this machine's LAN address already filled in —
-the number that is otherwise guessed wrong more than anything else.
+silently degrade (API key, pedagogy, audio, embedding index) and prints this
+machine's LAN address — the number that is otherwise guessed wrong more than
+anything else.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ def lan_ip() -> str:
     """The address other devices on the Wi-Fi can reach.
 
     Opening a UDP socket to a public address sends nothing — it just makes the
-    OS pick the outbound interface, which is the one the board will use.
+    OS pick the outbound interface, which is the one the phone will use.
     """
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         try:
@@ -35,20 +35,8 @@ def lan_ip() -> str:
             return socket.gethostbyname(socket.gethostname())
 
 
-def firmware_settings(settings: Settings, host: str | None = None) -> str:
-    """The block to paste into firmware/tutor_xiao_camera/tutor_xiao_camera.ino."""
-    return "\n".join(
-        [
-            '#define WIFI_SSID     "<2.4GHz SSID>"   // ESP32-S3 has no 5 GHz radio',
-            '#define WIFI_PASSWORD "<password>"',
-            f'#define SERVER_HOST   "{host or lan_ip()}"',
-            f"#define SERVER_PORT   {settings.ws_port}",
-        ]
-    )
-
-
 def firewall_hint(port: int) -> str:
-    """Inbound is blocked by default on Windows, which is where the board fails."""
+    """Inbound is blocked by default on Windows, which is where the phone fails."""
     if platform.system() == "Windows":
         return (
             "  Windows 방화벽에서 인바운드 허용 (관리자 PowerShell, 1회):\n"
@@ -118,24 +106,26 @@ def main() -> None:
         print(f"  {'OK  ' if ok else '주의'} {name:<22} {detail}")
 
     ip = lan_ip()
+    tls_port = settings.tls_listen_port
     print(f"\n서버 주소: ws://{ip}:{settings.ws_port}  (브라우저: http://localhost:{settings.ws_port}/)")
-    print(f"\nXIAO 펌웨어에 넣을 값 — tutor_xiao_camera.ino 상단:\n")
-    for line in firmware_settings(settings, ip).splitlines():
-        print(f"    {line}")
+    if settings.tls_enabled:
+        print(f"폰 카메라: https://{ip}:{tls_port}/phone")
+    else:
+        print("폰 카메라: 꺼짐 → python -m tutor.scripts.make_cert 로 인증서를 만들고 .env에 추가")
     print(f"\n{firewall_hint(settings.ws_port)}")
     print(
-        f"  보드가 같은 Wi-Fi에 있는지 확인:  다른 기기에서  nc -vz {ip} {settings.ws_port}\n"
+        f"  폰이 같은 Wi-Fi에 있는지 확인:  폰 브라우저에서  http://{ip}:{settings.ws_port}/\n"
     )
 
     print(
         "데모 순서:\n"
         "  1. python server.py\n"
         "  2. 브라우저에서 http://localhost:%d/ 열고 시작 누르기 (마이크·스피커)\n"
-        "  3. XIAO 전원 연결 → 서버 로그에 'camera connected'\n"
-        "     (보드 없이 확인: python -m simulator.camera_device --server ws://localhost:%d "
+        "  3. 폰에서 https://%s:%d/phone 열고 시작 → 서버 로그에 'camera connected'\n"
+        "     (폰 없이 확인: python -m simulator.camera_device --server ws://localhost:%d "
         "--images simulator/assets/lin_001_wrong_sign.jpg)\n"
-        "  4. 문제를 카메라에 비추고 \"힌트 주세요\"라고 말하기\n"
-        % (settings.ws_port, settings.ws_port)
+        '  4. 문제를 카메라에 비추고 "힌트 주세요"라고 말하기\n'
+        % (settings.ws_port, ip, tls_port, settings.ws_port)
     )
 
 

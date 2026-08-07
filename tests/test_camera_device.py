@@ -1,8 +1,8 @@
 """A camera on its own socket, borrowed by the voice session.
 
-The XIAO is the eyes and the laptop is the ears: two WebSockets, one hint
-request. These tests drive the real server code with the camera simulator's
-protocol, so they cover everything except the firmware itself.
+The phone is the eyes and the laptop is the ears: two WebSockets, one hint
+request. These tests drive the real server code with the camera device's wire
+protocol, so they cover everything except the page's own JavaScript.
 """
 
 import asyncio
@@ -32,7 +32,7 @@ WORKSHEET = {
     "student_work": ["3*x = 20 + 5"],
     "confidence": 0.95,
 }
-XIAO_JPEG = b"\xff\xd8" + b"xiao" * 2048     # what the board would send
+PHONE_JPEG = b"\xff\xd8" + b"phone" * 2048    # what a camera device would send
 LOCAL_JPEG = b"\xff\xd8" + b"local" * 2048   # what the browser attached
 
 
@@ -66,9 +66,9 @@ async def tutor_server(deps):
 
 
 class FakeCamera:
-    """The firmware's half of the conversation."""
+    """The camera device's half of the conversation."""
 
-    def __init__(self, url: str, jpeg: bytes | None = XIAO_JPEG):
+    def __init__(self, url: str, jpeg: bytes | None = PHONE_JPEG):
         self.url = url + "/camera"
         self.jpeg = jpeg
         self.requests = 0
@@ -78,7 +78,7 @@ class FakeCamera:
         self._ws = await connect(self.url, max_size=16 * 1024 * 1024).__aenter__()
         self._task = asyncio.create_task(self._run())
         await self._ws.send(
-            make_event("hello", {"device_id": "xiao-1", "caps": ["camera"]})
+            make_event("hello", {"device_id": "phone", "caps": ["camera"]})
         )
         await asyncio.wait_for(self.ready.wait(), timeout=5)
         return self
@@ -147,15 +147,15 @@ class VoiceClient:
         await asyncio.wait_for(self.issued.wait(), timeout=15)
 
 
-async def test_a_cameraless_session_borrows_the_xiao(deps):
-    """The point of the whole thing: talk to the laptop, see through the board."""
+async def test_a_cameraless_session_borrows_the_phone(deps):
+    """The point of the whole thing: talk to the laptop, see through the phone."""
     async with await tutor_server(deps) as server:
         url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"
         async with FakeCamera(url) as camera, VoiceClient(url) as laptop:
             assert deps.cameras.count == 1
             await laptop.ask_for_a_hint()
 
-    assert camera.requests == 1              # the board was asked
+    assert camera.requests == 1              # the camera was asked
     assert laptop.hints[0]["level"] == 1     # and a real hint came back
     assert deps.store.get_history()[0].level == 1
 
@@ -204,61 +204,3 @@ async def test_the_newest_camera_is_asked_first(deps):
     assert (new.requests, old.requests) == (1, 0)  # the one just plugged in
 
 
-class TestFirmwareWireContract:
-    """The board builds frames by hand in C; the server must keep accepting them.
-
-    These bytes are the layout tutor_xiao_camera.ino::sendImage() writes:
-        [0x01][uint32 BE header length][JSON header][JPEG]
-    Verified once by compiling those exact C lines and decoding the output with
-    tutor.protocol.frames; kept here so a change to the framing breaks loudly
-    instead of bricking a flashed board.
-    """
-
-    @staticmethod
-    def firmware_frame(capture_id: str, jpeg: bytes, width=1600, height=1200) -> bytes:
-        header = (
-            f'{{"capture_id":"{capture_id}","format":"jpeg",'
-            f'"width":{width},"height":{height},"seq":0}}'
-        ).encode()
-        n = len(header)
-        return (
-            bytes([0x01, (n >> 24) & 0xFF, (n >> 16) & 0xFF, (n >> 8) & 0xFF, n & 0xFF])
-            + header
-            + jpeg
-        )
-
-    def test_the_server_decodes_what_the_board_writes(self):
-        from tutor.protocol.frames import ImageFrame, decode
-
-        frame = decode(self.firmware_frame("cam-7", XIAO_JPEG))
-        assert isinstance(frame, ImageFrame)
-        assert frame.header.capture_id == "cam-7"
-        assert (frame.header.width, frame.header.height) == (1600, 1200)
-        assert frame.jpeg == XIAO_JPEG
-
-    async def test_a_board_shaped_frame_serves_a_real_hint(self, deps):
-        """End to end with bytes laid out exactly as the firmware lays them."""
-
-        class RawCamera(FakeCamera):
-            async def _run(self):
-                async for raw in self._ws:
-                    if not isinstance(raw, str):
-                        continue
-                    ev = parse_event(raw)
-                    if ev.event == "hello_ack":
-                        self.ready.set()
-                    elif ev.event == "capture_request":
-                        self.requests += 1
-                        await self._ws.send(
-                            TestFirmwareWireContract.firmware_frame(
-                                ev.data["capture_id"], XIAO_JPEG
-                            )
-                        )
-
-        async with await tutor_server(deps) as server:
-            url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"
-            async with RawCamera(url) as camera, VoiceClient(url) as laptop:
-                await laptop.ask_for_a_hint()
-
-        assert camera.requests == 1
-        assert laptop.hints[0]["level"] == 1

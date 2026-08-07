@@ -100,7 +100,7 @@ class Deps:
     speaker: object  # .speak(text) -> None
     evaluator: AnswerEvaluator | None = None  # None → answers fall back to a hint request
     tagger: ConceptTagger | None = None  # None → Recognition keeps "unknown"/[]
-    cameras: object | None = None  # CameraHub: eyes on another socket (XIAO, phone)
+    cameras: object | None = None  # CameraHub: eyes on another socket (the phone)
     # what each utterance is FOR; without an LLM it still routes by rule
     classifier: IntentClassifier = field(default_factory=IntentClassifier)
     store: SessionStore = field(default_factory=SessionStore)
@@ -276,7 +276,7 @@ class Session:
 
         The session's own device first (a simulator image, the browser's
         attached photo). If it has no camera it answers capture_failed, and a
-        XIAO connected on /camera — a different socket entirely — is asked
+        phone connected on /camera — a different socket entirely — is asked
         instead. Voice and vision can therefore live on different machines.
         """
         timeout = self.deps.settings.capture_timeout_s
@@ -304,7 +304,7 @@ class Session:
             log.warning(
                 "NO FRAME from the %s after %.0f ms (timeout %.0fs) — the worksheet was "
                 "never seen, so recognition did not run. Raise CAPTURE_TIMEOUT_S, or check "
-                "the board's serial output for the transfer time.",
+                "that the camera page is still open and connected.",
                 eye, elapsed, timeout,
             )
         return jpeg
@@ -678,7 +678,7 @@ class Session:
         return self.ctx
 
     async def _speak(self, text: str) -> None:
-        """Say it on the machine running the server (XIAO setup: same room).
+        """Say it on the machine running the server (same room as the student).
 
         BrowserSession overrides this to ship the audio to the device instead.
         """

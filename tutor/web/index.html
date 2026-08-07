@@ -8,7 +8,7 @@
 
     IN:  getUserMedia → AudioWorklet → float32 @16 kHz → int16 → 512-sample
          frames → binary AUDIO frames on ONE WebSocket (the same framing the
-         XIAO device uses, so the server code is unchanged)
+         camera device uses, so the server code is unchanged)
     OUT: turn_state / transcript / tutor_says events + a TTS_AUDIO frame with
          the tutor's speech → <audio> → "playback_done" back to the server
 

@@ -1,10 +1,10 @@
-"""Stand-in for the XIAO camera: same wire protocol, no hardware.
+"""Stand-in for the phone camera: same wire protocol, no phone.
 
     python -m simulator.camera_device --server ws://localhost:8765 \
         --images simulator/assets/lin_001_wrong_sign.jpg
 
 Connects to /camera and answers every capture_request with the current image,
-exactly as the firmware does. Use it to check the pairing (voice on the laptop,
+exactly as tutor/web/phone.html does. Use it to check the pairing (voice on the
 eyes elsewhere) before flashing anything, and to debug the server side without
 a board on the desk. Press Enter to advance to the next image.
 """

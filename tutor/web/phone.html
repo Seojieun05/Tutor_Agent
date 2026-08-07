@@ -1,6 +1,6 @@
 <!doctype html>
 <!--
-  The phone as the tutor's eye — a drop-in replacement for the XIAO board.
+  The phone as the tutor's eye.
 
   Same socket (/camera), same binary framing, same passive contract: say hello,
   then wait. On capture_request, grab whatever the preview is pointing at right
@@ -12,7 +12,7 @@
   Nothing here starts a turn. The student talks to the LAPTOP (mic, speaker,
   http://localhost:8765/); when they ask for a hint or ask whether their work is
   right, the server issues a capture_request and this page answers. So the
-  pedagogy never learns whether the eye is a board or a phone.
+  pedagogy never has to know anything about the camera at all.
 
   THE LENS IS THE FOCUS FIX, and it is not a choice the student should have to
   make. A four-camera phone exposes all of them and only some can focus on paper

@@ -3,7 +3,7 @@
 Layout: [1 type byte][uint32 BE header length][UTF-8 JSON header][payload]
 Type 0x01 = IMAGE (payload: one JPEG), 0x02 = AUDIO (payload: raw 16-bit LE mono PCM),
 0x03 = TTS_AUDIO (server → device, payload: encoded speech for a device that has
-the speaker — the browser client; the XIAO path plays through the laptop instead).
+the speaker — the browser client; a local-mic device plays through the laptop).
 Text frames are EVENT JSON and never pass through this module.
 """
 

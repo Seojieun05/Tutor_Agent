@@ -7,7 +7,7 @@ Usage:
 Speak; stop speaking; the tutor answers; it listens again. Nothing else.
 
     mic 16 kHz mono PCM → Silero VAD turn detection → the same AUDIO frames the
-    XIAO sends → server STT → tutor pipeline → server TTS on the laptop speaker
+    device sends → server STT → tutor pipeline → server TTS on the laptop speaker
 
 Only the endpointed utterance is sent, so STT and Grok never see room noise.
 The four states (LISTENING / USER_SPEAKING / PROCESSING / AGENT_SPEAKING) live
