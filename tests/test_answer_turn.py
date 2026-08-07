@@ -273,6 +273,9 @@ class TestOneAcknowledgementPerTurn:
         assert strip("맞아요!") == "맞아요!"  # never returns empty
 
     async def test_the_tutor_says_it_once(self, db):
+        """The reaction and the hint are now two utterances — the reaction
+        plays while the hint generates — but the rule holds across them:
+        one acknowledgement per turn, so the hint's own opener is stripped."""
         session, llm, speaker = build_session(
             db,
             [{"verdict": "CORRECT", "feedback": "맞아요, 그렇게 하면 돼요!",
@@ -287,10 +290,10 @@ class TestOneAcknowledgementPerTurn:
 
         await session.handle_answer("5를 빼요", session.store.pending_hint("p1"))
 
-        spoken = speaker.spoken[0]
-        assert spoken.startswith("맞아요, 그렇게 하면 돼요!")
-        assert "네, GOOD" not in spoken
-        assert "GOOD 글자들은 그렇게 하면 돼요" in spoken  # the content is kept
+        assert speaker.spoken[0] == "맞아요, 그렇게 하면 돼요!"   # the reaction, alone
+        hint = speaker.spoken[1]
+        assert not hint.startswith("네")                          # its opener is gone
+        assert "GOOD 글자들은 그렇게 하면 돼요" in hint            # the content is kept
 
 
 class TestStudentQuestions:

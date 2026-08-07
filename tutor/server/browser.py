@@ -176,11 +176,24 @@ class BrowserSession(Session):
         try:
             await super()._handle_utterance(pcm, sample_rate)
         finally:
-            # nothing was spoken (no hint wanted, STT failed, or a hint was
-            # already running): reopen the mic instead of staying deaf
-            if self.taker is not None and self.taker.state is TurnState.PROCESSING:
-                self.taker.listen()
-                await self._push_state()
+            await self._reopen_mic()
+
+    async def handle_hint_request(self, question: str | None = None) -> None:
+        # Mid-turn utterances (the reaction, filler lines) hold PROCESSING, so
+        # every turn entry owes the mic a reopen when it is over — including
+        # the button-driven hint_request that never passes through an utterance.
+        try:
+            await super().handle_hint_request(question)
+        finally:
+            await self._reopen_mic()
+
+    async def _reopen_mic(self) -> None:
+        """The floor back to the student, if the turn left it in PROCESSING —
+        which also covers a turn that spoke nothing at all (no hint wanted,
+        STT failed, a hint already running): silence must not mean deaf."""
+        if self.taker is not None and self.taker.state is TurnState.PROCESSING:
+            self.taker.listen()
+            await self._push_state()
 
     # --- tutor speech: to the browser, never to the server's speaker --------
 
@@ -238,5 +251,13 @@ class BrowserSession(Session):
             # arrive to expire the tail guard lazily (as it does on the
             # local-mic device): wait it out here, then reopen.
             await asyncio.sleep(self.config.tail_guard_ms / 1000)
-            taker.listen()
+            if self._busy:
+                # Mid-turn utterance — a filler line, the reaction spoken while
+                # the hint generates. The turn is not over, so the floor is not
+                # the student's yet: stay in PROCESSING and let the turn's own
+                # end reopen the mic. Reopening here dropped whatever they said
+                # into the busy check, which is worse than a closed mic.
+                taker.processing()
+            else:
+                taker.listen()
             await self._push_state()

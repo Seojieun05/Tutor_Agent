@@ -212,12 +212,16 @@ async def test_one_turn_streams_pcm_in_and_audio_out(deps):
     # ...and came back as audio for the laptop to play
     assert [f.audio for f in browser.audio] == [MP3]
     assert browser.audio[0].header.format == "mp3"
-    # every state, in order, with no button
+    # every state, in order, with no button. The second PROCESSING is the
+    # multi-utterance turn contract: after ANY utterance the floor goes back to
+    # the TURN (a reaction may be followed by its hint), and only the turn's
+    # end — not the utterance's — reopens the mic.
     assert browser.states == [
         "LISTENING",
         "USER_SPEAKING",
         "PROCESSING",
         "AGENT_SPEAKING",
+        "PROCESSING",
         "LISTENING",
     ]
 
@@ -421,8 +425,10 @@ async def test_spoken_answer_advances_without_a_second_capture(db):
     assert browser.captures == first_captures == 1  # camera used once, not twice
     assert llm.calls.count("recognize") == 1
     assert llm.calls.count("evaluate") == 1
-    assert "맞아요!" in browser.tutor_said[1]
-    assert browser.tutor_said[1] != browser.tutor_said[0]  # not the same question again
+    # the reaction now arrives as its own utterance, BEFORE the hint finishes
+    # generating — that split is the answer turn's perceived-latency win
+    assert browser.tutor_said[1] == "맞아요!"
+    assert browser.tutor_said[2] != browser.tutor_said[0]  # not the same question again
 
 
 async def test_filler_utterance_is_answered_and_the_mic_reopens(db):

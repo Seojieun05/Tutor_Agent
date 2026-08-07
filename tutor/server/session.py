@@ -87,7 +87,7 @@ WORK_CHECK_DEFAULT = "음, 지금 쓴 줄을 같이 볼까요?"
 
 # The filler opener for a work check: fixed, so its TTS is cached and it plays
 # the instant the delay elapses — while the camera is still being asked.
-WORK_CHECK_OPENER = "네, 지금 쓴 풀이를 한번 볼게요."
+WORK_CHECK_OPENER = "네, 지금 쓴 풀이를 확인하고 있어요."
 
 # Spoken sentence endings that are the STUDENT'S politeness, not their answer.
 # "5예요" quotes back as the stilted "5예요라고 했네요"; a teacher hears the 5,
@@ -588,18 +588,26 @@ class Session:
         decision = decide(state, history, "HINT_REQUEST")
         log.info("decision after answer (%s): %s", verdict.verdict, decision)
 
-        text = await asyncio.to_thread(
-            self.deps.hint_gen.generate,
-            decision,
-            ctx.match,
-            ctx.reference,
-            ctx.recognition,
-            history,
-            transcript,
+        # The reaction is ready NOW and the hint needs ~5s of model. Speaking
+        # "맞아요, 그렇게 하면 돼요!" WHILE the next question is being written
+        # is where the answer turn stops feeling slow: first meaningful sound
+        # at evaluate-time instead of evaluate+phrase+TTS-time.
+        hint_task = asyncio.create_task(
+            asyncio.to_thread(
+                self.deps.hint_gen.generate,
+                decision, ctx.match, ctx.reference, ctx.recognition, history, transcript,
+            )
         )
-        await self._deliver(
-            decision, self._with_feedback(verdict.feedback, text, decision), ctx.hash
-        )
+        try:
+            spoke_feedback = await self._react(verdict.feedback, decision)
+            text = await hint_task
+        except Exception:
+            hint_task.cancel()
+            raise
+        if spoke_feedback:
+            # one acknowledgement per turn: the reaction already was it
+            text = strip_leading_acknowledgement(text)
+        await self._deliver(decision, text, ctx.hash)
 
     async def _answer_question(
         self, ctx: ProblemContext, pending: HintRecord, question: str
@@ -643,24 +651,28 @@ class Session:
             self.last_transcript = None
             self.store.clear_state()
 
-    def _with_feedback(self, feedback: str, hint: str, decision: Decision) -> str:
-        """Prefix the tutor's reaction — to an answer, or to what it just saw —
-        if it leaks nothing. Both turns react before they hint, and both owe the
-        student exactly one acknowledgement."""
+    async def _react(self, feedback: str | None, decision: Decision) -> bool:
+        """Speak the turn's reaction NOW, while the hint is still being written.
+
+        That concurrency is the whole point: the reaction is known seconds
+        before the hint exists, and a student who has just answered deserves
+        the "맞아요!" at reaction-time, not at reaction-plus-generation-time.
+        Returns whether anything was said, so the hint that follows can drop
+        its own opening acknowledgement — one per turn, as ever. A reaction
+        that would leak the answer is dropped, not delayed.
+        """
         feedback = (feedback or "").strip()
-        if not feedback or not hint:
-            return feedback or hint
-        # The feedback IS this turn's reaction; a hint that opens with its own
-        # "네," makes the tutor say it twice in one breath.
-        combined = f"{feedback} {strip_leading_acknowledgement(hint)}"
+        if not feedback:
+            return False
         reference = self.ctx.reference if self.ctx is not None else None
         seen = visible_to_student(self.ctx.recognition) if self.ctx is not None else []
         if reference is not None and leaks_answer(
-            combined, reference, decision.target_step, seen
+            feedback, reference, decision.target_step, seen
         ):
-            log.warning("answer feedback leaked; dropping it")
-            return hint
-        return combined
+            log.warning("reaction leaked the answer; staying quiet instead")
+            return False
+        await self._speak(feedback)
+        return True
 
     async def _handle_hint_request(self, question: str | None = None) -> None:
         """Capture → recognize → diagnose → hint, over a fresh photo.
@@ -785,12 +797,25 @@ class Session:
         decision = decide(current, fresh_history, "HINT_REQUEST")
         log.info("decision: %s", decision)
 
-        text = await asyncio.to_thread(
-            self.deps.hint_gen.generate,
-            decision, ctx.match, reference, rec, fresh_history, question,
+        # Same overlap as the answer turn: the reaction ("음, 지금 쓴 줄을 같이
+        # 볼까요?") is fixed text with cached TTS, so it plays at once while the
+        # hint is still being generated.
+        hint_task = asyncio.create_task(
+            asyncio.to_thread(
+                self.deps.hint_gen.generate,
+                decision, ctx.match, reference, rec, fresh_history, question,
+            )
         )
-        if question:
-            text = self._with_feedback(self._work_reaction(current), text, decision)
+        try:
+            spoke_reaction = bool(question) and await self._react(
+                self._work_reaction(current), decision
+            )
+            text = await hint_task
+        except Exception:
+            hint_task.cancel()
+            raise
+        if spoke_reaction:
+            text = strip_leading_acknowledgement(text)
         await self._deliver(decision, text, ctx.hash)
 
     @staticmethod

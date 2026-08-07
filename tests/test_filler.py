@@ -149,9 +149,12 @@ class TestBank:
         picks = [bank.pick() for _ in range(30)]
         assert all(a != b for a, b in zip(picks, picks[1:]))
 
-    def test_every_phrase_is_short(self):
-        """It plays before the answer, so its length is added latency."""
-        assert all(len(p) <= 14 for p in FILLER_PHRASES), FILLER_PHRASES
+    def test_every_phrase_narrates_and_stays_bounded(self):
+        """"~하고 있어요" narration, not a clipped "어디 보자" — but still one
+        short sentence: it plays INSIDE the wait, never instead of the answer,
+        and its TTS is cached so length costs nothing at speak time."""
+        assert all(len(p) <= 22 for p in FILLER_PHRASES), FILLER_PHRASES
+        assert all(p.endswith(("요.", "게요.")) for p in FILLER_PHRASES)
 
     def test_an_empty_bank_picks_nothing_rather_than_crashing(self):
         assert FillerBank(phrases=()).pick() == ""

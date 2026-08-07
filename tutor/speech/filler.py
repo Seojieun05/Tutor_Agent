@@ -34,25 +34,26 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-# Short on purpose: this plays BEFORE the answer, so every syllable is added
-# latency. Ending on a falling tone stops it sounding like a question the
-# student is expected to answer.
+# Progressive, not clipped: "~하고 있어요" says the tutor is DOING something,
+# where a bare "어디 보자" just trails off. These play during a 5-15s think, so
+# a full sentence is not added latency — it is the wait, narrated. They stay
+# cached TTS, so length costs nothing at speak time.
 FILLER_PHRASES: tuple[str, ...] = (
-    "음, 어디 보자.",
-    "네, 한번 볼게요.",
-    "잠깐만요.",
-    "음, 볼게요.",
-    "어디 보자.",
+    "음, 지금 살펴보고 있어요.",
+    "네, 잠깐 확인하고 있어요.",
+    "잠시만요, 보고 있어요.",
+    "음, 어떻게 도와줄지 생각하고 있어요.",
+    "지금 문제를 보고 있어요.",
 )
 
-# How a teacher receives an answer: the value, a beat, and a look. Every frame
-# is particle-safe (nothing needing 이/가 or 라/이라 after the value), because a
-# wrong particle reads as broken while a pause never does.
+# How a teacher receives an answer: the value back, then what they are doing
+# with it. Every frame is particle-safe (nothing needing 이/가 or 라/이라 after
+# the value), because a wrong particle reads as broken while a pause never does.
 ECHO_FRAMES: tuple[str, ...] = (
-    "{v}… 어디 보자.",
-    "{v}… 한번 볼게요.",
-    "{v}인지 볼까요?",
-    "{v}, 맞는지 볼게요.",
+    "{v}… 확인하고 있어요.",
+    "{v}인지 보고 있어요.",
+    "{v}, 맞는지 확인해 볼게요.",
+    "{v}… 잠깐 볼게요.",
 )
 
 
