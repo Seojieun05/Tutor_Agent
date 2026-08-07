@@ -28,7 +28,7 @@ from tutor.server.session import (
     Deps,
     ProblemContext,
     Session,
-    echo_of,
+    answer_core,
     readout_of,
 )
 from tutor.solver.grok_solver import GrokSolver
@@ -134,19 +134,48 @@ def ask_l1(session: Session) -> None:
 # --- the echo (ANSWER turns) -------------------------------------------------
 
 
-def test_echo_repeats_short_answers_with_the_right_particle():
-    assert echo_of("5예요") == "5예요라고 했네요. 한번 볼게요."
-    assert echo_of("15") == "15라고 했네요. 한번 볼게요."      # 오 — no final consonant
-    assert echo_of("31") == "31이라고 했네요. 한번 볼게요."    # 일 — final consonant
-    assert echo_of("양변에서 5를 뺐어요.") == "양변에서 5를 뺐어요라고 했네요. 한번 볼게요."
+class TestAnswerCore:
+    """What gets echoed is the VALUE, never the politeness around it."""
+
+    def test_polite_endings_are_stripped(self):
+        assert answer_core("5예요") == "5"
+        assert answer_core("마이너스 3이요.") == "마이너스 3"
+        assert answer_core("x는 2요") == "x는 2"
+        assert answer_core("8입니다") == "8"
+
+    def test_bare_values_pass_through(self):
+        assert answer_core("15") == "15"
+        assert answer_core("x") == "x"
+
+    def test_verbs_and_questions_are_not_echoed(self):
+        """"양변에서 5를 빼요" quoted back sounds wrong at any phrasing —
+        and a question must be answered, not repeated."""
+        assert answer_core("양변에서 5를 빼요") is None
+        assert answer_core("왜 5를 빼야 해요?") is None
+        assert answer_core("모르겠어요") is None
+
+    def test_long_speeches_are_not_echoed(self):
+        assert answer_core("그러니까 제 생각에는 양변에서 5를 빼고 나서 3으로 나누면 될 것 같아요") is None
+        assert answer_core("   ") is None
 
 
-def test_echo_declines_long_speeches():
-    assert echo_of("그러니까 제 생각에는 양변에서 5를 빼고 나서 3으로 나누면 될 것 같아요") is None
-    assert echo_of("   ") is None
+def test_echo_frames_rotate_instead_of_repeating():
+    import random
+
+    from tutor.speech.filler import ECHO_FRAMES, FillerBank
+
+    bank = FillerBank(rng=random.Random(7))
+    said = [bank.echo("5") for _ in range(6)]
+    assert all("5" in s for s in said)
+    assert all(any(s == f.format(v="5") for f in ECHO_FRAMES) for s in said)
+    # the frame never repeats back-to-back — repetition is what sounds mechanical
+    frames = [next(f for f in ECHO_FRAMES if s == f.format(v="5")) for s in said]
+    assert all(a != b for a, b in zip(frames, frames[1:]))
 
 
 async def test_an_answer_turn_opens_with_the_echo(db):
+    from tutor.speech.filler import ECHO_FRAMES
+
     session, llm, speaker, ws = build(
         db, "5예요",
         llm_responses={"evaluate": [{"intent": "ANSWER", "verdict": "CORRECT",
@@ -158,7 +187,8 @@ async def test_an_answer_turn_opens_with_the_echo(db):
 
     await session._handle_utterance(PCM, 16000)
 
-    assert speaker.spoken[0] == "5예요라고 했네요. 한번 볼게요."
+    # the opener is the VALUE in one of the rotating frames — never "5예요라고"
+    assert speaker.spoken[0] in {f.format(v="5") for f in ECHO_FRAMES}
     assert speaker.spoken[1].startswith("맞아요!")   # then the real reply
     assert llm.calls.count("evaluate") == 1
 
@@ -227,5 +257,5 @@ async def test_a_slow_filler_never_delays_a_fast_answer(db):
 
     await session._handle_utterance(PCM, 16000)
 
-    assert not any("했네요" in s for s in speaker.spoken)   # echo never fired
+    assert not any("어디 보자" in s or "볼까요" in s for s in speaker.spoken)  # echo never fired
     assert speaker.spoken[0].startswith("맞아요!")           # answer came straight out

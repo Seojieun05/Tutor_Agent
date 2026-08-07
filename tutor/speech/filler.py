@@ -45,6 +45,16 @@ FILLER_PHRASES: tuple[str, ...] = (
     "어디 보자.",
 )
 
+# How a teacher receives an answer: the value, a beat, and a look. Every frame
+# is particle-safe (nothing needing 이/가 or 라/이라 after the value), because a
+# wrong particle reads as broken while a pause never does.
+ECHO_FRAMES: tuple[str, ...] = (
+    "{v}… 어디 보자.",
+    "{v}… 한번 볼게요.",
+    "{v}인지 볼까요?",
+    "{v}, 맞는지 볼게요.",
+)
+
 
 class FillerBank:
     """Which phrase to say next."""
@@ -53,6 +63,7 @@ class FillerBank:
         self.phrases = tuple(p for p in phrases if p.strip())
         self._rng = rng or random.Random()
         self._last: str | None = None
+        self._last_echo: str | None = None
 
     def pick(self) -> str:
         if not self.phrases:
@@ -60,6 +71,17 @@ class FillerBank:
         choices = [p for p in self.phrases if p != self._last] or list(self.phrases)
         self._last = self._rng.choice(choices)
         return self._last
+
+    def echo(self, core: str) -> str:
+        """The student's answer received back, in a frame that rotates.
+
+        The frame varies and the value does not: "5… 어디 보자" this turn,
+        "5인지 볼까요?" the next. Repetition of the FRAME is what makes an echo
+        sound mechanical; the value repeating is the whole point.
+        """
+        frames = [f for f in ECHO_FRAMES if f != self._last_echo] or list(ECHO_FRAMES)
+        self._last_echo = self._rng.choice(frames)
+        return self._last_echo.format(v=core)
 
 
 class CachedSpeech:

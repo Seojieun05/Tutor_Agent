@@ -89,18 +89,36 @@ WORK_CHECK_DEFAULT = "음, 지금 쓴 줄을 같이 볼까요?"
 # the instant the delay elapses — while the camera is still being asked.
 WORK_CHECK_OPENER = "네, 지금 쓴 풀이를 한번 볼게요."
 
-def echo_of(transcript: str) -> str | None:
-    """The student's answer, said back — the oldest sign of listening there is.
+# Spoken sentence endings that are the STUDENT'S politeness, not their answer.
+# "5예요" quotes back as the stilted "5예요라고 했네요"; a teacher hears the 5,
+# drops the ending, and says "5… 어디 보자". Longest first, stripped once.
+_POLITE_TAILS = ("입니다", "이에요", "이예요", "예요", "에요", "이요", "요")
 
-    It buys the evaluator its ~6 seconds without ever sounding like stalling,
-    and it doubles as confirmation of what STT heard. None for anything long:
-    parroting a whole sentence back costs more time than it covers.
+
+def answer_core(transcript: str) -> str | None:
+    """The VALUE inside a spoken answer, or None when there is no clean one.
+
+    "5예요" → "5" · "마이너스 3이요" → "마이너스 3" · "x는 2요" → "x는 2".
+    None for anything that does not END in a value once the politeness is
+    stripped — verbs ("양변에서 5를 빼요" → "…빼"), questions, long speeches.
+    Those are exactly the utterances that sound wrong repeated back, so no
+    echo is the natural choice: the generic filler takes the turn instead.
     """
-    text = " ".join(transcript.split()).rstrip("?.!…,")
+    text = " ".join(transcript.split()).rstrip("?.!…, ")
     if not text or len(text) > 24:
         return None
-    particle = "이라고" if mathspeak.ends_in_consonant(text) else "라고"
-    return f"{text}{particle} 했네요. 한번 볼게요."
+    for tail in _POLITE_TAILS:
+        if text.endswith(tail) and len(text) > len(tail):
+            text = text[: -len(tail)].rstrip()
+            break
+    if not text:
+        return None
+    ch = text[-1]
+    # value-final only: a digit ("…3"), or a lone latin variable ("…x")
+    if ch.isdigit() or (ch.isascii() and ch.isalpha()
+                        and (len(text) == 1 or not text[-2].isascii() or not text[-2].isalpha())):
+        return text
+    return None
 
 
 def readout_of(rec: Recognition) -> str:
@@ -458,8 +476,10 @@ class Session:
             return
         self._busy = True
         # the echo IS the acknowledgement of having heard them — and it plays
-        # while the evaluator is still grading what it echoes
-        self._start_filler(echo_of(transcript))
+        # while the evaluator is still grading the very value it echoes
+        core = answer_core(transcript)
+        bank = self.deps.fillers
+        self._start_filler(bank.echo(core) if core and bank is not None else None)
         try:
             with timing.turn("ANSWER"):
                 await self._handle_answer(transcript, pending)
