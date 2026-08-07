@@ -33,6 +33,7 @@ from tutor.knowledge.tagger import ConceptTagger
 from tutor.server.camera import CameraConnection, CameraHub
 from tutor.llm.echo import EchoLLMClient
 from tutor.server.session import Deps, Session
+from tutor.llm.timing import timed
 from tutor.solver.grok_solver import GrokSolver
 from tutor.speech.filler import FillerBank
 from tutor.speech.intent import IntentClassifier
@@ -111,8 +112,14 @@ def build_shared(settings: Settings):
     # the KB tool already loaded the embedding index: share that one instance
     # with the matcher's SEMANTIC tier instead of loading the model twice
     semantic = getattr(getattr(registry, "kb", None), "semantic", None)
-    return (db, llm, transcriber, speaker, semantic,
-            build_vision_llm(settings, llm), build_hint_llm(settings, llm))
+    vision_llm = build_vision_llm(settings, llm)
+    hint_llm = build_hint_llm(settings, llm)
+    # One log line per model call, always on. The tutor's latency is almost
+    # entirely other people's servers, so the only useful question is which
+    # call — and that is not answerable after the fact without this.
+    return (db, timed(llm, settings.chat_model), transcriber, speaker, semantic,
+            timed(vision_llm, settings.gemini_vision_model),
+            timed(hint_llm, settings.gemini_hint_model))
 
 
 def wrap_with_cache(settings: Settings, speaker):

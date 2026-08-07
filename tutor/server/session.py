@@ -45,6 +45,7 @@ from tutor.knowledge import mathnorm
 from tutor.knowledge.matching import Matcher, problem_hash
 from tutor.knowledge.tagger import ConceptTagger
 from tutor.knowledge.models import MatchResult, ReferenceSolution, Tier
+from tutor.llm import timing
 from tutor.policy.engine import Action, Decision, Trigger, decide
 from tutor.protocol.events import make_event, parse_event
 from tutor.protocol.frames import AudioFrame, ImageFrame, ProtocolError, decode
@@ -84,12 +85,49 @@ WORK_CHECK_REACTIONS: dict[str, str] = {
 WORK_CHECK_DEFAULT = "음, 지금 쓴 줄을 같이 볼까요?"
 
 
+def _solve_dead(task: asyncio.Task | None) -> bool:
+    """True when there is no live solve to wait for — never ran, or ran and lost."""
+    return task is None or (
+        task.done() and (task.cancelled() or task.exception() is not None)
+    )
+
+
 @dataclass
 class ProblemContext:
     hash: str
     recognition: Recognition
     match: MatchResult
-    reference: ReferenceSolution
+    # None while the background solver is still writing it (NEW problems only).
+    reference: ReferenceSolution | None
+    solving: asyncio.Task | None = None
+
+    def reference_if_ready(self) -> ReferenceSolution | None:
+        """The reference if it exists RIGHT NOW; never waits.
+
+        The first turn on a new problem uses this: an L1 hint can be asked from
+        the concepts alone, and waiting out the solver is exactly the silence
+        the background task exists to remove.
+        """
+        task = self.solving
+        if (self.reference is None and task is not None and task.done()
+                and not task.cancelled() and task.exception() is None):
+            self.reference = task.result()
+            self.solving = None
+        return self.reference
+
+    async def reference_ready(self) -> ReferenceSolution:
+        """The reference, waiting out the background solver if it is running.
+
+        Answer turns need it — grading a spoken answer against nothing is not
+        grading — and by the time a student has heard the first hint and formed
+        a reply, the solver has almost always finished anyway.
+        """
+        if self.reference is None and self.solving is not None:
+            task, self.solving = self.solving, None
+            self.reference = await task  # a failed solve raises here, on purpose
+        if self.reference is None:
+            raise RuntimeError("no reference solution: the background solve failed")
+        return self.reference
 
 
 @dataclass
@@ -308,6 +346,7 @@ class Session:
             jpeg = await cameras.capture(timeout)
             eye = "camera device"
         elapsed = (time.monotonic() - started) * 1000
+        timing.record("capture", elapsed / 1000, eye)
 
         if jpeg:
             log.info("captured %d bytes from the %s in %.0f ms", len(jpeg), eye, elapsed)
@@ -360,7 +399,8 @@ class Session:
         self._busy = True
         self._start_filler()
         try:
-            await self._handle_hint_request(question)
+            with timing.turn("WORK_CHECK" if question else "HINT_REQUEST"):
+                await self._handle_hint_request(question)
         except Exception:
             log.exception("hint request failed")
             try:
@@ -383,7 +423,8 @@ class Session:
         self._busy = True
         self._start_filler()
         try:
-            await self._handle_answer(transcript, pending)
+            with timing.turn("ANSWER"):
+                await self._handle_answer(transcript, pending)
         except Exception:
             log.exception("answer handling failed")
             try:
@@ -402,10 +443,26 @@ class Session:
         ctx = self.ctx
         assert ctx is not None  # a pending hint implies a problem context
 
+        # The reference is the measuring stick for a spoken answer, so this
+        # turn cannot start without it. The wait is almost always zero: the
+        # solver ran while the first hint was being spoken and heard.
+        try:
+            reference = await ctx.reference_ready()
+        except Exception:
+            # The background solve died. Grading is impossible, but the student
+            # is mid-sentence expecting a reply — fall back to the capture flow,
+            # which restarts the solve (see _problem_context) and still says
+            # something useful meanwhile. Not the public entry point: this turn
+            # already holds the busy flag.
+            log.exception("no reference for the answer turn; re-running the hint flow")
+            self.last_transcript = transcript
+            await self._handle_hint_request()
+            return
+
         verdict = await asyncio.to_thread(
             self.deps.evaluator.evaluate,
             problem_text=ctx.recognition.problem_text,
-            reference=ctx.reference,
+            reference=reference,
             question=pending.hint_text,
             target_step=pending.step,
             transcript=transcript,
@@ -447,7 +504,7 @@ class Session:
                 )
             )
             self.store.mark_hint_effective(pending.id, True)
-            if pending.step >= len(ctx.reference.steps):
+            if pending.step >= len(reference.steps):
                 await self._finish_problem(ctx, verdict, pending.step)
                 return
         elif verdict.verdict == "INCORRECT":
@@ -590,15 +647,36 @@ class Session:
         # History is always scoped to THIS problem's hash.
         prev_state = self.store.get_state()
         history = self.store.get_history(problem_hash=ctx.hash)
-        new_state = await asyncio.to_thread(
-            self.deps.estimator.estimate,
-            rec=rec,
-            reference=ctx.reference,
-            prev_state=prev_state,
-            prev_work=self.prev_work,
-            history=history,
-            transcript=self.last_transcript,
-        )
+        reference = ctx.reference_if_ready()
+        if reference is None:
+            # The solver is still writing the reference solution. The full
+            # diagnosis compares work against that solution, so it cannot run
+            # yet — but its deterministic pre-checks (unreadable photo, empty
+            # page) need no reference and MUST still run: a garbled frame has
+            # to end in "다시 보여 줄래요?", not in a hint about garbage. Past
+            # those, the first hint on a new problem opens at L1 from the
+            # concepts regardless (policy R5), and asking it NOW beats a
+            # perfectly targeted question after ~25 seconds of dead air.
+            new_state = self.deps.estimator.precheck(
+                rec=rec, prev_state=prev_state, prev_work=self.prev_work,
+                history=history, transcript=self.last_transcript,
+            ) or StudentState(
+                current_step="문제를 파악하는 중",
+                last_correct_step=0,
+                status="STUCK",
+                attempt_count=prev_state.attempt_count + 1 if prev_state else 1,
+            )
+            log.info("solver still running: first hint from concepts alone")
+        else:
+            new_state = await asyncio.to_thread(
+                self.deps.estimator.estimate,
+                rec=rec,
+                reference=reference,
+                prev_state=prev_state,
+                prev_work=self.prev_work,
+                history=history,
+                transcript=self.last_transcript,
+            )
         self.prev_work = rec.student_work
         # consumed: an old utterance must not be re-read as evidence next turn
         self.last_transcript = None
@@ -608,8 +686,10 @@ class Session:
         pending = self.store.pending_hint(ctx.hash)
         self.store.set_state(new_state)
         # an UNCERTAIN estimate carries no evidence either way: keep the hint
-        # pending rather than resolving its effectiveness on a blurry frame
-        if pending is not None and prev_state is not None and new_state.status != "UNCERTAIN":
+        # pending rather than resolving its effectiveness on a blurry frame.
+        # A skipped estimate (reference still solving) carries none either.
+        if (reference is not None and pending is not None and prev_state is not None
+                and new_state.status != "UNCERTAIN"):
             self.store.mark_hint_effective(
                 pending.id, hint_was_effective(prev_state, new_state)
             )
@@ -640,7 +720,7 @@ class Session:
 
         text = await asyncio.to_thread(
             self.deps.hint_gen.generate,
-            decision, ctx.match, ctx.reference, rec, fresh_history, question,
+            decision, ctx.match, reference, rec, fresh_history, question,
         )
         if question:
             text = self._with_feedback(self._work_reaction(current), text, decision)
@@ -680,6 +760,9 @@ class Session:
             rec.problem_type = self.ctx.recognition.problem_type
             rec.concepts = list(self.ctx.recognition.concepts)
             self.ctx.recognition = rec
+            if self.ctx.reference is None and _solve_dead(self.ctx.solving):
+                # the earlier background attempt failed: this turn is the retry
+                self.ctx.solving = self._start_solve(rec, h)
             return self.ctx
         if self.ctx is not None:
             # Different problem: the old student state/work/transcript are
@@ -696,15 +779,46 @@ class Session:
             rec.concepts = tags.concepts
         match = await asyncio.to_thread(self.deps.matcher.match, rec)
         reference = match.reference
-        if reference is None:  # CONCEPT/NEW → Grok Solver (spec rule 2)
-            reference = await asyncio.to_thread(self.deps.solver.solve, rec, h)
-        self.ctx = ProblemContext(hash=h, recognition=rec, match=match, reference=reference)
+        solving = None
+        if reference is None:
+            # CONCEPT/NEW → Grok Solver (spec rule 2) — but off the clock. At
+            # ~25s it was half of a first turn, and nothing the FIRST hint says
+            # needs it: the policy opens at L1 from the concepts regardless, so
+            # the solver writes the reference while the student hears that hint.
+            solving = self._start_solve(rec, h)
+        self.ctx = ProblemContext(
+            hash=h, recognition=rec, match=match, reference=reference, solving=solving
+        )
         return self.ctx
+
+    def _start_solve(self, rec: Recognition, h: str) -> asyncio.Task:
+        """Write the reference solution while the student hears the first hint."""
+
+        async def solve() -> ReferenceSolution:
+            started = time.monotonic()
+            result = await asyncio.to_thread(self.deps.solver.solve, rec, h)
+            timing.record("solve", time.monotonic() - started, "background")
+            return result
+
+        task = asyncio.create_task(solve())
+        self._tasks.add(task)
+
+        def done(t: asyncio.Task) -> None:
+            self._tasks.discard(t)
+            # retrieve the exception so a student who never answers does not
+            # leave an "exception was never retrieved" corpse in the log
+            if not t.cancelled() and t.exception() is not None:
+                log.error("background solve for %s failed: %r", h[:8], t.exception())
+
+        task.add_done_callback(done)
+        return task
 
     async def _speak(self, text: str) -> None:
         """Say something to the student, after the filler has had its say."""
         await self._settle_filler()
-        await self._say(text)
+        # TTS is part of the wait, and a cached phrase is not — worth telling apart.
+        with timing.stage("speak"):
+            await self._say(text)
 
     # --- filling the thinking silence ----------------------------------------
 

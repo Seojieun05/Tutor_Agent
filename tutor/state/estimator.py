@@ -83,6 +83,22 @@ class StudentStateEstimator:
 
     # --- deterministic pre-checks: no LLM call -------------------------------
 
+    def precheck(
+        self,
+        *,
+        rec: Recognition,
+        prev_state: StudentState | None,
+        prev_work: list[str] | None,
+        history: list[HintRecord],
+        transcript: str | None = None,
+    ) -> StudentState | None:
+        """The deterministic half of estimate(): everything decidable WITHOUT
+        the reference solution — an unreadable photo, an empty page. The
+        background-solve path runs this while the reference is still being
+        written, so a garbled frame still ends in "다시 보여 줄래요?" rather
+        than in a confident hint about garbage."""
+        return self._pre_check(rec, prev_state, prev_work, history, transcript)
+
     def _pre_check(
         self,
         rec: Recognition,

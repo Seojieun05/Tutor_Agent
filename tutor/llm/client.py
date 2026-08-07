@@ -16,6 +16,7 @@ from typing import Protocol, Sequence, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from tutor.config import Settings
+from tutor.llm import timing
 from tutor.tools.registry import ToolRegistry
 
 log = logging.getLogger(__name__)
@@ -122,18 +123,28 @@ class GrokClient:
             {"role": "system", "content": f"{system}\n\n{self._schema_reminder(schema)}"},
             {"role": "user", "content": self._user_content(user, images)},
         ]
-        for _ in range(max_rounds):
-            resp = self._client.chat.completions.create(
-                model=self.settings.chat_model,
-                messages=messages,
-                tools=tools,
-                temperature=0,
-                **self._tuning(purpose),
-            )
+        for round_no in range(1, max_rounds + 1):
+            # Every round is a whole round trip, so a purpose that keeps looking
+            # things up costs a multiple of what its one log line suggests.
+            with timing.stage(f"{purpose}.r{round_no}"):
+                resp = self._client.chat.completions.create(
+                    model=self.settings.chat_model,
+                    messages=messages,
+                    tools=tools,
+                    temperature=0,
+                    **self._tuning(purpose),
+                )
             msg = resp.choices[0].message
             if not msg.tool_calls:
+                if round_no > 1:
+                    log.info("%s: answered after %d rounds", purpose, round_no)
                 messages.append({"role": "assistant", "content": msg.content or ""})
                 return self._parse_or_retry(purpose, messages, msg.content or "", schema)
+            log.info(
+                "%s round %d: looking up %s",
+                purpose, round_no,
+                ", ".join(tc.function.name for tc in msg.tool_calls),
+            )
             messages.append(
                 {
                     "role": "assistant",
