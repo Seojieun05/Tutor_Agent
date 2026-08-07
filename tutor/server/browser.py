@@ -36,6 +36,7 @@ import time
 from tutor.protocol.events import make_event, parse_event
 from tutor.protocol.frames import AudioFrame, TtsAudioHeader, encode_tts_audio
 from tutor.server.session import Deps, Session
+from tutor.speech import mathspeak
 from tutor.speech.turn import TurnConfig, TurnDetector, TurnState, TurnTaker
 
 log = logging.getLogger(__name__)
@@ -191,10 +192,14 @@ class BrowserSession(Session):
             # the closing praise, a second sentence — is not said over someone.
             log.info("skipping speech after a barge-in: %r", text[:40])
             return
-        audio = await asyncio.to_thread(self.deps.speaker.synthesize, text)
+        # The ear and the eye part ways HERE: the TTS gets "f 프라임 1", the
+        # transcript panel gets f'(1) — as 2·x², not as programmer ASCII.
+        audio = await asyncio.to_thread(
+            self.deps.speaker.synthesize, mathspeak.speakable(text)
+        )
         if self._interrupted:  # interrupted while TTS was being fetched
             return
-        await self.ws.send(make_event("tutor_says", {"text": text}))
+        await self.ws.send(make_event("tutor_says", {"text": mathspeak.displayable(text)}))
 
         if not audio:  # echo mode / no TTS configured: text only, keep talking
             taker.listen()

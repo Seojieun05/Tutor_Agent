@@ -39,6 +39,30 @@ class TestTheWorksheetReadsAloud:
         assert "1은 8" in speakable("f'(1) = 8")        # 일 — final consonant, 은
 
 
+class TestTheScreenGetsNotation:
+    """displayable(): the same boundary as speakable(), split by destination —
+    the transcript panel shows 2·x², never '2 x 제곱' and never '2*x**2'."""
+
+    def test_ascii_powers_become_print_notation(self):
+        from tutor.speech.mathspeak import displayable
+
+        assert displayable("f(x) = (x+2)(2*x**2-x-2)") == "f(x) = (x+2)(2·x²-x-2)"
+        assert displayable("x**3 - x**10") == "x³ - x^10"
+        assert displayable("sqrt(2)") == "√(2)"
+
+    def test_primes_and_equals_stay_as_written(self):
+        from tutor.speech.mathspeak import displayable
+
+        said = displayable("f'(1) = 2*3")
+        assert "f'(1)" in said and "=" in said and "2·3" in said
+
+    def test_plain_korean_is_untouched(self):
+        from tutor.speech.mathspeak import displayable
+
+        for text in ["맞아요! 이대로 하면 돼요.", "어떤 항을 옮겨야 할까요?"]:
+            assert displayable(text) == text
+
+
 class TestItLeavesSpeechAlone:
     def test_the_fixed_phrases_are_untouched(self):
         """These are TTS cache keys: a changed byte is a cache miss."""

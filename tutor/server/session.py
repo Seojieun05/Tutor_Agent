@@ -130,7 +130,8 @@ def readout_of(rec: Recognition) -> str:
     text = " ".join(rec.problem_text.split())
     text = re.sub(r"^\s*\d+\s*[.)]\s*", "", text)  # exam numbering: "6. "
     text = re.sub(r"\[\s*\d+\s*점\s*\]", "", text).strip()  # point tags: "[3점]"
-    text = mathspeak.speakable(text)  # "f'(1)" must not reach the TTS as-is
+    # kept as NOTATION: _say speaks it through speakable(), the browser shows
+    # it through displayable() — one narration, two renderings
     if len(text) > 130:
         text = text[:130] + "…"
     return f"문제를 같이 볼게요. {text}" if text else ""
@@ -880,14 +881,14 @@ class Session:
     async def _speak(self, text: str) -> None:
         """Say something to the student, after the filler has had its say.
 
-        Notation is rewritten at this boundary and nowhere earlier: the hint
-        history, the leak guard and the TTS cache keys all see the original
-        text, and only the student's ear gets "2 x 제곱" for "2x**2".
+        `text` stays ORIGINAL all the way to _say: the ear and the eye part
+        ways there, and nowhere earlier — the hint history, the leak guard and
+        the TTS cache keys all see what was actually generated.
         """
         await self._settle_filler()
         # TTS is part of the wait, and a cached phrase is not — worth telling apart.
         with timing.stage("speak"):
-            await self._say(mathspeak.speakable(text))
+            await self._say(text)
 
     # --- filling the thinking silence ----------------------------------------
 
@@ -964,10 +965,12 @@ class Session:
         """Say it on the machine running the server (same room as the student).
 
         BrowserSession overrides this to ship the audio to the device instead.
+        The ear gets the spoken form here — "f 프라임 1" — and only the ear:
+        nothing on this path is displayed.
         """
         await self.ws.send(make_event("speech_state", {"state": "speaking"}))
         try:
-            await asyncio.to_thread(self.deps.speaker.speak, text)
+            await asyncio.to_thread(self.deps.speaker.speak, mathspeak.speakable(text))
         finally:
             # whatever happens to TTS, never leave the device muted
             try:

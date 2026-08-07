@@ -222,6 +222,34 @@ async def test_one_turn_streams_pcm_in_and_audio_out(deps):
     ]
 
 
+async def test_the_ear_hears_korean_and_the_eye_sees_notation(deps):
+    """One line, two renderings at the _say boundary: the TTS synthesizes
+    "f 프라임 1 … 2 x 제곱", the transcript panel shows f'(1) and 2·x².
+    Showing the ear's text on screen was a shipped bug — the panel read
+    like a phonetics guide instead of like math."""
+    import json as _json
+
+    class RecorderWS:
+        def __init__(self):
+            self.events = []
+
+        async def send(self, raw):
+            if isinstance(raw, str):
+                self.events.append(_json.loads(raw))
+
+    deps.speaker.audio = None  # text-only path: no playback future to wait out
+    ws = RecorderWS()
+    session = BrowserSession(ws, deps, vad=ScriptedVAD())
+
+    await session._say("f'(1) = 2*x**2 - x 부터 봅시다")
+
+    ear = deps.speaker.synthesized[0]
+    assert "프라임" in ear and "제곱" in ear and "**" not in ear
+    eye = next(e["data"]["text"] for e in ws.events if e["event"] == "tutor_says")
+    assert "f'(1)" in eye and "2·x²" in eye
+    assert "프라임" not in eye and "제곱" not in eye
+
+
 async def test_server_speaker_is_never_used(deps):
     """On an SSH host nobody is listening: audio must go to the browser only."""
     vad = ScriptedVAD()

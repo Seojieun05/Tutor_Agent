@@ -103,6 +103,23 @@ def _parens(s: str) -> str:
     return s
 
 
+def displayable(text: str) -> str:
+    """The text as it should be SEEN — real notation, not spoken Korean.
+
+    The transcript panel is the one place programmer ASCII can be improved
+    into print notation: 2*x**2 becomes 2·x², sqrt becomes √. Identity when
+    there is no math, exactly like speakable() — the two are the same boundary
+    split by destination: displayable() for the eye, speakable() for the ear.
+    """
+    if not text or not _MATH_SIGNAL.search(text):
+        return text
+    s = text.replace("**2", "²").replace("**3", "³")
+    s = re.sub(r"\*\*(\d+)", r"^\1", s)
+    s = re.sub(r"\s*\*\s*", "·", s)
+    s = s.replace("sqrt(", "√(")
+    return s
+
+
 def speakable(text: str) -> str:
     """The text as it should be SPOKEN. Identity when there is no math in it."""
     if not text or not _MATH_SIGNAL.search(text):
