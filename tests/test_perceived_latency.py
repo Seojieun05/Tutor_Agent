@@ -1,0 +1,231 @@
+"""What the student hears WHILE the tutor thinks.
+
+The pipeline's wall clock is other people's servers; what this file pins down
+is the part we control — that the wait is filled with something that belongs
+to this turn, and that none of it ever delays or outlives the real answer:
+
+    ANSWER        the student's words echoed back ("5라고 했네요...")
+    WORK_CHECK    "네, 지금 쓴 풀이를 한번 볼게요" before the camera has moved
+    new problem   the problem read back, once recognition knows it
+
+Echo mode makes every model call instant, so these tests force the ordering
+through the filler machinery itself rather than through timing luck.
+"""
+
+import asyncio
+import json
+
+import pytest
+
+from tutor.config import Settings
+from tutor.hints.generator import HintGenerator
+from tutor.knowledge.matching import Matcher
+from tutor.knowledge.models import Answer, MatchResult, ReferenceSolution, SolutionStep, Tier
+from tutor.llm.echo import EchoLLMClient
+from tutor.protocol.frames import ImageHeader, encode_image
+from tutor.server.session import (
+    WORK_CHECK_OPENER,
+    Deps,
+    ProblemContext,
+    Session,
+    echo_of,
+    readout_of,
+)
+from tutor.solver.grok_solver import GrokSolver
+from tutor.speech.filler import FillerBank
+from tutor.speech.intent import IntentClassifier
+from tutor.speech.stt import Transcript
+from tutor.speech.tts import NullSpeaker
+from tutor.state.answer import AnswerEvaluator
+from tutor.state.estimator import StudentStateEstimator
+from tutor.state.models import StudentState
+from tutor.store.session_store import SessionStore
+from tutor.vision.recognizer import Recognition, Recognizer
+
+JPEG = b"\xff\xd8" + b"page" * 2048
+PCM = b"\x00\x00" * 100
+
+REFERENCE = ReferenceSolution(
+    steps=[
+        SolutionStep(idx=1, description="양변에서 5를 뺀다", expression="3*x = 15"),
+        SolutionStep(idx=2, description="양변을 3으로 나눈다", expression="x = 5"),
+    ],
+    final_answer=Answer(kind="SCALAR", value="5"),
+    concepts=["linear_equation"],
+    verified=True,
+    origin="db",
+)
+
+RECOGNITION = Recognition(
+    problem_text="다음 일차방정식을 푸시오: 3x + 5 = 20",
+    equations=["3*x + 5 = 20"],
+    student_work=["3*x = 20 + 5"],
+    confidence=0.95,
+)
+
+
+class PhoneWS:
+    def __init__(self):
+        self.events: list[dict] = []
+        self.session: Session | None = None
+
+    async def send(self, raw):
+        if not isinstance(raw, str):
+            return
+        event = json.loads(raw)
+        self.events.append(event)
+        if event["event"] == "capture_request":
+            await self.session.on_frame(
+                encode_image(JPEG, ImageHeader(capture_id=event["data"]["capture_id"]))
+            )
+
+
+class ScriptedTranscriber:
+    def __init__(self, *texts: str):
+        self.texts = list(texts)
+
+    def transcribe(self, pcm, sample_rate=16000) -> Transcript:
+        return Transcript(text=self.texts.pop(0) if self.texts else "")
+
+
+def build(db, *utterances: str, llm_responses: dict | None = None, delay_ms: int = 0):
+    llm = EchoLLMClient(llm_responses or {})
+    speaker = NullSpeaker()
+    ws = PhoneWS()
+    deps = Deps(
+        settings=Settings(capture_timeout_s=2.0, filler_delay_ms=delay_ms),
+        recognizer=Recognizer(llm),
+        matcher=Matcher(db),
+        solver=GrokSolver(llm, db),
+        estimator=StudentStateEstimator(llm, db),
+        hint_gen=HintGenerator(llm, db),
+        transcriber=ScriptedTranscriber(*utterances),
+        speaker=speaker,
+        evaluator=AnswerEvaluator(llm, db),
+        classifier=IntentClassifier(),
+        fillers=FillerBank(),
+        store=SessionStore(),
+    )
+    session = Session(ws, deps)
+    ws.session = session
+    return session, llm, speaker, ws
+
+
+def with_problem(session: Session) -> None:
+    session.ctx = ProblemContext(
+        hash="p1",
+        recognition=RECOGNITION,
+        match=MatchResult(tier=Tier.EXACT, concepts=["linear_equation"], reference=REFERENCE),
+        reference=REFERENCE,
+    )
+
+
+def ask_l1(session: Session) -> None:
+    session.store.set_state(
+        StudentState(status="CONCEPT_ERROR", last_correct_step=0,
+                     misconception="sign_flip_on_move")
+    )
+    session.store.append_hint(
+        problem_hash="p1", step=1, level=1, action="SOCRATIC_QUESTION",
+        hint_text="어떤 항을 반대쪽으로 옮겨야 할까요?",
+    )
+
+
+# --- the echo (ANSWER turns) -------------------------------------------------
+
+
+def test_echo_repeats_short_answers_with_the_right_particle():
+    assert echo_of("5예요") == "5예요라고 했네요. 한번 볼게요."
+    assert echo_of("15") == "15라고 했네요. 한번 볼게요."      # 오 — no final consonant
+    assert echo_of("31") == "31이라고 했네요. 한번 볼게요."    # 일 — final consonant
+    assert echo_of("양변에서 5를 뺐어요.") == "양변에서 5를 뺐어요라고 했네요. 한번 볼게요."
+
+
+def test_echo_declines_long_speeches():
+    assert echo_of("그러니까 제 생각에는 양변에서 5를 빼고 나서 3으로 나누면 될 것 같아요") is None
+    assert echo_of("   ") is None
+
+
+async def test_an_answer_turn_opens_with_the_echo(db):
+    session, llm, speaker, ws = build(
+        db, "5예요",
+        llm_responses={"evaluate": [{"intent": "ANSWER", "verdict": "CORRECT",
+                                     "feedback": "맞아요!", "misconception": None,
+                                     "status": "CORRECT"}]},
+    )
+    with_problem(session)
+    ask_l1(session)
+
+    await session._handle_utterance(PCM, 16000)
+
+    assert speaker.spoken[0] == "5예요라고 했네요. 한번 볼게요."
+    assert speaker.spoken[1].startswith("맞아요!")   # then the real reply
+    assert llm.calls.count("evaluate") == 1
+
+
+# --- the opener (WORK_CHECK turns) ------------------------------------------
+
+
+async def test_a_work_check_opens_by_saying_it_is_looking(db):
+    session, llm, speaker, ws = build(db, "풀이 맞아?")
+    with_problem(session)
+    ask_l1(session)
+
+    await session._handle_utterance(PCM, 16000)
+
+    assert speaker.spoken[0] == WORK_CHECK_OPENER
+    assert len(speaker.spoken) >= 2                  # the real turn still spoke
+
+
+# --- the readout (new problems) ---------------------------------------------
+
+
+def test_readout_strips_exam_numbering_and_point_tags():
+    rec = Recognition(problem_text="6.  1보다 큰 두 실수 a, b가\n주어질 때 값은? [3점]")
+    assert readout_of(rec) == "문제를 같이 볼게요. 1보다 큰 두 실수 a, b가 주어질 때 값은?"
+
+
+async def test_a_new_problem_is_read_back_while_the_tutor_thinks(db):
+    session, llm, speaker, ws = build(db, "이 문제 힌트 줄래?")
+
+    await session._handle_utterance(PCM, 16000)
+    # the narration is queued after recognize; give the filler task one beat
+    await asyncio.sleep(0)
+
+    narrations = [s for s in speaker.spoken if s.startswith("문제를 같이 볼게요.")]
+    assert narrations, f"no readout in {speaker.spoken}"
+    # and it never outlives the answer: the hint is the LAST thing said
+    assert not speaker.spoken[-1].startswith("문제를 같이 볼게요.")
+
+
+async def test_the_same_problem_is_not_read_back_twice(db):
+    session, llm, speaker, ws = build(db, "이 문제 힌트 줄래?")
+
+    await session._handle_utterance(PCM, 16000)      # first sight: readout queued
+    first = len([s for s in speaker.spoken if s.startswith("문제를 같이 볼게요.")])
+    assert first == 1
+
+    await session.handle_hint_request()              # same worksheet, second turn
+
+    again = len([s for s in speaker.spoken if s.startswith("문제를 같이 볼게요.")])
+    assert again == first                            # no second readout
+
+
+# --- the race the filler must always lose ------------------------------------
+
+
+async def test_a_slow_filler_never_delays_a_fast_answer(db):
+    """delay 5s, echo-mode turn finishes in ms: nothing extra is ever spoken."""
+    session, llm, speaker, ws = build(
+        db, "5예요", delay_ms=5000,
+        llm_responses={"evaluate": [{"intent": "ANSWER", "verdict": "CORRECT",
+                                     "feedback": "맞아요!", "misconception": None,
+                                     "status": "CORRECT"}]},
+    )
+    with_problem(session)
+    ask_l1(session)
+
+    await session._handle_utterance(PCM, 16000)
+
+    assert not any("했네요" in s for s in speaker.spoken)   # echo never fired
+    assert speaker.spoken[0].startswith("맞아요!")           # answer came straight out

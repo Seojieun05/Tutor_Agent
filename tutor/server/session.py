@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -83,6 +84,50 @@ WORK_CHECK_REACTIONS: dict[str, str] = {
     "UNCERTAIN": "",  # ASK_RECAPTURE already says it cannot see the page
 }
 WORK_CHECK_DEFAULT = "음, 지금 쓴 줄을 같이 볼까요?"
+
+# The filler opener for a work check: fixed, so its TTS is cached and it plays
+# the instant the delay elapses — while the camera is still being asked.
+WORK_CHECK_OPENER = "네, 지금 쓴 풀이를 한번 볼게요."
+
+# Digits and their jongseong (final consonant) when read aloud in Korean —
+# "1이라고" (일) but "5라고" (오). Wrong particles read as broken, not as casual.
+_DIGIT_HAS_FINAL = {"0": True, "1": True, "2": False, "3": True, "4": False,
+                    "5": False, "6": True, "7": True, "8": True, "9": False}
+
+
+def _ends_in_consonant(text: str) -> bool:
+    ch = text[-1]
+    if "가" <= ch <= "힣":
+        return (ord(ch) - 0xAC00) % 28 != 0
+    return _DIGIT_HAS_FINAL.get(ch, False)
+
+
+def echo_of(transcript: str) -> str | None:
+    """The student's answer, said back — the oldest sign of listening there is.
+
+    It buys the evaluator its ~6 seconds without ever sounding like stalling,
+    and it doubles as confirmation of what STT heard. None for anything long:
+    parroting a whole sentence back costs more time than it covers.
+    """
+    text = " ".join(transcript.split()).rstrip("?.!…,")
+    if not text or len(text) > 24:
+        return None
+    particle = "이라고" if _ends_in_consonant(text) else "라고"
+    return f"{text}{particle} 했네요. 한번 볼게요."
+
+
+def readout_of(rec: Recognition) -> str:
+    """The problem, read back while the tagger and phraser think.
+
+    Also the moment a misread photo gets caught: the student hears what the
+    tutor believes the problem says, seconds before any hint depends on it.
+    """
+    text = " ".join(rec.problem_text.split())
+    text = re.sub(r"^\s*\d+\s*[.)]\s*", "", text)  # exam numbering: "6. "
+    text = re.sub(r"\[\s*\d+\s*점\s*\]", "", text).strip()  # point tags: "[3점]"
+    if len(text) > 110:
+        text = text[:110] + "…"
+    return f"문제를 같이 볼게요. {text}" if text else ""
 
 
 def _solve_dead(task: asyncio.Task | None) -> bool:
@@ -164,6 +209,8 @@ class Session:
         self._tasks: set[asyncio.Task] = set()
         self._filler: asyncio.Task | None = None
         self._filler_spoke = False
+        self._filler_open = False
+        self._filler_lines: asyncio.Queue = asyncio.Queue()
 
     def _spawn(self, coro) -> None:
         """Run the hint flow concurrently with the receive loop — it awaits
@@ -397,7 +444,9 @@ class Session:
             log.info("hint request ignored: already handling one")
             return
         self._busy = True
-        self._start_filler()
+        # a work check earns its own opener: they asked about THEIR page, and
+        # "네, 지금 쓴 풀이를 한번 볼게요" answers that before the camera has moved
+        self._start_filler(WORK_CHECK_OPENER if question else None)
         try:
             with timing.turn("WORK_CHECK" if question else "HINT_REQUEST"):
                 await self._handle_hint_request(question)
@@ -421,7 +470,9 @@ class Session:
             log.info("answer ignored: a turn is already running")
             return
         self._busy = True
-        self._start_filler()
+        # the echo IS the acknowledgement of having heard them — and it plays
+        # while the evaluator is still grading what it echoes
+        self._start_filler(echo_of(transcript))
         try:
             with timing.turn("ANSWER"):
                 await self._handle_answer(transcript, pending)
@@ -640,6 +691,14 @@ class Session:
                 "ask to see the worksheet again",
                 rec.confidence, self.deps.settings.recog_conf_threshold,
             )
+        elif self.ctx is None or not (
+            self.ctx.hash == problem_hash(rec) or self._same_problem(rec)
+        ):
+            # First sight of a NEW problem: read it back while the tagger, the
+            # matcher and the phraser think (~15s of otherwise dead air). The
+            # student hears that the tutor actually saw their problem — and a
+            # misread photo gets caught out loud, before any hint depends on it.
+            self._narrate(readout_of(rec))
         ctx = await self._problem_context(rec)
 
         # Diagnose before helping (spec rule 4). State/history are prefetched
@@ -822,32 +881,54 @@ class Session:
 
     # --- filling the thinking silence ----------------------------------------
 
-    def _start_filler(self) -> None:
+    def _start_filler(self, opener: str | None = None) -> None:
         """Begin a filler that will play only if the thinking outlasts it.
 
         Deliberately not awaited: this runs *beside* the pipeline, which is the
         whole point. It costs the student nothing when the answer is quick,
         because the phrase does not start until FILLER_DELAY_MS has passed with
         no answer, and _settle_filler cancels it if the answer arrives first.
+
+        `opener` replaces the canned phrase with something that belongs to THIS
+        turn — the echo of what the student just said, "쓴 풀이를 볼게요" — which
+        is what makes the wait read as listening rather than as buffering.
         """
         bank = self.deps.fillers
         if bank is None or not self.deps.settings.filler_enabled or self._filler is not None:
             return
         self._filler_spoke = False
-        self._filler = asyncio.create_task(self._fill_silence(bank))
+        self._filler_open = True
+        self._filler_lines = asyncio.Queue()
+        self._filler = asyncio.create_task(self._fill_silence(bank, opener))
 
-    async def _fill_silence(self, bank) -> None:
+    def _narrate(self, text: str) -> None:
+        """Queue a mid-turn line — the problem read back once recognition knows
+        it. Spoken only while the turn is still thinking: the moment the real
+        answer is ready, _settle_filler drops anything not yet said."""
+        if self._filler is None or not self._filler_open or not text:
+            return
+        self._filler_lines.put_nowait(text)
+
+    async def _fill_silence(self, bank, opener: str | None = None) -> None:
         try:
             await asyncio.sleep(max(0.0, self.deps.settings.filler_delay_ms / 1000))
-            text = bank.pick()
-            if not text:
-                return
-            # Past this point the filler owns the speaker, so _settle_filler
-            # must wait for it rather than cancel it — cancelling mid-utterance
-            # is how you get half a word followed by the real answer.
-            self._filler_spoke = True
-            log.info("filler: %s", text)
-            await self._say(text)
+            text = opener or bank.pick()
+            if text:
+                # Past this point the filler owns the speaker, so _settle_filler
+                # must wait for it rather than cancel it — cancelling mid-utterance
+                # is how you get half a word followed by the real answer.
+                self._filler_spoke = True
+                log.info("filler: %s", text)
+                await self._say(text)
+            # Keep the floor while the turn keeps thinking: narrations pushed by
+            # the pipeline (the problem readout) play here, in order.
+            while True:
+                line = await self._filler_lines.get()
+                if line is None or not self._filler_open:
+                    return
+                self._filler_spoke = True
+                log.info("filler (narration): %s", line[:40])
+                await self._say(line)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 — a filler failure is not a lesson failure
@@ -855,12 +936,15 @@ class Session:
 
     async def _settle_filler(self) -> None:
         """Never talk over the filler, and never make the student wait for one
-        that has not started."""
+        that has not started — or for narrations it never got to."""
+        self._filler_open = False
         task, self._filler = self._filler, None
         if task is None or task.done():
             return
         if not self._filler_spoke:
             task.cancel()  # thinking won the race: stay quiet
+        else:
+            self._filler_lines.put_nowait(None)  # finish the current line, skip the rest
         try:
             await task
         except (asyncio.CancelledError, Exception):  # noqa: BLE001

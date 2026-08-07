@@ -128,7 +128,7 @@ def wrap_with_cache(settings: Settings, speaker):
     if not settings.filler_enabled:
         return speaker
     from tutor.hints.generator import FIXED_ACTIONS
-    from tutor.server.session import PROBLEM_DONE, RETRY_PROMPTS
+    from tutor.server.session import PROBLEM_DONE, RETRY_PROMPTS, WORK_CHECK_OPENER
     from tutor.speech.filler import FILLER_PHRASES, CachedSpeech
 
     repeated = [
@@ -136,6 +136,7 @@ def wrap_with_cache(settings: Settings, speaker):
         *(t for t in FIXED_ACTIONS.values() if t),
         *RETRY_PROMPTS.values(),
         PROBLEM_DONE,
+        WORK_CHECK_OPENER,
     ]
     return CachedSpeech(
         speaker,
