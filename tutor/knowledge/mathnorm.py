@@ -72,6 +72,43 @@ def parse_expression(s: str) -> sympy.Expr:
     return expr
 
 
+# A line that CLAIMS a value: a bare symbol or a function evaluated at a
+# number on the left, e.g. "x", "f'(1)", "g(2)". "3*x" is not a claim — it is
+# an equation still being solved, and comparing it to the final answer would
+# flag every correct intermediate step.
+_CLAIM_LHS = re.compile(r"^[A-Za-z][A-Za-z0-9_]*\s*['′]*\s*(?:\(\s*-?\d+(?:\.\d+)?\s*\))?$")
+
+
+def numeric_claim(line: str) -> float | None:
+    """The number this work line claims, when it makes an arithmetic claim.
+
+    "f'(1) = 2-1-2+3×1" claims 2. "x = 5" claims 5. A chained
+    "f'(1) = -1+9 = 8" claims its LAST segment, 8 — that is the student's
+    conclusion. None when the line is not that shape (symbolic right side,
+    no equals, unparseable): absence of a claim, never a guess.
+
+    This is what lets a wrong final line be caught by ARITHMETIC rather than
+    by a model's judgement: the claim is evaluated with sympy and compared to
+    the verified answer, and 2 ≠ 8 does not depend on anyone's reasoning.
+    """
+    if "=" not in line:
+        return None
+    parts = [p.strip() for p in _preprocess(line).split("=")]
+    if len(parts) < 2 or not all(parts):
+        return None
+    if not _CLAIM_LHS.match(parts[0]):
+        return None
+    try:
+        # primes survive _preprocess; strip them for the RHS check only —
+        # the LHS shape is all we need to know about the left side
+        value = parse_expression(parts[-1])
+        if value.free_symbols:
+            return None
+        return float(value)
+    except (ParseError, TypeError, ValueError):
+        return None
+
+
 def parse_equation(s: str) -> tuple[sympy.Expr, bool]:
     """Return (residual expression, is_equation). For 'lhs = rhs' the residual is lhs - rhs."""
     s = _preprocess(s)

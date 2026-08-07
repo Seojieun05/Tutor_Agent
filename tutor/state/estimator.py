@@ -71,7 +71,7 @@ class StudentStateEstimator:
 
         quick = self._rule_based_progress(rec, reference, prev_state)
         if quick is not None:
-            return self._post_rules(quick, reference, prev_state)
+            return self._post_rules(quick, reference, prev_state, rec)
 
         state = self.llm.run_with_tools(
             purpose="estimate",
@@ -79,7 +79,7 @@ class StudentStateEstimator:
             user=self._build_context(rec, reference, prev_state, history, transcript),
             schema=StudentState,
         )
-        return self._post_rules(state, reference, prev_state)
+        return self._post_rules(state, reference, prev_state, rec)
 
     # --- deterministic pre-checks: no LLM call -------------------------------
 
@@ -242,7 +242,9 @@ class StudentStateEstimator:
         state: StudentState,
         reference: ReferenceSolution,
         prev_state: StudentState | None,
+        rec: Recognition | None = None,
     ) -> StudentState:
+        state = self._arithmetic_check(state, reference, rec)
         max_step = len(reference.steps)
         clamped = min(max(state.last_correct_step, 0), max_step)
         attempts = 1
@@ -256,5 +258,47 @@ class StudentStateEstimator:
                 "last_correct_step": clamped,
                 "attempt_count": attempts,
                 "previous_hint_effective": effective,
+            }
+        )
+
+    @staticmethod
+    def _arithmetic_check(
+        state: StudentState,
+        reference: ReferenceSolution,
+        rec: Recognition | None,
+    ) -> StudentState:
+        """A wrong number outranks a lenient judge.
+
+        When the newest work line CLAIMS a value ("f'(1) = 2-1-2+3×1" claims 2,
+        "x = 5" claims 5) and the verified answer is a scalar, sympy compares
+        them — and a mismatch caps the diagnosis at CALCULATION_ERROR no matter
+        how correct the model judged the work to be. This is exactly the miss
+        that shipped: an LLM grader waved through a substitution whose
+        arithmetic was wrong, and the tutor said 맞아요 to a wrong line.
+        """
+        if rec is None or not rec.student_work or state.status != "CORRECT":
+            return state
+        if reference.final_answer.kind != "SCALAR":
+            return state
+        claim = mathnorm.numeric_claim(rec.student_work[-1])
+        if claim is None:
+            return state
+        try:
+            expected = float(mathnorm.parse_expression(str(reference.final_answer.value)))
+        except (mathnorm.ParseError, TypeError, ValueError):
+            return state
+        if abs(claim - expected) <= 1e-9:
+            return state
+        log.warning(
+            "arithmetic check: last line claims %s but the answer is %s — "
+            "overriding %s with CALCULATION_ERROR",
+            claim, expected, state.status,
+        )
+        return state.model_copy(
+            update={
+                "status": "CALCULATION_ERROR",
+                # the wrong line is the frontier: the final step is NOT done
+                "last_correct_step": min(state.last_correct_step, len(reference.steps) - 1),
+                "misconception": None,
             }
         )

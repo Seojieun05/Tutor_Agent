@@ -50,6 +50,7 @@ from tutor.policy.engine import Action, Decision, Trigger, decide
 from tutor.protocol.events import make_event, parse_event
 from tutor.protocol.frames import AudioFrame, ImageFrame, ProtocolError, decode
 from tutor.solver.grok_solver import GrokSolver
+from tutor.speech import mathspeak
 from tutor.speech.intent import IntentClassifier
 from tutor.speech.stt import classify_transcript
 from tutor.state.answer import AnswerEvaluator
@@ -88,19 +89,6 @@ WORK_CHECK_DEFAULT = "음, 지금 쓴 줄을 같이 볼까요?"
 # the instant the delay elapses — while the camera is still being asked.
 WORK_CHECK_OPENER = "네, 지금 쓴 풀이를 한번 볼게요."
 
-# Digits and their jongseong (final consonant) when read aloud in Korean —
-# "1이라고" (일) but "5라고" (오). Wrong particles read as broken, not as casual.
-_DIGIT_HAS_FINAL = {"0": True, "1": True, "2": False, "3": True, "4": False,
-                    "5": False, "6": True, "7": True, "8": True, "9": False}
-
-
-def _ends_in_consonant(text: str) -> bool:
-    ch = text[-1]
-    if "가" <= ch <= "힣":
-        return (ord(ch) - 0xAC00) % 28 != 0
-    return _DIGIT_HAS_FINAL.get(ch, False)
-
-
 def echo_of(transcript: str) -> str | None:
     """The student's answer, said back — the oldest sign of listening there is.
 
@@ -111,7 +99,7 @@ def echo_of(transcript: str) -> str | None:
     text = " ".join(transcript.split()).rstrip("?.!…,")
     if not text or len(text) > 24:
         return None
-    particle = "이라고" if _ends_in_consonant(text) else "라고"
+    particle = "이라고" if mathspeak.ends_in_consonant(text) else "라고"
     return f"{text}{particle} 했네요. 한번 볼게요."
 
 
@@ -124,8 +112,9 @@ def readout_of(rec: Recognition) -> str:
     text = " ".join(rec.problem_text.split())
     text = re.sub(r"^\s*\d+\s*[.)]\s*", "", text)  # exam numbering: "6. "
     text = re.sub(r"\[\s*\d+\s*점\s*\]", "", text).strip()  # point tags: "[3점]"
-    if len(text) > 110:
-        text = text[:110] + "…"
+    text = mathspeak.speakable(text)  # "f'(1)" must not reach the TTS as-is
+    if len(text) > 130:
+        text = text[:130] + "…"
     return f"문제를 같이 볼게요. {text}" if text else ""
 
 
@@ -869,11 +858,16 @@ class Session:
         return task
 
     async def _speak(self, text: str) -> None:
-        """Say something to the student, after the filler has had its say."""
+        """Say something to the student, after the filler has had its say.
+
+        Notation is rewritten at this boundary and nowhere earlier: the hint
+        history, the leak guard and the TTS cache keys all see the original
+        text, and only the student's ear gets "2 x 제곱" for "2x**2".
+        """
         await self._settle_filler()
         # TTS is part of the wait, and a cached phrase is not — worth telling apart.
         with timing.stage("speak"):
-            await self._say(text)
+            await self._say(mathspeak.speakable(text))
 
     # --- filling the thinking silence ----------------------------------------
 

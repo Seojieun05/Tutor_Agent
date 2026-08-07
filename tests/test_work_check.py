@@ -15,7 +15,7 @@ import pytest
 
 from tutor.config import Settings
 from tutor.hints.generator import HintGenerator
-from tutor.knowledge.matching import Matcher
+from tutor.knowledge.matching import Matcher, problem_hash
 from tutor.knowledge.models import Answer, MatchResult, ReferenceSolution, SolutionStep, Tier
 from tutor.llm.echo import EchoLLMClient
 from tutor.protocol.frames import ImageHeader, encode_image
@@ -225,6 +225,65 @@ async def test_a_wrong_line_is_acknowledged_without_naming_the_mistake(db):
     spoken = speaker.spoken[0]
     assert spoken.startswith("음, 지금 쓴 줄을 같이 볼까요?")
     assert "3*x = 15" not in spoken and "x = 5" not in spoken
+
+
+async def test_a_wrong_final_line_is_never_confirmed(db):
+    """The shipped miss, reproduced from the worksheet photo it shipped on.
+
+    Problem 5: f(x) = (x+2)(2x²−x−2), f'(1) = 8. The student's product rule is
+    right but their substitution line evaluates to 2, and the LLM judge graded
+    the work CORRECT anyway. The arithmetic check must outrank it: sympy says
+    2 ≠ 8, so the tutor may not say 맞아요 — whatever the model thought.
+    """
+    derivative_ref = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="곱의 미분법을 적용한다",
+                         expression="2*x**2 - x - 2 + (x + 2)*(4*x - 1)"),
+            SolutionStep(idx=2, description="x = 1을 대입한다", expression="8"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="8"),
+        concepts=["differentiation"],
+        verified=True,
+        origin="db",
+    )
+    photo = dict(
+        problem_text="함수 f(x) = (x+2)(2x**2-x-2)에 대하여 f'(1)의 값은?",
+        equations=["f(x) = (x + 2)*(2*x**2 - x - 2)"],
+        choices=["6", "7", "8", "9", "10"],
+        diagram_conditions=[], uncertain_regions=[],
+        student_work=["f'(x) = 2*x**2 - x - 2 + (x + 2)*(4*x - 1)",
+                      "f'(1) = 2 - 1 - 2 + 3 × 1"],
+        confidence=0.95,
+    )
+    session, llm, speaker, ws = build(
+        db,
+        "풀이 맞아?",
+        llm_responses={
+            "recognize": [photo],
+            # the lenient judge, verbatim: work graded fully correct
+            "estimate": [{"current_step": "대입", "last_correct_step": 2,
+                          "status": "CORRECT", "misconception": None,
+                          "attempt_count": 1, "previous_hint_effective": None}],
+        },
+    )
+    # mid-problem, reference solved: the same worksheet the photo re-captures
+    known = Recognition(**photo)
+    session.ctx = ProblemContext(
+        hash=problem_hash(known),
+        recognition=known,
+        match=MatchResult(tier=Tier.NEW, concepts=["differentiation"],
+                          reference=derivative_ref),
+        reference=derivative_ref,
+    )
+
+    await session._handle_utterance(PCM, 16000)
+
+    spoken = " ".join(speaker.spoken)
+    assert "맞아요! 이대로 하면 돼요" not in spoken       # never confirmed
+    state = session.store.get_state()
+    assert state.status == "CALCULATION_ERROR"           # the check overrode the judge
+    assert state.last_correct_step == 1                  # the substitution is the frontier
+    assert "8" not in spoken                             # and no answer leaked with it
 
 
 # --- what must NOT change ---------------------------------------------------
