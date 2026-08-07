@@ -10,7 +10,7 @@ Phone camera (wss /camera) ───────────────┐
 Device (laptop mic · browser) → WebSocket → server.py
   → Silero VAD turn detection (hands-free) → STT
   → utterance intent (hint request / work check / answer / stay quiet)
-  → Grok VLM recognition → Grok ConceptTagger (problem_type + concepts)
+  → VLM recognition + whitelisted tags (problem_type + concepts, one call)
   → Domain KB (EXACT/TEMPLATE/CONCEPT/SEMANTIC/NEW)
   → Grok Solver fallback → Student State Estimator
   → Pedagogical Policy (L0–L4) → Hint Generator (+ answer-leak guard)
@@ -365,13 +365,16 @@ browser client.
 
 ## Design highlights
 
-- **Two whitelisted tag layers**: recognition says what is written, a separate
-  [ConceptTagger](tutor/knowledge/tagger.py) says what it is —
+- **Whitelisted tags, one call**: the recognition call also classifies —
   `problem_type` (exactly one, from [taxonomy.py](tutor/knowledge/taxonomy.py))
   plus 0–4 `concepts` (from [seeds/concepts.json](tutor/knowledge/seeds/concepts.json)).
-  Python re-enforces both whitelists, so an invented id never reaches the KB.
-  Solution *strategies* are deliberately not tags. Tagging is one call per
-  problem, cached for every later hint on it.
+  The separate tagging round trip cost a measured ~7s per new problem; what
+  actually mattered survives it: Python re-enforces both whitelists after the
+  call, so an invented id never reaches the KB, tags are cached per problem so
+  they cannot drift mid-lesson, and the standalone
+  [ConceptTagger](tutor/knowledge/tagger.py) remains for reproducing a tag
+  offline from `problem_text` alone. Solution *strategies* are deliberately
+  not tags.
 - **Tool-calling, read-only**: the LLM's only tool is kind-scoped
   `search_domain_kb`; per-purpose allowlists (`tutor/tools/registry.py`) keep
   `phrase` away from solutions/answers entirely. Session state and hint history

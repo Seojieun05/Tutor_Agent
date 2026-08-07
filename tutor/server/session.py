@@ -44,7 +44,6 @@ from tutor.hints.generator import (
 from tutor.hints.guard import leaks_answer
 from tutor.knowledge import mathnorm
 from tutor.knowledge.matching import Matcher, problem_hash
-from tutor.knowledge.tagger import ConceptTagger
 from tutor.knowledge.models import MatchResult, ReferenceSolution, Tier
 from tutor.llm import timing
 from tutor.policy.engine import Action, Decision, Trigger, decide
@@ -186,7 +185,6 @@ class Deps:
     transcriber: object  # .transcribe(pcm, sample_rate) -> Transcript
     speaker: object  # .speak(text) -> None
     evaluator: AnswerEvaluator | None = None  # None → answers fall back to a hint request
-    tagger: ConceptTagger | None = None  # None → Recognition keeps "unknown"/[]
     cameras: object | None = None  # CameraHub: eyes on another socket (the phone)
     fillers: object | None = None  # FillerBank: what to say while thinking
     # what each utterance is FOR; without an LLM it still routes by rule
@@ -830,12 +828,10 @@ class Session:
             self.store.clear_state()
             self.prev_work = None
             self.last_transcript = None
-        # A new problem: classify it once, then everything downstream (matching,
-        # RAG, hint phrasing) reads the tags off the Recognition.
-        if self.deps.tagger is not None:
-            tags = await asyncio.to_thread(self.deps.tagger.tag, rec)
-            rec.problem_type = tags.problem_type
-            rec.concepts = tags.concepts
+        # A new problem. The tags arrived with the recognition itself (one VLM
+        # call does both jobs now — see tutor/vision/recognizer.py); everything
+        # downstream (matching, RAG, hint phrasing) reads them off the
+        # Recognition, and the cached branch above keeps them stable per problem.
         match = await asyncio.to_thread(self.deps.matcher.match, rec)
         reference = match.reference
         solving = None

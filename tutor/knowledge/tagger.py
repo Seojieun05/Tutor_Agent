@@ -1,9 +1,10 @@
-"""Grok ConceptTagger: classify a recognized problem into the two whitelists.
+"""ConceptTagger: classify a recognized problem into the two whitelists.
 
-Deliberately a separate call from the VLM recognition. The Recognizer answers
-"what is written on this paper"; the tagger answers "what kind of problem is
-this and what must you know to solve it". Keeping them apart means a wrong tag
-can be reproduced and debugged from `problem_text` alone, without an image.
+The LIVE path no longer calls this — tagging rides inside the recognition call
+(tutor/vision/recognizer.py), because the separate round trip cost a measured
+~7s per new problem. This class remains as the standalone version of the same
+job: reproducing a wrong tag from `problem_text` alone (no image needed), and
+offline work like the AI-Hub import, share its prompt and its enforcement.
 
 The model picks from whitelists, and Python enforces them again afterwards —
 an invented id is dropped here rather than poisoning the KB or the retrieval.

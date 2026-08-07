@@ -29,7 +29,6 @@ from tutor.console import say, soften_stdout
 from tutor.hints.generator import HintGenerator
 from tutor.knowledge.db import KnowledgeDB
 from tutor.knowledge.matching import Matcher
-from tutor.knowledge.tagger import ConceptTagger
 from tutor.server.camera import CameraConnection, CameraHub
 from tutor.llm.echo import EchoLLMClient
 from tutor.server.session import Deps, Session
@@ -199,7 +198,6 @@ def make_deps(
         transcriber=transcriber,
         speaker=speaker,
         evaluator=AnswerEvaluator(llm, db),
-        tagger=ConceptTagger(llm),
         cameras=cameras,
         fillers=FillerBank() if settings.filler_enabled else None,
         classifier=IntentClassifier(llm),

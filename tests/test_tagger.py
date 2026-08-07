@@ -104,8 +104,29 @@ class TestTagger:
         assert "4! = 24" not in context
 
 
-class TestTaggingInTheSession:
-    """Where the tagger sits in the pipeline: once per problem, before matching."""
+class TestMergedRecognitionTags:
+    """Tagging now rides inside the recognition call — same whitelists, one
+    round trip. The recognizer must enforce them exactly as the tagger did."""
+
+    def test_the_recognizer_normalizes_invented_ids(self):
+        from tutor.vision.recognizer import Recognizer
+
+        llm = EchoLLMClient({"recognize": [{
+            "problem_text": "3x + 5 = 20을 푸시오",
+            "equations": ["3*x + 5 = 20"],
+            "confidence": 0.95,
+            "problem_type": "invented_type",              # not in the taxonomy
+            "concepts": ["linear_equation", "made_up"],   # one real, one invented
+        }]})
+        rec = Recognizer(llm).recognize(b"\xff\xd8jpeg")
+
+        assert rec.problem_type == "unknown"              # invented type dies here
+        assert rec.concepts == ["linear_equation"]        # invented concept dropped
+        assert llm.calls == ["recognize"]                 # and no second call
+
+
+class TestTagsInTheSession:
+    """Once per problem: tags arrive with the recognition and stay stable."""
 
     @staticmethod
     def _session(db, llm):
@@ -129,48 +150,38 @@ class TestTaggingInTheSession:
             hint_gen=HintGenerator(llm, db),
             transcriber=EchoTranscriber(),
             speaker=NullSpeaker(),
-            tagger=ConceptTagger(llm),
             store=SessionStore(),
         )
         return Session(object(), deps), llm
 
-    async def test_tagged_once_then_carried_across_captures(self, db):
-        llm = EchoLLMClient(
-            {"tag": [{"problem_type": "linear_equation", "concepts": ["linear_equation"]}]}
-        )
-        session, llm = self._session(db, llm)
+    async def test_tags_stay_stable_across_captures_of_the_same_problem(self, db):
+        """The VLM re-reads the same page with small drifts; the tags of the
+        FIRST sight win, or the problem cache and retrieval keys would wobble."""
+        session, llm = self._session(db, EchoLLMClient())
 
-        first = Recognition(problem_text="3x + 5 = 20을 푸시오", equations=["3*x + 5 = 20"])
+        first = Recognition(problem_text="3x + 5 = 20을 푸시오", equations=["3*x + 5 = 20"],
+                            problem_type="linear_equation", concepts=["linear_equation"])
         await session._problem_context(first)
-        assert (first.problem_type, first.concepts) == ("linear_equation", ["linear_equation"])
 
-        # same problem, the student wrote another line
-        second = Recognition(
-            problem_text="3x + 5 = 20을 푸시오",
-            equations=["3*x + 5 = 20"],
-            student_work=["3*x = 15"],
-        )
+        # same problem, new work line — and the re-read drifted the tags
+        second = Recognition(problem_text="3x + 5 = 20을 푸시오", equations=["3*x + 5 = 20"],
+                             student_work=["3*x = 15"],
+                             problem_type="quadratic_equation", concepts=["quadratic_equation"])
         await session._problem_context(second)
 
-        assert llm.calls.count("tag") == 1  # cached: no LLM call per hint
-        assert second.problem_type == "linear_equation"  # tags carried over
+        assert second.problem_type == "linear_equation"   # cached tags reapplied
         assert second.concepts == ["linear_equation"]
+        assert llm.calls.count("tag") == 0                # no separate call exists
 
-    async def test_a_different_problem_is_tagged_again(self, db):
-        llm = EchoLLMClient(
-            {
-                "tag": [
-                    {"problem_type": "linear_equation", "concepts": ["linear_equation"]},
-                    {"problem_type": "counting", "concepts": ["permutation"]},
-                ]
-            }
-        )
-        session, llm = self._session(db, llm)
+    async def test_a_different_problem_keeps_its_own_tags(self, db):
+        session, llm = self._session(db, EchoLLMClient())
         await session._problem_context(
-            Recognition(problem_text="3x + 5 = 20", equations=["3*x + 5 = 20"])
+            Recognition(problem_text="3x + 5 = 20", equations=["3*x + 5 = 20"],
+                        problem_type="linear_equation", concepts=["linear_equation"])
         )
-        other = Recognition(problem_text="배열하는 경우의 수를 구하시오")
+        other = Recognition(problem_text="배열하는 경우의 수를 구하시오",
+                            problem_type="counting", concepts=["permutation"])
         await session._problem_context(other)
 
-        assert llm.calls.count("tag") == 2
-        assert other.problem_type == "counting"
+        assert other.problem_type == "counting"           # not overwritten by the old ctx
+        assert other.concepts == ["permutation"]

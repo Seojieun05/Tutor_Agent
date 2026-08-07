@@ -8,7 +8,7 @@ Runs the three turns a student can provoke against the REAL models and times
 every stage, because the interesting question is not "is it slow" but "which
 call". The three differ in what they are allowed to skip:
 
-    HINT_REQUEST  recognize → tag → match → phrase   (solve runs in the background)
+    HINT_REQUEST  recognize(+tags) → match → phrase  (solve runs in the background)
     WORK_CHECK    recognize → estimate → phrase        (problem already known)
     ANSWER        evaluate → phrase                    (no photo at all)
 
@@ -35,7 +35,6 @@ from tutor.hints.generator import HintGenerator
 from tutor.knowledge.db import KnowledgeDB
 from tutor.knowledge.matching import Matcher, problem_hash
 from tutor.knowledge.models import MatchResult, Tier
-from tutor.knowledge.tagger import ConceptTagger
 from tutor.llm import timing
 from tutor.policy.engine import Action, Decision
 from tutor.solver.grok_solver import GrokSolver
@@ -85,7 +84,6 @@ def build(settings):
     return {
         "db": db,
         "recognizer": Recognizer(vision_llm, settings),
-        "tagger": ConceptTagger(llm),
         "matcher": Matcher(db, semantic=semantic),
         "solver": GrokSolver(llm, db),
         "estimator": StudentStateEstimator(llm, db, settings.recog_conf_threshold),
@@ -103,8 +101,6 @@ def hint_request(dep, jpeg: bytes) -> tuple[Timer, object]:
     answer could be graded)."""
     t = Timer()
     rec = t.run("recognize", dep["recognizer"].recognize, jpeg)
-    tags = t.run("tag", dep["tagger"].tag, rec)
-    rec.problem_type, rec.concepts = tags.problem_type, tags.concepts
     match = t.run("match", dep["matcher"].match, rec)
     reference = match.reference
     future = None

@@ -29,6 +29,9 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
         "student_work": ["3*x = 20 + 5"],
         "uncertain_regions": [],
         "confidence": 0.95,
+        # the merged recognize call carries the tags (whitelist-valid ids)
+        "problem_type": "linear_equation",
+        "concepts": ["linear_equation"],
     },
     "solve": {
         "steps": [
