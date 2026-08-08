@@ -7,3 +7,7 @@ __pycache__/
 simulator/assets/
 datasets/
 certs/
+# local agent tooling (installed skills), not part of the tutor
+.agents/
+.claude/
+skills-lock.json
