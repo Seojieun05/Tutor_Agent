@@ -106,6 +106,8 @@ class TestItLeavesSpeechAlone:
         from tutor.hints.generator import FIXED_ACTIONS
         from tutor.server.session import (
             PROBLEM_DONE,
+            READOUT_CLOSERS,
+            READOUT_OPENER,
             RETRY_PROMPTS,
             WORK_CHECK_OPENER,
             WORK_CONFIRMED,
@@ -113,6 +115,7 @@ class TestItLeavesSpeechAlone:
         from tutor.speech.filler import FILLER_PHRASES
 
         for phrase in [PROBLEM_DONE, WORK_CHECK_OPENER, WORK_CONFIRMED,
+                       READOUT_OPENER, *READOUT_CLOSERS.values(),
                        *RETRY_PROMPTS.values(), *FILLER_PHRASES,
                        *(t for t in FIXED_ACTIONS.values() if t)]:
             assert speakable(phrase) == phrase, phrase

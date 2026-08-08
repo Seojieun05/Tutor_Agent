@@ -89,6 +89,22 @@ WORK_CHECK_DEFAULT = "음, 지금 쓴 줄을 같이 볼까요?"
 # the instant the delay elapses — while the camera is still being asked.
 WORK_CHECK_OPENER = "네, 지금 쓴 풀이를 확인하고 있어요."
 
+# The readout frame: everything around the problem text is fixed, so its TTS
+# is pre-rendered and the only synthesis the narration waits for is the one
+# line that is different every time — the problem itself. The closer turns the
+# readout into a teaching move: the things worth checking before starting.
+# Two variants because Korean quotes with 라는 after a vowel, 이라는 after a
+# final consonant — chosen off the LAST SPOKEN syllable of the problem line.
+READOUT_OPENER = "좋아요, 문제 확인해 볼게요."
+_READOUT_QUESTION = (
+    "라는 문제군요. 범위 제한이나 최고차항의 계수, "
+    "숨겨진 비율이나 대칭성이 있는지도 확인해 보셨나요?"
+)
+READOUT_CLOSERS: dict[bool, str] = {
+    False: _READOUT_QUESTION,
+    True: "이" + _READOUT_QUESTION,
+}
+
 # Spoken sentence endings that are the STUDENT'S politeness, not their answer.
 # "5예요" quotes back as the stilted "5예요라고 했네요"; a teacher hears the 5,
 # drops the ending, and says "5… 어디 보자". Longest first, stripped once.
@@ -121,8 +137,11 @@ def answer_core(transcript: str) -> str | None:
     return None
 
 
-def readout_of(rec: Recognition) -> str:
-    """The problem, read back while the tagger and phraser think.
+def readout_of(rec: Recognition) -> list[str]:
+    """The problem, read back while the tagger and phraser think — as three
+    LINES, because the split is what the latency comes down to: the opener and
+    the closer never change, so their audio is already rendered (CachedSpeech),
+    and the problem itself is the only line that pays for TTS.
 
     Also the moment a misread photo gets caught: the student hears what the
     tutor believes the problem says, seconds before any hint depends on it.
@@ -130,11 +149,17 @@ def readout_of(rec: Recognition) -> str:
     text = " ".join(rec.problem_text.split())
     text = re.sub(r"^\s*\d+\s*[.)]\s*", "", text)  # exam numbering: "6. "
     text = re.sub(r"\[\s*\d+\s*점\s*\]", "", text).strip()  # point tags: "[3점]"
+    if not text:
+        return []
     # kept as NOTATION: _say speaks it through speakable(), the browser shows
     # it through displayable() — one narration, two renderings
     if len(text) > 130:
         text = text[:130] + "…"
-    return f"문제를 같이 볼게요. {text}" if text else ""
+    # 라는/이라는 follows what the EAR will hear last, not what the page shows:
+    # the particle attaches to the spoken form of the problem's final syllable.
+    heard = mathspeak.speakable(text).rstrip("?.!…, \"'")
+    closer = READOUT_CLOSERS[mathspeak.ends_in_consonant(heard)]
+    return [READOUT_OPENER, text, closer]
 
 
 def _solve_dead(task: asyncio.Task | None) -> bool:
@@ -726,7 +751,9 @@ class Session:
             # matcher and the phraser think (~15s of otherwise dead air). The
             # student hears that the tutor actually saw their problem — and a
             # misread photo gets caught out loud, before any hint depends on it.
-            self._narrate(readout_of(rec))
+            # Three lines, queued in order: only the middle one costs TTS.
+            for line in readout_of(rec):
+                self._narrate(line)
         ctx = await self._problem_context(rec)
 
         # Diagnose before helping (spec rule 4). State/history are prefetched

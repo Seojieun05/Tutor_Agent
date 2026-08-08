@@ -24,6 +24,8 @@ from tutor.knowledge.models import Answer, MatchResult, ReferenceSolution, Solut
 from tutor.llm.echo import EchoLLMClient
 from tutor.protocol.frames import ImageHeader, encode_image
 from tutor.server.session import (
+    READOUT_CLOSERS,
+    READOUT_OPENER,
     WORK_CHECK_OPENER,
     Deps,
     ProblemContext,
@@ -212,32 +214,46 @@ async def test_a_work_check_opens_by_saying_it_is_looking(db):
 
 def test_readout_strips_exam_numbering_and_point_tags():
     rec = Recognition(problem_text="6.  1보다 큰 두 실수 a, b가\n주어질 때 값은? [3점]")
-    assert readout_of(rec) == "문제를 같이 볼게요. 1보다 큰 두 실수 a, b가 주어질 때 값은?"
+    assert readout_of(rec) == [
+        READOUT_OPENER,
+        "1보다 큰 두 실수 a, b가 주어질 때 값은?",
+        READOUT_CLOSERS[True],   # heard last: "값은" — final consonant, 이라는
+    ]
+
+
+def test_readout_particle_follows_the_spoken_ending():
+    vowel = Recognition(problem_text="x의 값을 구하시오.")
+    assert readout_of(vowel)[-1] == READOUT_CLOSERS[False]   # "구하시오" — 라는
+    assert readout_of(Recognition(problem_text="")) == []    # nothing to read
 
 
 async def test_a_new_problem_is_read_back_while_the_tutor_thinks(db):
+    """Opener, the problem, the check-question closer — in that order, and the
+    frame lines are cache keys so only the problem line pays for TTS."""
     session, llm, speaker, ws = build(db, "이 문제 힌트 줄래?")
 
     await session._handle_utterance(PCM, 16000)
     # the narration is queued after recognize; give the filler task one beat
     await asyncio.sleep(0)
 
-    narrations = [s for s in speaker.spoken if s.startswith("문제를 같이 볼게요.")]
-    assert narrations, f"no readout in {speaker.spoken}"
+    opener_at = speaker.spoken.index(READOUT_OPENER)
+    problem_at = next(i for i, s in enumerate(speaker.spoken) if "일차방정식" in s)
+    closer_at = speaker.spoken.index(READOUT_CLOSERS[True])   # "…20" — 이라는
+    assert opener_at < problem_at < closer_at
     # and it never outlives the answer: the hint is the LAST thing said
-    assert not speaker.spoken[-1].startswith("문제를 같이 볼게요.")
+    assert speaker.spoken[-1] != READOUT_CLOSERS[True]
 
 
 async def test_the_same_problem_is_not_read_back_twice(db):
     session, llm, speaker, ws = build(db, "이 문제 힌트 줄래?")
 
     await session._handle_utterance(PCM, 16000)      # first sight: readout queued
-    first = len([s for s in speaker.spoken if s.startswith("문제를 같이 볼게요.")])
+    first = speaker.spoken.count(READOUT_OPENER)
     assert first == 1
 
     await session.handle_hint_request()              # same worksheet, second turn
 
-    again = len([s for s in speaker.spoken if s.startswith("문제를 같이 볼게요.")])
+    again = speaker.spoken.count(READOUT_OPENER)
     assert again == first                            # no second readout
 
 

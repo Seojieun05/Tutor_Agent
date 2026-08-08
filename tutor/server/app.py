@@ -127,7 +127,13 @@ def wrap_with_cache(settings: Settings, speaker):
     if not settings.filler_enabled:
         return speaker
     from tutor.hints.generator import FIXED_ACTIONS
-    from tutor.server.session import PROBLEM_DONE, RETRY_PROMPTS, WORK_CHECK_OPENER
+    from tutor.server.session import (
+        PROBLEM_DONE,
+        READOUT_CLOSERS,
+        READOUT_OPENER,
+        RETRY_PROMPTS,
+        WORK_CHECK_OPENER,
+    )
     from tutor.speech.filler import FILLER_PHRASES, CachedSpeech
 
     repeated = [
@@ -136,6 +142,10 @@ def wrap_with_cache(settings: Settings, speaker):
         *RETRY_PROMPTS.values(),
         PROBLEM_DONE,
         WORK_CHECK_OPENER,
+        # the readout frame: the problem text between them is the only line of
+        # the narration that ever pays for TTS at speak time
+        READOUT_OPENER,
+        *READOUT_CLOSERS.values(),
     ]
     return CachedSpeech(
         speaker,
