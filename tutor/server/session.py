@@ -9,8 +9,8 @@ HINT REQUEST / WORK CHECK (the worksheet is the evidence — the camera looks)
     estimate → set_state + resolve pending hint effectiveness → prefetch
     state/history → policy.decide → generate hint (leak-guarded) → speak.
 
-    One method serves both. "이 문제 힌트 줄래?" and "이렇게 하는 거 맞아?" want
-    the same pipeline over a fresh photo; the only difference is that the
+    One method serves both. "이 문제 힌트 줄래?" and "풀이 맞아?" want the
+    same pipeline over a fresh photo; the only difference is that the
     second one asked something, so their question reaches the hint phrasing and
     the tutor confirms what it saw before hinting (`question=`).
 
@@ -51,7 +51,7 @@ from tutor.protocol.events import make_event, parse_event
 from tutor.protocol.frames import AudioFrame, ImageFrame, ProtocolError, decode
 from tutor.solver.grok_solver import GrokSolver
 from tutor.speech import mathspeak
-from tutor.speech.intent import IntentClassifier
+from tutor.speech.intent import IntentClassifier, refers_to_work
 from tutor.speech.stt import classify_transcript
 from tutor.state.answer import AnswerEvaluator
 from tutor.state.estimator import StudentStateEstimator, hint_was_effective
@@ -529,14 +529,22 @@ class Session:
         self.last_transcript = None  # graded; not evidence for the next turn
 
         if verdict.intent == "WORK_CHECK":
-            # The keyword rules read this as an answer, but the student was
-            # pointing at their page ("여기 이거 어떡해요?"). Nothing was
-            # attempted, so nothing is graded: go and look instead. Not the
-            # public entry point — this turn already holds the busy flag.
-            log.info("answer turn redirected to a work check: %r", transcript[:40])
-            # ungraded, so it is still evidence — the estimator reads it too
-            self.last_transcript = transcript
-            await self._handle_hint_request(transcript)
+            if refers_to_work(transcript):
+                # The answer-shaped fast path read it as a value ("풀이 5 맞아?"),
+                # but they named their written work: go and look. Not the public
+                # entry point — this turn already holds the busy flag.
+                log.info("answer turn redirected to a work check: %r", transcript[:40])
+                # ungraded, so it is still evidence — the estimator reads it too
+                self.last_transcript = transcript
+                await self._handle_hint_request(transcript)
+                return
+            # The evaluator thinks they meant their page, but they never named
+            # it — and the camera fires on "풀이 봐줘" and nothing else. Explain
+            # the pending question instead; if they do want their work checked,
+            # the words that ask for it are one sentence away.
+            log.info("evaluator suggested a work check without the words; "
+                     "explaining instead: %r", transcript[:40])
+            await self._answer_question(ctx, pending, transcript)
             return
 
         if verdict.intent == "QUESTION":
@@ -678,7 +686,7 @@ class Session:
         """Capture → recognize → diagnose → hint, over a fresh photo.
 
         `question` is set when the student asked about their own work
-        ("이렇게 하는 거 맞아?"). The pipeline is identical — that is the point:
+        ("풀이 맞아?"). The pipeline is identical — that is the point:
         checking work IS re-reading the worksheet and re-diagnosing. It only
         changes what comes out: their question reaches the hint phrasing, and
         the tutor says what it saw before hinting.

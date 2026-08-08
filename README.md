@@ -159,11 +159,13 @@ table, so every utterance is classified first
 | "5예요" · "네, 맞아요" · "그렇게 하면 돼요" | `ANSWER` | 촬영 안 함 |
 | 혼잣말·잡담 | `NONE` | 무응답 |
 
-A work check has to **name the written work** — 풀이, 내가 쓴 거, 이렇게 하는 거,
-어디가 틀렸 — or ask for it to be looked at (봐 줘). A bare "맞아?" is
-deliberately not enough: "네, 맞아요" is how a student *agrees* with the tutor,
-and treating that as a work check stopped the lesson to photograph the page
-every time they did.
+A work check needs **both halves**: the written work named out loud (풀이,
+내가 쓴 거) *and* a check asked (맞아? · 봐줘 · 확인해줘). Either half alone is
+everyday speech — "네, 맞아요" is agreement, "아 이렇게 하면 되는구나" is
+thinking out loud, "다시 말해 봐줘" wants a repeat — and every one of them used
+to stop the lesson and photograph the page. The camera fires on "풀이 봐줘" and
+on nothing else: neither the LLM classifier nor the answer evaluator can open
+it on a transcript that keeps both halves shut.
 
 A hint request and a work check otherwise run the **same** turn — checking work
 *is* re-reading the worksheet and re-diagnosing. The one difference is what
@@ -176,15 +178,16 @@ wrong. No hint record either, so the L1–L4 ladder does not move. If the work i
 
 An answer is graded from the transcript alone: no capture, no VLM, and no
 classifier call either — that is what makes it fast enough to feel like a
-conversation. `AnswerEvaluator` can still redirect one to a work check if the
-keywords misread it.
+conversation. `AnswerEvaluator` can still redirect one to a work check, but
+only when the transcript itself names the work ("풀이 5 맞아?" swallowed by the
+answer-shaped fast lane); otherwise its hunch earns an explanation, not a photo.
 
 Two things the rules deliberately keep as they were: "모르겠어요" or "힌트 더
 주세요" against a pending question is still an *answer* (the evaluator reads it
-as "escalate"), and "이렇게 하는 거 맞아?" before any photo exists is promoted to
-a hint request, because the camera has to see the page first either way.
-Ambiguous phrasings the keyword rules miss go to one small no-tools LLM call;
-`AnswerEvaluator` can also redirect a mis-routed answer to a work check.
+as "escalate"), and "풀이 맞아?" before any photo exists is promoted to a hint
+request, because the camera has to see the page first either way. Ambiguous
+phrasings the keyword rules miss go to one small no-tools LLM call — which may
+route them to a hint or to silence, but never to the camera-and-VLM work check.
 
 ## The worksheet photo
 

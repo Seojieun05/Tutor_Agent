@@ -1,9 +1,10 @@
-"""ASCII math, said the way a Korean teacher says it.
+"""ASCII and LaTeX math, said the way a Korean teacher says it.
 
-TTS reads "f'(1) = 2x**2 - x" as punctuation soup. Everything the tutor SPEAKS
+TTS reads "f'(1) = 2x**2 - x" as punctuation soup, and the hint model likes to
+write "y = -\\frac{1}{5}x^2 + 3" on top of that. Everything the tutor SPEAKS
 passes through speakable(), which rewrites the notations a K-12 worksheet
 actually contains — powers, primes, logs, fractions, the four operators —
-into the spoken forms: "f 프라임 1", "2 x 제곱 빼기 x", "2분의 1", "밑이 3인
+into the spoken forms: "f 프라임 1", "2 x 제곱 빼기 x", "5분의 1", "밑이 3인
 로그". Parentheses become commas: a pause where the grouping was.
 
 Deliberately conservative: text with no math notation comes back UNCHANGED,
@@ -21,7 +22,42 @@ _DIGIT_HAS_FINAL = {"0": True, "1": True, "2": False, "3": True, "4": False,
                     "5": False, "6": True, "7": True, "8": True, "9": False}
 
 # If none of these appear, the text has no math notation worth touching.
-_MATH_SIGNAL = re.compile(r"[*^=/×÷'′²³√]|\blog|\bsqrt|\bDerivative")
+# The backslash is LaTeX: the VLM and the hint model both write \frac{1}{5}.
+_MATH_SIGNAL = re.compile(r"[*^=/×÷'′²³√\\]|\blog|\bsqrt|\bDerivative")
+
+# \frac{1}{5}, \dfrac{x+1}{2} — the args stay brace-free on a K-12 worksheet
+_FRAC = re.compile(r"\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}")
+
+
+def _latex(s: str, *, spoken: bool) -> str:
+    """LaTeX, as the models actually emit it, down to the ASCII the rest of
+    this module reads. \frac goes straight to its destination form — 분모-first
+    Korean for the ear, num/den for the eye — because once it is a bare `1/5x`
+    the denominator's edge is lost and "5x분의 1" comes out wrong.
+    """
+    if "\\" not in s and "$" not in s and "{" not in s:
+        return s
+    s = re.sub(r"\$+", "", s)                    # $…$ / $$…$$ delimiters
+    s = re.sub(r"\\left|\\right", "", s)
+    s = re.sub(r"\\[\(\)\[\]]", "", s)           # \( \) \[ \] delimiters
+    s = re.sub(r"\\[,;!: ]", " ", s)             # spacing commands
+    s = s.replace("\\cdot", "*").replace("\\times", "×").replace("\\div", "÷")
+    s = s.replace("\\pi", "파이" if spoken else "π")
+    s = re.sub(r"\\sqrt\s*\{([^{}]*)\}", r"sqrt(\1)", s)
+    if spoken:
+        s = _FRAC.sub(lambda m: f" {m.group(2).strip()}분의 {m.group(1).strip()} ", s)
+    else:
+        def frac(m: re.Match) -> str:
+            num, den = m.group(1).strip(), m.group(2).strip()
+            wrap = lambda a: a if re.fullmatch(r"\w+", a) else f"({a})"  # noqa: E731
+            body = f"{wrap(num)}/{wrap(den)}"
+            # -1/5x² misreads as 1/(5x²): parenthesize when a term follows
+            follows = re.match(r"\s*[0-9A-Za-z(√\\]", s[m.end():])
+            return f"({body})" if follows else body
+
+        s = _FRAC.sub(frac, s)
+    # ^{10} → ^10, log_{3} → log_3: whatever survives, unwrapped
+    return s.replace("{", "").replace("}", "")
 
 
 def ends_in_consonant(text: str) -> bool:
@@ -43,6 +79,7 @@ def _powers(s: str) -> str:
         return {"2": " 제곱", "3": " 세제곱"}.get(exp, f"의 {exp}제곱")
 
     s = re.sub(r"\s*(?:\*\*|\^)\s*(\d+)", lambda m: power_word(m.group(1)), s)
+    s = re.sub(r"\s*\^\s*([A-Za-z])\b", r"의 \1제곱", s)  # x^n → "x의 n제곱"
     s = s.replace("²", " 제곱").replace("³", " 세제곱")
     return s
 
@@ -113,7 +150,10 @@ def displayable(text: str) -> str:
     """
     if not text or not _MATH_SIGNAL.search(text):
         return text
-    s = text.replace("**2", "²").replace("**3", "³")
+    s = _latex(text, spoken=False)
+    # x**2 AND x^2 → x²; the (?!\d) keeps x**23 from becoming x²3
+    s = re.sub(r"(?:\*\*|\^)2(?!\d)", "²", s)
+    s = re.sub(r"(?:\*\*|\^)3(?!\d)", "³", s)
     s = re.sub(r"\*\*(\d+)", r"^\1", s)
     s = re.sub(r"\s*\*\s*", "·", s)
     s = s.replace("sqrt(", "√(")
@@ -124,7 +164,7 @@ def speakable(text: str) -> str:
     """The text as it should be SPOKEN. Identity when there is no math in it."""
     if not text or not _MATH_SIGNAL.search(text):
         return text
-    s = text
+    s = _latex(text, spoken=True)
     s = _primes(s)      # before parens: they consume the argument's ()
     s = _logs(s)        # before fractions: log_3 b/a keeps its argument whole
     s = _powers(s)

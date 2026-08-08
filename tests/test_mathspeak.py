@@ -39,6 +39,33 @@ class TestTheWorksheetReadsAloud:
         assert "1은 8" in speakable("f'(1) = 8")        # 일 — final consonant, 은
 
 
+class TestLatexReadsAloud:
+    """The hint model writes LaTeX at the student; the mouth must not spell it.
+
+    The reference cases are the two parabolas that broke live:
+    y = x^2 + 3 and y = -\\frac{1}{5}x^2 + 3.
+    """
+
+    def test_a_caret_power_is_spoken(self):
+        said = speakable("y = x^2 + 3")
+        assert said == "y는 x 제곱 더하기 3"
+
+    def test_a_latex_fraction_reads_denominator_first(self):
+        said = speakable("y = -\\frac{1}{5}x^2 + 3")
+        assert "5분의 1" in said
+        assert "마이너스" in said                       # the sign survives the frac
+        assert "x 제곱" in said
+        assert "frac" not in said and "\\" not in said and "{" not in said
+
+    def test_braced_exponents_and_delimiters(self):
+        said = speakable("$x^{2} \\cdot \\sqrt{2}$")
+        assert "제곱" in said and "곱하기" in said and "루트 2" in said
+        assert "$" not in said and "{" not in said
+
+    def test_a_variable_exponent_is_spoken(self):
+        assert "x의 n제곱" in speakable("x^n = 8")
+
+
 class TestTheScreenGetsNotation:
     """displayable(): the same boundary as speakable(), split by destination —
     the transcript panel shows 2·x², never '2 x 제곱' and never '2*x**2'."""
@@ -55,6 +82,16 @@ class TestTheScreenGetsNotation:
 
         said = displayable("f'(1) = 2*3")
         assert "f'(1)" in said and "=" in said and "2·3" in said
+
+    def test_latex_becomes_print_notation(self):
+        from tutor.speech.mathspeak import displayable
+
+        assert displayable("y = x^2 + 3") == "y = x² + 3"
+        # the fraction is parenthesized because a term follows it
+        assert displayable("y = -\\frac{1}{5}x^2 + 3") == "y = -(1/5)x² + 3"
+        assert displayable("\\frac{1}{2}") == "1/2"
+        assert displayable("\\frac{x+1}{2} = 3") == "(x+1)/2 = 3"
+        assert displayable("$\\sqrt{2} \\cdot x^{10}$") == "√(2)·x^10"
 
     def test_plain_korean_is_untouched(self):
         from tutor.speech.mathspeak import displayable

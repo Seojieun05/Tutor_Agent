@@ -4,13 +4,16 @@ The tutor hears one transcript and has to pick between very different turns,
 and the words alone do not decide it — what is already on the table does:
 
     HINT_REQUEST  "이 문제 힌트 줄래?" · "도와줘"   → capture + VLM, hint the next step
-    WORK_CHECK    "이렇게 하는 거 맞아?" · "봐 줘"  → capture + VLM, react to what they wrote
+    WORK_CHECK    "풀이 맞아?" · "풀이 봐줘"        → capture + VLM, react to what they wrote
     ANSWER        "5예요" · "마이너스 3이요"        → no camera: the transcript IS the evidence
     NONE          thinking out loud                 → say nothing (spec rule 7)
 
 The split that matters is WORK_CHECK vs ANSWER. Both arrive while a tutor
-question is pending, and grading "이렇게 하는 거 맞아?" as an answer is how the
-tutor ends up re-explaining its own question at a worksheet it never looked at.
+question is pending, and grading "풀이 맞아?" as an answer is how the tutor
+ends up re-explaining its own question at a worksheet it never looked at. The
+opposite mistake costs more in practice: hearing "아 이렇게 하면 되는구나" as a
+work check stops the lesson for a photo nobody asked for — so the camera door
+only opens when the student names their written work (see refers_to_work).
 
 Rules decide the confident cases at zero cost — a bare "5예요" must never pay
 for an LLM round trip, because that is the turn the student feels as a
@@ -34,19 +37,28 @@ log = logging.getLogger(__name__)
 
 Intent = Literal["HINT_REQUEST", "WORK_CHECK", "ANSWER", "NONE"]
 
-# "지금 내가 쓴 걸 봐 달라" — and ONLY that.
+# "지금 내가 쓴 걸 봐 달라" — and ONLY that, named out loud.
 #
-# Every phrase here names the written work or asks for it to be looked at. A
-# bare "맞아?" is deliberately NOT one of them: "네, 맞아요" is how a student
-# answers a question, and treating that as a work check made the tutor stop and
-# photograph the page every time they simply agreed with it.
-WORK_CHECK_KEYWORDS = (
+# A work check costs a photo and a VLM run, so it requires BOTH halves: the
+# student names their written work (풀이 / 내가 쓴 것) AND asks for it to be
+# judged (맞아? / 봐줘 / 확인해줘). Either half alone is everyday speech —
+# "아 이렇게 하면 되는구나" is thinking out loud, "다시 말해 봐줘" wants a
+# repeat, "네 맞아요" is agreement — and every one of them used to stop the
+# lesson and photograph the page.
+_WORK_WORDS = (
     "풀이",                                    # 풀이 맞아? · 풀이 봐줘 · 내 풀이 어때?
-    "봐 줘", "봐줘", "봐 주", "봐주", "봐 줄", "봐줄",   # 봐 주세요 / 봐 줄래요
     "내가 쓴", "제가 쓴", "내가 푼", "제가 푼", "내가 한", "제가 한",
-    "이렇게 하는", "이렇게 푸는", "이렇게 하면 되",
-    "어디가 틀", "어디서 틀", "뭐가 틀", "무엇이 틀",
 )
+_CHECK_WORDS = ("맞", "봐", "보", "확인", "틀", "어때")
+
+
+def refers_to_work(text: str) -> bool:
+    """Did they explicitly name their written work AND ask for it to be looked
+    at? This is the ONLY door to the camera outside a hint request — the LLM
+    classifier and the answer evaluator can suggest a work check, but neither
+    is allowed to open this door on a transcript that keeps both halves shut.
+    """
+    return _has(text, _WORK_WORDS) and _has(text, _CHECK_WORDS)
 
 # "5예요"는 네 토큰을 넘지 않는다. 길이가 내용만큼 중요한 이유는 아래 주석 참고.
 _MAX_ANSWER_TOKENS = 4
@@ -69,11 +81,11 @@ Return exactly one intent:
 - "HINT_REQUEST" — they want help getting started or getting unstuck on the
   problem itself. "이 문제 힌트 줄래?", "도와줘", "이거 어떻게 풀어요?",
   "무슨 공식 써요?". The tutor must look at the problem.
-- "WORK_CHECK" — they are pointing at what THEY have written and asking you to
-  look at it. "풀이 맞아요?", "제 풀이 봐 주세요", "내가 쓴 거 봐줘",
-  "이렇게 하는 거 맞아요?", "여기서 뭐가 틀렸어요?". Taking a photo costs the
-  student a pause, so require that they actually referred to their work or asked
-  you to look. Agreeing with you is not a work check.
+- "WORK_CHECK" — they explicitly NAME their written work (풀이, 내가 쓴 것) and
+  ask you to judge it. "풀이 맞아요?", "풀이 확인해줘", "제 풀이 봐 주세요",
+  "내가 쓴 거 봐줘". Taking a photo costs the student a pause, so this label
+  requires the naming: "이렇게 하는 거 맞아요?" or "여기서 뭐가 틀렸어요?"
+  without 풀이/쓴 것 is NOT a work check. Agreeing with you is not one either.
 - "ANSWER" — they are replying to the question the tutor just asked, out loud.
   "5예요", "마이너스 3이요", "x는 2요", "양변에서 5를 빼요", and also "모르겠어요"
   or "힌트 더 주세요" (declining to answer is still answering). Nothing new is
@@ -118,8 +130,8 @@ def rule_intent(text: str, *, has_problem: bool, has_pending: bool) -> Intent | 
     # verdict is the net for the ones this reads too eagerly.
     if has_pending and _answer_shaped(text):
         return "ANSWER"
-    if _has(text, WORK_CHECK_KEYWORDS):
-        # Nothing seen yet: "맞아?" still has to start with a photo of the page.
+    if refers_to_work(text):
+        # Nothing seen yet: "풀이 맞아?" still has to start with a photo.
         return "WORK_CHECK" if has_problem else "HINT_REQUEST"
     if wants_hint(text):  # 힌트 / 도와 / 모르겠 / hint / help
         # "모르겠어요" against a pending question is an answer — the evaluator
@@ -167,10 +179,15 @@ def classify(
 
 def _enforce(intent: Intent, *, has_problem: bool, has_pending: bool) -> Intent:
     """The model may not pick an intent the session cannot carry out."""
+    if intent == "WORK_CHECK":
+        # The camera fires only on an explicit "풀이 봐줘" — and the rules
+        # already claimed every transcript that says so, which means a
+        # WORK_CHECK arriving from the model never has the words. A model
+        # guessing otherwise is exactly how the tutor kept stopping to
+        # photograph the page mid-conversation.
+        intent = "ANSWER" if has_pending else "NONE"
     if intent == "ANSWER" and not has_pending:
         return "HINT_REQUEST" if has_problem else "NONE"
-    if intent == "WORK_CHECK" and not has_problem:
-        return "HINT_REQUEST"
     return intent
 
 

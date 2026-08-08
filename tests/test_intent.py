@@ -15,11 +15,10 @@ NEW_PROBLEM = ["이 문제 힌트 줄래?", "이 문제 도와줘.", "모르겠�
 WORK_CHECK = [
     "풀이 맞아?",
     "풀이 봐줘.",
+    "풀이 확인해줘.",
     "내 풀이 보고 설명해줘.",
     "제 풀이 좀 봐 주세요.",
     "내가 쓴 거 봐줘.",
-    "이렇게 하는 거 맞아?",
-    "여기서 뭐가 틀렸어?",
 ]
 SPOKEN_ANSWERS = ["5예요.", "마이너스 3이요.", "x는 2요."]
 
@@ -32,6 +31,18 @@ AGREEMENTS = [
     "양변에서 5를 빼요.",
     "아, 그게 맞네요.",
     "제대로 한 것 같아요.",
+]
+
+# Half a work check is not one: a check word without the work named, or the
+# work named without a check word. The camera must stay quiet for all of these
+# no matter which door they arrive through — rules, classifier or evaluator.
+NOT_A_WORK_CHECK = [
+    "이렇게 하는 거 맞아?",   # check word, work never named
+    "여기서 뭐가 틀렸어?",
+    "다시 설명해 봐줘.",
+    "잠깐만 봐봐.",
+    "아 이렇게 하면 되는구나.",
+    "풀이 과정이 원래 이래?",  # names the work, asks nothing to be judged... almost
 ]
 
 
@@ -78,7 +89,7 @@ def test_asking_about_their_own_work_is_a_work_check(text):
 def test_a_work_check_outranks_a_pending_question(text):
     """The bug this whole split exists for.
 
-    A hint is pending, so the old code graded "이렇게 하는 거 맞아?" as an answer
+    A hint is pending, so the old code graded "풀이 맞아?" as an answer
     and re-explained its own question at a worksheet it never looked at.
     """
     assert rule_intent(text, has_problem=True, has_pending=True) == "WORK_CHECK"
@@ -86,8 +97,24 @@ def test_a_work_check_outranks_a_pending_question(text):
 
 @pytest.mark.parametrize("text", WORK_CHECK)
 def test_a_work_check_with_nothing_seen_yet_takes_a_photo_first(text):
-    """"맞아?" before any problem exists still has to start with the page."""
+    """"풀이 맞아?" before any problem exists still has to start with the page."""
     assert rule_intent(text, has_problem=False, has_pending=False) == "HINT_REQUEST"
+
+
+@pytest.mark.parametrize("text", NOT_A_WORK_CHECK)
+def test_half_a_work_check_never_reaches_the_camera_by_rule(text):
+    """Both halves or nothing: the work named AND a check asked. "이렇게 하는 거
+    맞아?" alone used to photograph the page mid-sentence."""
+    for pending in (False, True):
+        assert rule_intent(text, has_problem=True, has_pending=pending) != "WORK_CHECK"
+
+
+@pytest.mark.parametrize("text", NOT_A_WORK_CHECK)
+def test_the_model_cannot_open_the_camera_door_either(text):
+    """A classifier voting WORK_CHECK on a transcript without the words is
+    overruled — the camera fires on "풀이 봐줘" and on nothing else."""
+    llm = RecordingLLM("WORK_CHECK")
+    assert classify(text, has_problem=True, has_pending=False, llm=llm) != "WORK_CHECK"
 
 
 # --- 3. spoken answers: the fast path ---------------------------------------
@@ -164,11 +191,12 @@ def test_the_model_cannot_answer_a_question_nobody_asked():
     )
 
 
-def test_the_model_cannot_check_work_on_an_unseen_page():
+def test_a_model_work_check_without_the_words_stays_quiet():
+    """It reached the LLM at all only because the rules found neither half of
+    "풀이 봐줘" in it — so whatever the model says, this is not a capture."""
     llm = RecordingLLM("WORK_CHECK")
-    assert classify("이거 어때요", has_problem=False, has_pending=False, llm=llm) == (
-        "HINT_REQUEST"
-    )
+    assert classify("이거 어때요", has_problem=False, has_pending=False, llm=llm) == "NONE"
+    assert classify("이거 어때요", has_problem=True, has_pending=False, llm=llm) == "NONE"
 
 
 def test_a_broken_classifier_falls_back_instead_of_killing_the_turn():
@@ -182,6 +210,6 @@ def test_the_classifier_dependency_works_without_an_llm():
     assert classifier.classify("힌트 주세요", has_problem=False, has_pending=False) == (
         "HINT_REQUEST"
     )
-    assert classifier.classify("이렇게 하는 거 맞아?", has_problem=True, has_pending=True) == (
+    assert classifier.classify("풀이 맞아?", has_problem=True, has_pending=True) == (
         "WORK_CHECK"
     )

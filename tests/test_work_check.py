@@ -1,4 +1,4 @@
-"""'이렇게 하는 거 맞아?' — the turn that has to look again.
+"""'풀이 맞아?' — the turn that has to look again.
 
 Three utterances, three different turns over the SAME session state. The one
 that used to be broken is the middle one: a hint was pending, so any speech was
@@ -140,7 +140,7 @@ def ask_l1(session: Session, step: int = 1) -> int:
 async def test_a_work_check_takes_a_fresh_photo_and_reads_it(db):
     """The whole point: 'is this right?' must look at what they just wrote."""
     session, llm, speaker, ws = build(
-        db, "이렇게 하는 거 맞아?", llm_responses={"recognize": [seen(["3*x = 15"])]}
+        db, "풀이 봐줘.", llm_responses={"recognize": [seen(["3*x = 15"])]}
     )
     ask_l1(session)
 
@@ -156,7 +156,7 @@ async def test_a_work_check_takes_a_fresh_photo_and_reads_it(db):
 
 async def test_a_work_check_survives_a_pending_question(db):
     """A hint is pending — the old code graded this as an answer instead."""
-    session, llm, speaker, ws = build(db, "여기서 뭐가 틀렸어?")
+    session, llm, speaker, ws = build(db, "내 풀이 어디가 틀렸어?")
     ask_l1(session)
     assert session.store.pending_hint("p1") is not None
 
@@ -187,7 +187,7 @@ async def test_correct_work_is_confirmed_and_not_hinted_at(db):
     """
     session, llm, speaker, _ = build(
         db,
-        "이렇게 하는 거 맞아?",
+        "풀이 맞아?",
         llm_responses={
             "recognize": [seen(["3*x = 15"])],
             "estimate": [{"current_step": "이항", "last_correct_step": 1,
@@ -345,10 +345,12 @@ async def test_thinking_out_loud_is_left_alone(db):
 
 
 async def test_the_evaluator_can_redirect_an_answer_to_a_work_check(db):
-    """A phrasing the keywords miss still ends up looking at the page."""
+    """The net's one remaining live path: the answer-shaped fast lane swallowed
+    a transcript that DOES name the work ("풀이 5 맞아?"), the evaluator sees it
+    is not an attempt, and the turn goes to the camera after all."""
     session, llm, speaker, ws = build(
         db,
-        "여기 이거 어떡해요",   # no work-check keyword, so it routes as an answer
+        "풀이 5 맞아?",   # ≤4 tokens with a digit → routed as an answer by rule
         llm_responses={
             "evaluate": [{"intent": "WORK_CHECK", "verdict": "UNCLEAR", "feedback": "",
                           "misconception": None, "status": None}],
@@ -367,3 +369,28 @@ async def test_the_evaluator_can_redirect_an_answer_to_a_work_check(db):
     # them there is resolved as having worked
     assert session.store.get_state().last_correct_step == 1
     assert session.store.get_history(problem_hash="p1")[0].effective is True
+
+
+async def test_an_evaluator_work_check_without_the_words_stays_off_camera(db):
+    """The user's rule, verbatim: the camera fires on "풀이 봐줘"-class phrases
+    and on NOTHING else. An evaluator hunch about "여기 이거 어떡해요" gets an
+    explanation of the pending question, not a photo stop."""
+    session, llm, speaker, ws = build(
+        db,
+        "여기 이거 어떡해요",   # never names the written work
+        llm_responses={
+            "evaluate": [{"intent": "WORK_CHECK", "verdict": "UNCLEAR", "feedback": "",
+                          "misconception": None, "status": None}],
+        },
+    )
+    ask_l1(session)
+
+    await session._handle_utterance(PCM, 16000)
+
+    assert ws.captures == 0
+    assert "capture_request" not in ws.event_names()
+    assert llm.calls.count("recognize") == 0
+    assert llm.calls.count("explain") == 1    # answered with words instead
+    assert speaker.spoken                     # the student still hears something
+    # nothing was graded: the pending question is still waiting for its answer
+    assert session.store.pending_hint("p1") is not None

@@ -137,13 +137,13 @@ def work_check(dep, jpeg: bytes, ctx) -> Timer:
     state = t.run(
         "estimate", lambda: dep["estimator"].estimate(
             rec=rec, reference=reference, prev_state=None, prev_work=rec0.student_work,
-            history=[], transcript="이렇게 하는 거 맞아요?",
+            history=[], transcript="풀이 맞아요?",
         )
     )
     decision = Decision(Action.SOCRATIC_QUESTION, 1, state.last_correct_step + 1, None, "bench")
     text = t.run(
         "phrase", dep["hint_gen"].generate, decision, match, reference, rec, [],
-        "이렇게 하는 거 맞아요?",
+        "풀이 맞아요?",
     )
     t.run("speak", dep["speaker"].synthesize, text)
     return t
