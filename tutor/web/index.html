@@ -9,8 +9,8 @@
     IN:  getUserMedia → AudioWorklet → float32 @16 kHz → int16 → 512-sample
          frames → binary AUDIO frames on ONE WebSocket (the same framing the
          camera device uses, so the server code is unchanged)
-    OUT: turn_state / transcript / tutor_says events + a TTS_AUDIO frame with
-         the tutor's speech → <audio> → "playback_done" back to the server
+    OUT: turn_state / transcript / tutor_says / problem events + TTS_AUDIO
+         frames with the tutor's speech → <audio> → "playback_done" back
 
   Barge-in: the mic stays open while the tutor speaks so the student can cut
   in. What keeps the tutor from hearing itself is echoCancellation in
@@ -23,79 +23,210 @@
   thinks, and a half-turn must not survive into the answer.
 
   Chrome/Edge recommended (AudioWorklet at a 16 kHz AudioContext).
+
+  DESIGN: light theme, one green accent, locked. The page is a session room,
+  not a dashboard: problem card pinned top-center (notation, never the photo),
+  the conversation below it, the mic at the bottom. Every control on this page
+  is wired to something real; there are deliberately no decorative buttons.
 -->
 <html lang="ko">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Visual Socratic Tutor — 음성 튜터</title>
+<title>Visual Socratic Tutor</title>
 <style>
   :root {
-    --bg:#0f1117; --panel:#181b24; --line:#2a2f3c; --text:#e8eaf0; --dim:#8b90a0;
-    --you:#4e9af1; --think:#b17ce8; --tutor:#4ecf8a; --warn:#ff7a6b;
+    --bg:#f4f7f5; --surface:#ffffff; --line:#e3e9e5;
+    --text:#1c211e; --dim:#68716c;
+    --accent:#0f9d63; --accent-deep:#0c7c4f;
+    --accent-soft:#e6f5ee; --accent-line:#c9e9da;
+    --err:#c0463c;
+    --shadow:0 1px 2px rgba(23,64,45,.05), 0 10px 28px rgba(23,64,45,.07);
+    --font:"Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
+           "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    --math:"STIX Two Math", "Cambria Math", "Times New Roman", serif;
   }
   * { box-sizing:border-box; }
+  html, body { height:100%; }
   body {
-    margin:0; min-height:100vh; display:flex; flex-direction:column; align-items:center;
-    background:var(--bg); color:var(--text); font:16px/1.6 system-ui, sans-serif; padding:2rem 1rem;
+    margin:0; min-height:100dvh; display:flex; flex-direction:column;
+    background:var(--bg); color:var(--text); font:15px/1.6 var(--font);
   }
-  h1 { font-size:1.15rem; font-weight:600; margin:0 0 .25rem; }
-  #status { color:var(--dim); min-height:1.5em; margin-bottom:1.5rem; text-align:center; }
-  #orb {
-    width:9rem; height:9rem; border-radius:50%; border:none; color:#fff;
-    font:600 .9rem system-ui; cursor:pointer; background:#3a3f4e;
-    transition:background .2s, box-shadow .2s;
+
+  /* ---- top bar ---- */
+  header {
+    flex:none; height:60px; background:var(--surface);
+    border-bottom:1px solid var(--line);
+    display:flex; align-items:center; justify-content:space-between;
+    padding:0 1.25rem;
   }
-  #orb.LISTENING     { background:#2e3442; box-shadow:0 0 0 10px rgba(139,144,160,.10); }
-  #orb.USER_SPEAKING { background:var(--you);   box-shadow:0 0 0 14px rgba(78,154,241,.22); }
-  #orb.PROCESSING    { background:var(--think); box-shadow:0 0 0 8px  rgba(177,124,232,.22); }
-  #orb.AGENT_SPEAKING{ background:var(--tutor); box-shadow:0 0 0 14px rgba(78,207,138,.22); }
-  @keyframes breathe { 50% { box-shadow:0 0 0 20px rgba(78,154,241,.10); } }
-  #orb.USER_SPEAKING { animation:breathe 1.2s ease-in-out infinite; }
-  #tools { margin-top:1.2rem; display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; justify-content:center; }
-  #tools label, #tools button {
-    background:none; border:1px solid var(--line); color:var(--dim); border-radius:8px;
-    padding:.35rem .9rem; font:500 .85rem system-ui; cursor:pointer;
+  .brand { font-size:1rem; font-weight:700; letter-spacing:-.01em; }
+  .brand b { color:var(--accent-deep); font-weight:700; }
+  #conn {
+    font-size:.78rem; font-weight:600; color:var(--dim);
+    border:1px solid var(--line); border-radius:999px; padding:.25rem .8rem;
+    background:var(--bg);
   }
-  #tools label:hover, #tools button:hover { color:var(--text); border-color:var(--dim); }
+  #conn.ok { color:var(--accent-deep); border-color:var(--accent-line); background:var(--accent-soft); }
+  #conn.down { color:var(--err); }
+
+  /* ---- middle column ---- */
+  main {
+    flex:1 1 auto; min-height:0; width:100%;
+    display:flex; flex-direction:column; align-items:center;
+    padding:1.25rem 1rem 0;
+  }
+  .col {
+    width:100%; max-width:760px; min-height:0; flex:1 1 auto;
+    display:flex; flex-direction:column; gap:.9rem;
+  }
+
+  /* ---- problem card: notation, not a photo ---- */
+  #problemCard {
+    flex:none; background:var(--surface); border:1px solid var(--line);
+    border-radius:16px; box-shadow:var(--shadow);
+    padding:1.15rem 1.5rem 1.3rem; text-align:center;
+  }
+  #problemCard[hidden] { display:none; }
+  .cardlabel {
+    display:inline-block; font-size:.75rem; font-weight:700;
+    color:var(--accent-deep); background:var(--accent-soft);
+    border-radius:999px; padding:.15rem .7rem; margin-bottom:.6rem;
+  }
+  #problemText { font-size:1.2rem; font-weight:700; line-height:1.55; word-break:keep-all; }
+  #problemEqs { margin-top:.45rem; font-family:var(--math); font-size:1.15rem; color:var(--text); }
+  #problemEqs div { padding:.1rem 0; }
+
+  /* ---- worksheet photo (click / drag / paste) ---- */
   #sheet { display:none; }
-  /* The photo is not a nice-to-have: without it the tutor has nothing to read. */
   #drop {
-    width:100%; max-width:38rem; margin-top:1.2rem; padding:1rem;
-    border:1px dashed var(--line); border-radius:12px; color:var(--dim);
-    font:500 .85rem system-ui; text-align:center; cursor:pointer;
-    display:flex; align-items:center; justify-content:center; gap:.9rem;
+    flex:none; display:flex; align-items:center; justify-content:center; gap:.9rem;
+    background:var(--surface); border:1.5px dashed var(--line); border-radius:16px;
+    padding:.8rem 1rem; color:var(--dim); font-size:.85rem; line-height:1.5;
+    text-align:center; cursor:pointer;
   }
-  #drop:hover, #drop.over { border-color:var(--you); color:var(--text); }
-  #drop.has { border-style:solid; border-color:var(--tutor); color:var(--text); }
-  #thumb { max-height:5rem; border-radius:6px; display:none; }
+  #drop:hover, #drop.over { border-color:var(--accent); color:var(--text); }
+  #drop.has { border-style:solid; border-color:var(--accent-line); background:var(--accent-soft); color:var(--text); }
+  #drop b { font-weight:700; }
+  #thumb { max-height:3.4rem; border-radius:8px; display:none; }
   #thumb.has { display:block; }
-  #drophint { text-align:left; line-height:1.5; }
-  #log { width:100%; max-width:38rem; margin-top:2rem; }
-  .turn { background:var(--panel); border-radius:10px; padding:.7rem 1rem; margin-bottom:.7rem; }
-  .who { font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); }
-  .you .who { color:var(--you); } .tutor .who { color:var(--tutor); } .err .who { color:var(--warn); }
-  .txt { white-space:pre-wrap; }
-  .meta { font-size:.75rem; color:var(--dim); margin-top:.3rem; }
+  .meta { font-size:.75rem; color:var(--dim); }
+
+  /* ---- conversation ---- */
+  #chat {
+    flex:1 1 auto; min-height:0; overflow-y:auto;
+    display:flex; flex-direction:column; gap:.9rem;
+    padding:.3rem .15rem 1.1rem; scrollbar-width:thin;
+  }
+  .msg { max-width:78%; display:flex; flex-direction:column; gap:.25rem; }
+  .msg .who { font-size:.72rem; font-weight:700; color:var(--dim); padding:0 .3rem; }
+  .msg .bubble {
+    border-radius:14px; padding:.6rem .95rem; white-space:pre-wrap;
+    word-break:keep-all; overflow-wrap:anywhere;
+  }
+  .msg.tutor { align-self:flex-start; }
+  .msg.tutor .bubble { background:var(--surface); border:1px solid var(--line); border-top-left-radius:6px; }
+  .msg.you { align-self:flex-end; align-items:flex-end; }
+  .msg.you .bubble { background:var(--accent-soft); border:1px solid var(--accent-line); border-top-right-radius:6px; }
+  .msg .note { font-size:.72rem; color:var(--dim); padding:0 .3rem; }
+  .sys { align-self:center; font-size:.78rem; color:var(--err); }
+
+  /* the tutor is thinking: shown only during PROCESSING */
+  #thinking { align-self:flex-start; }
+  #thinking[hidden] { display:none; }
+  #thinking .bubble {
+    display:flex; align-items:center; gap:.55rem;
+    background:var(--accent-soft); border:1px solid var(--accent-line);
+    color:var(--accent-deep); font-size:.85rem; font-weight:600;
+  }
+  .dots { display:inline-flex; gap:.22rem; }
+  .dots i { width:.32rem; height:.32rem; border-radius:50%; background:var(--accent); opacity:.4; }
+  @media (prefers-reduced-motion: no-preference) {
+    .dots i { animation:blink 1.2s ease-in-out infinite; }
+    .dots i:nth-child(2) { animation-delay:.2s; }
+    .dots i:nth-child(3) { animation-delay:.4s; }
+    @keyframes blink { 40% { opacity:1; } }
+  }
+
+  /* ---- mic bar ---- */
+  footer {
+    flex:none; background:var(--surface); border-top:1px solid var(--line);
+    display:flex; justify-content:center; padding:.8rem 1rem 1rem;
+  }
+  .micbar { width:100%; max-width:760px; display:flex; align-items:center; gap:1rem; }
+  #orb {
+    flex:none; width:64px; height:64px; border-radius:50%; border:2px solid var(--line);
+    background:var(--bg); color:var(--text); font:700 .85rem var(--font);
+    cursor:pointer; transition:background .2s, border-color .2s, box-shadow .2s;
+  }
+  #orb:disabled { cursor:default; }
+  #orb:not(:disabled):active { transform:scale(.97); }
+  #orb.LISTENING      { background:var(--surface); border-color:var(--accent-line); }
+  #orb.USER_SPEAKING  { background:var(--accent); border-color:var(--accent); }
+  #orb.PROCESSING     { background:var(--line); border-color:var(--line); }
+  #orb.AGENT_SPEAKING { background:var(--accent-soft); border-color:var(--accent); }
+  @media (prefers-reduced-motion: no-preference) {
+    #orb.USER_SPEAKING { animation:pulse 1.3s ease-in-out infinite; }
+    @keyframes pulse {
+      0%, 100% { box-shadow:0 0 0 0 rgba(15,157,99,.25); }
+      50%      { box-shadow:0 0 0 14px rgba(15,157,99,.06); }
+    }
+  }
+  .micinfo { min-width:0; }
+  #stateLabel { font-size:.95rem; font-weight:700; }
+  #status { font-size:.8rem; color:var(--dim); }
+
+  @media (max-width: 640px) {
+    header { padding:0 1rem; }
+    .msg { max-width:88%; }
+    #problemText { font-size:1.05rem; }
+  }
 </style>
 </head>
 <body>
-  <h1>Visual Socratic Tutor</h1>
-  <div id="status">시작을 누르고 마이크를 허용한 뒤, 그냥 말하면 됩니다.</div>
+  <header>
+    <div class="brand">Visual Socratic <b>Tutor</b></div>
+    <div id="conn">연결 대기</div>
+  </header>
 
-  <button id="orb">시작</button>
+  <main>
+    <div class="col">
+      <section id="problemCard" hidden>
+        <span class="cardlabel">현재 문제</span>
+        <div id="problemText"></div>
+        <div id="problemEqs"></div>
+      </section>
 
-  <div id="drop">
-    <img id="thumb" alt="">
-    <div id="drophint">
-      📄 <b>문제 사진을 올려 주세요</b><br>
-      클릭해서 고르거나, 여기로 끌어다 놓거나, <b>Ctrl+V</b>로 붙여넣기<br>
-      <span id="sheetname" class="meta"></span>
+      <div id="drop">
+        <img id="thumb" alt="문제 사진 미리보기">
+        <div>
+          <b>문제 사진 올리기</b> · 클릭해서 고르거나, 끌어다 놓거나, Ctrl+V로 붙여넣기
+          <div id="sheetname" class="meta"></div>
+        </div>
+      </div>
+      <input type="file" id="sheet" accept="image/*">
+
+      <div id="chat">
+        <div id="thinking" class="msg tutor" hidden>
+          <div class="bubble">
+            튜터가 생각하는 중이에요
+            <span class="dots"><i></i><i></i><i></i></span>
+          </div>
+        </div>
+      </div>
     </div>
-  </div>
-  <input type="file" id="sheet" accept="image/*">
+  </main>
 
-  <div id="log"></div>
+  <footer>
+    <div class="micbar">
+      <button id="orb" aria-label="시작">시작</button>
+      <div class="micinfo">
+        <div id="stateLabel">대기</div>
+        <div id="status">시작을 누르고 마이크를 허용한 뒤, 그냥 말하면 됩니다.</div>
+      </div>
+    </div>
+  </footer>
+
   <audio id="player"></audio>
 
 <script>
@@ -176,10 +307,11 @@ async function start() {
   connect();
 
   $("orb").disabled = true;             // from here on the orb is a status light
+  $("orb").textContent = "";
   setStatus(
     speakerReady
       ? "핸즈프리로 대화하세요. 튜터 목소리는 이 기기에서 나옵니다."
-      : "마이크는 열렸지만 스피커가 차단되었습니다 — 페이지를 한 번 클릭해 주세요."
+      : "마이크는 열렸지만 스피커가 차단되었습니다. 페이지를 한 번 클릭해 주세요."
   );
 }
 
@@ -214,19 +346,30 @@ function connect() {
   ws = new WebSocket(`${scheme}://${location.host}/browser`);
   ws.binaryType = "arraybuffer";
   ws.onopen = () => sendEvent("hello", { device_id: "browser", proto: 1, caps: ["mic", "speaker"] });
-  ws.onclose = () => { setState(""); setStatus("연결이 끊어졌습니다 — 새로고침 해주세요."); };
+  ws.onclose = () => {
+    setState("");
+    setConn("연결 끊김", "down");
+    setStatus("연결이 끊어졌습니다. 새로고침 해주세요.");
+  };
   ws.onmessage = (e) => (typeof e.data === "string" ? onEvent(JSON.parse(e.data)) : onBinary(e.data));
+}
+
+function setConn(text, cls) {
+  const conn = $("conn");
+  conn.textContent = text;
+  conn.className = cls || "";
 }
 
 function onEvent(msg) {
   const d = msg.data || {};
   switch (msg.event) {
-    case "hello_ack":   setStatus("연결됨. 말을 시작하세요."); break;
+    case "hello_ack":   setConn("연결됨", "ok"); setStatus("연결됐어요. 말을 시작하세요."); break;
     case "turn_state":  setState(d.state); break;
     case "config":      bargeIn = !!d.barge_in; break;
     case "barge_in":    stopSpeaking(); break;
     case "transcript":  addTurn("you", d.text || "(인식 실패)"); break;
     case "tutor_says":  addTurn("tutor", d.text); break;
+    case "problem":     showProblem(d); break;
     case "hint_issued": note(`힌트 L${d.level} · ${d.action}`); break;
     case "capture_request": sendWorksheet(d.capture_id); break;
     case "error":       addTurn("err", d.message || JSON.stringify(d)); break;
@@ -240,11 +383,38 @@ function onBinary(buffer) {
 
 function setState(s) {
   turnState = s;
-  $("orb").className = s;
-  $("orb").textContent = {
+  const orb = $("orb");
+  if (orb.disabled) orb.className = s;   // before start the orb stays a button
+  const label = {
     LISTENING: "듣는 중", USER_SPEAKING: "말하는 중",
     PROCESSING: "생각 중", AGENT_SPEAKING: "튜터 발화 중",
   }[s] || "대기";
+  $("stateLabel").textContent = label;
+  orb.setAttribute("aria-label", label);
+  const thinking = $("thinking");
+  thinking.hidden = s !== "PROCESSING";
+  if (!thinking.hidden) {
+    $("chat").appendChild(thinking);     // always after the newest message
+    scrollChat();
+  }
+}
+
+// --- the problem card: what the tutor read, in notation --------------------
+function showProblem(d) {
+  const text = (d.text || "").trim();
+  const eqs = d.equations || [];
+  if (!text && !eqs.length) return;
+  $("problemText").textContent = text;
+  const box = $("problemEqs");
+  box.textContent = "";
+  for (const eq of eqs) {
+    // skip equations the problem statement already spells out
+    if (text.includes(eq)) continue;
+    const line = document.createElement("div");
+    line.textContent = eq;
+    box.appendChild(line);
+  }
+  $("problemCard").hidden = false;
 }
 
 // --- 3. playback: the tutor's audio, then tell the server we are done ------
@@ -361,7 +531,7 @@ function playNext() {
   player.onerror = done;                 // never leave the server waiting
   player.src = url;
   player.play().catch(() => {
-    setStatus("자동 재생이 차단되었습니다 — 페이지를 한 번 클릭한 뒤 다시 말해주세요.");
+    setStatus("자동 재생이 차단되었습니다. 페이지를 한 번 클릭한 뒤 다시 말해주세요.");
     done();
   });
 }
@@ -381,7 +551,7 @@ function stopSpeaking() {
   player.removeAttribute("src");
   player.load();
   // Deliberately no playback_done: the server already knows, it told us to stop.
-  addTurn("err", dropped ? `끼어들기 — 재생 중단, 대기 ${dropped}개 삭제` : "끼어들기 — 재생 중단");
+  addTurn("err", dropped ? `끼어들기: 재생을 멈추고 대기 중이던 ${dropped}개를 지웠어요` : "끼어들기: 재생을 멈췄어요");
 }
 
 // --- 4. the worksheet photo ------------------------------------------------
@@ -430,30 +600,45 @@ function sendWorksheet(captureId) {
     // Nothing to read. The server turns this into "사진을 다시 올려 줄래요?",
     // so say the same thing here where the student is actually looking.
     sendEvent("capture_failed", { capture_id: captureId });
-    setStatus("문제 사진이 아직 없어요 — 위에 사진을 올려 주세요.");
+    setStatus("문제 사진이 아직 없어요. 위에 사진을 올려 주세요.");
     return;
   }
   ws.send(encodeFrame(IMAGE_FRAME, { capture_id: captureId, format: "jpeg" }, worksheet));
 }
 
-// --- 5. transcript log ----------------------------------------------------
+// --- 5. the conversation ---------------------------------------------------
+function scrollChat() {
+  const chat = $("chat");
+  chat.scrollTop = chat.scrollHeight;
+}
+
 function addTurn(kind, text) {
+  const chat = $("chat");
   const div = document.createElement("div");
-  div.className = `turn ${kind}`;
-  div.innerHTML = `<div class="who"></div><div class="txt"></div>`;
-  div.querySelector(".who").textContent =
-    { you: "나", tutor: "튜터", err: "오류" }[kind];
-  div.querySelector(".txt").textContent = text;
-  $("log").prepend(div);
+  if (kind === "err") {
+    div.className = "sys";
+    div.textContent = text;
+  } else {
+    div.className = `msg ${kind}`;
+    div.innerHTML = `<div class="who"></div><div class="bubble"></div>`;
+    div.querySelector(".who").textContent = kind === "you" ? "나" : "튜터";
+    div.querySelector(".bubble").textContent = text;
+  }
+  // the thinking bubble stays glued to the end while it is visible
+  const thinking = $("thinking");
+  chat.insertBefore(div, thinking.hidden ? null : thinking);
+  scrollChat();
 }
 
 function note(text) {
-  const last = $("log").firstChild;
+  const turns = $("chat").querySelectorAll(".msg:not(#thinking)");
+  const last = turns[turns.length - 1];
   if (!last) return;
   const meta = document.createElement("div");
-  meta.className = "meta";
+  meta.className = "note";
   meta.textContent = text;
   last.appendChild(meta);
+  scrollChat();
 }
 
 $("orb").addEventListener("click", start, { once: true });

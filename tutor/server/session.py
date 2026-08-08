@@ -398,6 +398,23 @@ class Session:
         except Exception:
             log.debug("could not send transcript event (connection gone)")
 
+    async def _send_problem(self, rec: Recognition) -> None:
+        """What the tutor read off the page, for the browser's problem card.
+
+        Notation for the eye (displayable), never the photo — and never the
+        student's work or anything downstream of the solver, so nothing that
+        could leak an answer travels on this event.
+        """
+        try:
+            await self.ws.send(
+                make_event("problem", {
+                    "text": mathspeak.displayable(rec.problem_text),
+                    "equations": [mathspeak.displayable(e) for e in rec.equations],
+                })
+            )
+        except Exception:
+            log.debug("could not send problem event (connection gone)")
+
     # --- capture --------------------------------------------------------------
 
     async def _request_capture(self) -> bytes | None:
@@ -754,22 +771,28 @@ class Session:
                 "ask to see the worksheet again",
                 rec.confidence, self.deps.settings.recog_conf_threshold,
             )
-        elif self.ctx is None or not (
-            self.ctx.hash == problem_hash(rec) or self._same_problem(rec)
-        ):
-            # First sight of a NEW problem: read it back while the tagger, the
-            # matcher and the phraser think (~15s of otherwise dead air). The
-            # student hears that the tutor actually saw their problem — and a
-            # misread photo gets caught out loud, before any hint depends on it.
-            # Three lines, queued in order: only the middle one costs TTS.
-            for line in readout_of(rec):
-                self._narrate(line)
-        elif question and self.deps.fillers is not None:
-            # Same problem, and they asked about THEIR work: the readout above
-            # will not fire, so this is the line that fills the diagnosis wait.
-            # Cached TTS, verdict-free — it says the page was READ, never
-            # whether it is right; that stays the reaction's job.
-            self._narrate(self.deps.fillers.work_note())
+        else:
+            # A trustworthy read reaches the page's problem card: the student
+            # sees what the tutor believes the problem says, in notation.
+            await self._send_problem(rec)
+            if self.ctx is None or not (
+                self.ctx.hash == problem_hash(rec) or self._same_problem(rec)
+            ):
+                # First sight of a NEW problem: read it back while the tagger,
+                # the matcher and the phraser think (~15s of otherwise dead
+                # air). The student hears that the tutor actually saw their
+                # problem — and a misread photo gets caught out loud, before
+                # any hint depends on it. Three lines, queued in order: only
+                # the middle one costs TTS.
+                for line in readout_of(rec):
+                    self._narrate(line)
+            elif question and self.deps.fillers is not None:
+                # Same problem, and they asked about THEIR work: the readout
+                # above will not fire, so this is the line that fills the
+                # diagnosis wait. Cached TTS, verdict-free — it says the page
+                # was READ, never whether it is right; that stays the
+                # reaction's job.
+                self._narrate(self.deps.fillers.work_note())
         ctx = await self._problem_context(rec)
 
         # Diagnose before helping (spec rule 4). State/history are prefetched
