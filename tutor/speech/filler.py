@@ -46,6 +46,17 @@ FILLER_PHRASES: tuple[str, ...] = (
     "지금 문제를 보고 있어요.",
 )
 
+# The work-check wait, narrated: queued once the VLM has read the page, spoken
+# while the diagnosis still runs. Deliberately verdict-free — these may say the
+# tutor SAW the work, never whether it is right; that is the reaction's job and
+# the leak guard's jurisdiction.
+WORK_CHECK_NARRATIONS: tuple[str, ...] = (
+    "풀이를 다 읽었어요. 한 줄씩 맞는지 보고 있어요.",
+    "쓴 풀이가 잘 보여요. 차근차근 따라가 보고 있어요.",
+    "네, 풀이를 읽었어요. 계산을 하나씩 확인하고 있어요.",
+    "어디까지 왔는지 짚어 보고 있어요.",
+)
+
 # How a teacher receives an answer: the value back, then what they are doing
 # with it. Every frame is particle-safe (nothing needing 이/가 or 라/이라 after
 # the value), because a wrong particle reads as broken while a pause never does.
@@ -63,15 +74,26 @@ class FillerBank:
     def __init__(self, phrases: tuple[str, ...] = FILLER_PHRASES, rng=None):
         self.phrases = tuple(p for p in phrases if p.strip())
         self._rng = rng or random.Random()
-        self._last: str | None = None
-        self._last_echo: str | None = None
+        # one memory per pool: repeating a phrase back-to-back is what makes a
+        # filler sound canned, and each pool rotates independently
+        self._last: dict[str, str] = {}
+
+    def rotate(self, pool: tuple[str, ...], key: str) -> str:
+        """A phrase from `pool`, never the same one twice in a row per `key` —
+        callers with their own fixed pools (the work-check openers) use this
+        directly and get the no-repeat memory for free."""
+        if not pool:
+            return ""
+        choices = [p for p in pool if p != self._last.get(key)] or list(pool)
+        self._last[key] = self._rng.choice(choices)
+        return self._last[key]
 
     def pick(self) -> str:
-        if not self.phrases:
-            return ""
-        choices = [p for p in self.phrases if p != self._last] or list(self.phrases)
-        self._last = self._rng.choice(choices)
-        return self._last
+        return self.rotate(self.phrases, "filler")
+
+    def work_note(self) -> str:
+        """The work-check wait narrated: the page was read, the check is on."""
+        return self.rotate(WORK_CHECK_NARRATIONS, "work")
 
     def echo(self, core: str) -> str:
         """The student's answer received back, in a frame that rotates.
@@ -80,9 +102,7 @@ class FillerBank:
         "5인지 볼까요?" the next. Repetition of the FRAME is what makes an echo
         sound mechanical; the value repeating is the whole point.
         """
-        frames = [f for f in ECHO_FRAMES if f != self._last_echo] or list(ECHO_FRAMES)
-        self._last_echo = self._rng.choice(frames)
-        return self._last_echo.format(v=core)
+        return self.rotate(ECHO_FRAMES, "echo").format(v=core)
 
 
 class CachedSpeech:

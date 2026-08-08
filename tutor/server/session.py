@@ -85,9 +85,15 @@ WORK_CHECK_REACTIONS: dict[str, str] = {
 }
 WORK_CHECK_DEFAULT = "음, 지금 쓴 줄을 같이 볼까요?"
 
-# The filler opener for a work check: fixed, so its TTS is cached and it plays
-# the instant the delay elapses — while the camera is still being asked.
-WORK_CHECK_OPENER = "네, 지금 쓴 풀이를 확인하고 있어요."
+# The filler openers for a work check: fixed, so their TTS is cached and one
+# plays the instant the delay elapses — while the camera is still being asked.
+# A tuple because the same student asks "풀이 맞아?" many times in one lesson,
+# and the identical opener every time is what makes it sound like a machine.
+WORK_CHECK_OPENERS: tuple[str, ...] = (
+    "네, 지금 쓴 풀이를 확인하고 있어요.",
+    "좋아요, 쓴 풀이를 한번 볼게요.",
+    "네, 풀이를 같이 확인해 볼게요.",
+)
 
 # The readout frame: everything around the problem text is fixed, so its TTS
 # is pre-rendered and the only synthesis the narration waits for is the one
@@ -476,8 +482,12 @@ class Session:
             return
         self._busy = True
         # a work check earns its own opener: they asked about THEIR page, and
-        # "네, 지금 쓴 풀이를 한번 볼게요" answers that before the camera has moved
-        self._start_filler(WORK_CHECK_OPENER if question else None)
+        # "네, 지금 쓴 풀이를 확인하고 있어요" answers that before the camera has
+        # moved. Rotated, because the fifth identical opener sounds like a machine.
+        bank = self.deps.fillers
+        # no bank → _start_filler is a no-op anyway, so the opener is moot
+        opener = bank.rotate(WORK_CHECK_OPENERS, "opener") if question and bank else None
+        self._start_filler(opener)
         try:
             with timing.turn("WORK_CHECK" if question else "HINT_REQUEST"):
                 await self._handle_hint_request(question)
@@ -754,6 +764,12 @@ class Session:
             # Three lines, queued in order: only the middle one costs TTS.
             for line in readout_of(rec):
                 self._narrate(line)
+        elif question and self.deps.fillers is not None:
+            # Same problem, and they asked about THEIR work: the readout above
+            # will not fire, so this is the line that fills the diagnosis wait.
+            # Cached TTS, verdict-free — it says the page was READ, never
+            # whether it is right; that stays the reaction's job.
+            self._narrate(self.deps.fillers.work_note())
         ctx = await self._problem_context(rec)
 
         # Diagnose before helping (spec rule 4). State/history are prefetched

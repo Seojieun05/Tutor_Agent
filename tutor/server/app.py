@@ -132,16 +132,26 @@ def wrap_with_cache(settings: Settings, speaker):
         READOUT_CLOSERS,
         READOUT_OPENER,
         RETRY_PROMPTS,
-        WORK_CHECK_OPENER,
+        WORK_CHECK_DEFAULT,
+        WORK_CHECK_OPENERS,
+        WORK_CHECK_REACTIONS,
+        WORK_CONFIRMED,
     )
-    from tutor.speech.filler import FILLER_PHRASES, CachedSpeech
+    from tutor.speech.filler import FILLER_PHRASES, WORK_CHECK_NARRATIONS, CachedSpeech
 
     repeated = [
         *FILLER_PHRASES,
         *(t for t in FIXED_ACTIONS.values() if t),
         *RETRY_PROMPTS.values(),
         PROBLEM_DONE,
-        WORK_CHECK_OPENER,
+        # the whole work-check frame: openers, the mid-wait narrations, the
+        # reactions and the confirmation — every fixed line the turn can say,
+        # so the only TTS it ever waits for is the hint itself
+        *WORK_CHECK_OPENERS,
+        *WORK_CHECK_NARRATIONS,
+        *(t for t in WORK_CHECK_REACTIONS.values() if t),
+        WORK_CHECK_DEFAULT,
+        WORK_CONFIRMED,
         # the readout frame: the problem text between them is the only line of
         # the narration that ever pays for TTS at speak time
         READOUT_OPENER,

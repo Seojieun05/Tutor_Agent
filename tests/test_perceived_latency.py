@@ -26,7 +26,7 @@ from tutor.protocol.frames import ImageHeader, encode_image
 from tutor.server.session import (
     READOUT_CLOSERS,
     READOUT_OPENER,
-    WORK_CHECK_OPENER,
+    WORK_CHECK_OPENERS,
     Deps,
     ProblemContext,
     Session,
@@ -205,8 +205,39 @@ async def test_a_work_check_opens_by_saying_it_is_looking(db):
 
     await session._handle_utterance(PCM, 16000)
 
-    assert speaker.spoken[0] == WORK_CHECK_OPENER
+    assert speaker.spoken[0] in WORK_CHECK_OPENERS
     assert len(speaker.spoken) >= 2                  # the real turn still spoke
+
+
+async def test_a_work_check_narrates_the_diagnosis_wait(db):
+    """After the VLM has read the page, the wait for the verdict is narrated —
+    a cached, verdict-free line, dropped like any narration if the answer wins."""
+    from tutor.speech.filler import WORK_CHECK_NARRATIONS
+
+    session, llm, speaker, ws = build(db, "풀이 맞아?")
+    with_problem(session)
+    ask_l1(session)
+
+    await session._handle_utterance(PCM, 16000)
+    await asyncio.sleep(0)
+
+    notes = [s for s in speaker.spoken if s in WORK_CHECK_NARRATIONS]
+    assert notes, f"no work narration in {speaker.spoken}"
+    assert speaker.spoken.index(notes[0]) > 0                # the opener spoke first
+    assert speaker.spoken[-1] not in WORK_CHECK_NARRATIONS   # never the last word
+
+
+async def test_a_new_problem_does_not_get_the_work_narration(db):
+    """First sight of a problem reads the PROBLEM back; the work-check line
+    ("풀이를 다 읽었어요…") belongs to a page the tutor has already met."""
+    from tutor.speech.filler import WORK_CHECK_NARRATIONS
+
+    session, llm, speaker, ws = build(db, "이 문제 힌트 줄래?")
+
+    await session._handle_utterance(PCM, 16000)
+    await asyncio.sleep(0)
+
+    assert not [s for s in speaker.spoken if s in WORK_CHECK_NARRATIONS]
 
 
 # --- the readout (new problems) ---------------------------------------------

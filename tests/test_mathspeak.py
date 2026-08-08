@@ -109,12 +109,16 @@ class TestItLeavesSpeechAlone:
             READOUT_CLOSERS,
             READOUT_OPENER,
             RETRY_PROMPTS,
-            WORK_CHECK_OPENER,
+            WORK_CHECK_DEFAULT,
+            WORK_CHECK_OPENERS,
+            WORK_CHECK_REACTIONS,
             WORK_CONFIRMED,
         )
-        from tutor.speech.filler import FILLER_PHRASES
+        from tutor.speech.filler import FILLER_PHRASES, WORK_CHECK_NARRATIONS
 
-        for phrase in [PROBLEM_DONE, WORK_CHECK_OPENER, WORK_CONFIRMED,
+        for phrase in [PROBLEM_DONE, WORK_CONFIRMED, WORK_CHECK_DEFAULT,
+                       *WORK_CHECK_OPENERS, *WORK_CHECK_NARRATIONS,
+                       *(t for t in WORK_CHECK_REACTIONS.values() if t),
                        READOUT_OPENER, *READOUT_CLOSERS.values(),
                        *RETRY_PROMPTS.values(), *FILLER_PHRASES,
                        *(t for t in FIXED_ACTIONS.values() if t)]:
