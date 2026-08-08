@@ -41,6 +41,7 @@ def _latex(s: str, *, spoken: bool) -> str:
     s = re.sub(r"\\left|\\right", "", s)
     s = re.sub(r"\\[\(\)\[\]]", "", s)           # \( \) \[ \] delimiters
     s = re.sub(r"\\[,;!: ]", " ", s)             # spacing commands
+    s = re.sub(r"\\(log|ln|sin|cos|tan)(?![A-Za-z])", r"\1", s)  # \log_3 → log_3
     s = s.replace("\\cdot", "*").replace("\\times", "×").replace("\\div", "÷")
     s = s.replace("\\pi", "파이" if spoken else "π")
     s = re.sub(r"\\sqrt\s*\{([^{}]*)\}", r"sqrt(\1)", s)
@@ -140,13 +141,31 @@ def _parens(s: str) -> str:
     return s
 
 
+# log bases as print sets them: dropped, small, under the line. Unicode has
+# subscripts for all digits but only some letters — a base that cannot be
+# lowered (log_b, log_c) stays as written rather than coming out half-sunk.
+_SUB_SRC = "0123456789aehklmnopstx"
+_SUBSCRIPT = str.maketrans(_SUB_SRC, "₀₁₂₃₄₅₆₇₈₉ₐₑₕₖₗₘₙₒₚₛₜₓ")
+
+
+def _display_logs(s: str) -> str:
+    def lowered(m: re.Match) -> str:
+        base = m.group(1)
+        if not all(ch in _SUB_SRC for ch in base):
+            return m.group(0)
+        return "log" + base.translate(_SUBSCRIPT)
+
+    return re.sub(r"\blog_\{?(\w+)\}?", lowered, s)
+
+
 def displayable(text: str) -> str:
     """The text as it should be SEEN — real notation, not spoken Korean.
 
     The transcript panel is the one place programmer ASCII can be improved
-    into print notation: 2*x**2 becomes 2·x², sqrt becomes √. Identity when
-    there is no math, exactly like speakable() — the two are the same boundary
-    split by destination: displayable() for the eye, speakable() for the ear.
+    into print notation: 2*x**2 becomes 2·x², sqrt becomes √, log_3 becomes
+    log₃. Identity when there is no math, exactly like speakable() — the two
+    are the same boundary split by destination: displayable() for the eye,
+    speakable() for the ear.
     """
     if not text or not _MATH_SIGNAL.search(text):
         return text
@@ -157,7 +176,7 @@ def displayable(text: str) -> str:
     s = re.sub(r"\*\*(\d+)", r"^\1", s)
     s = re.sub(r"\s*\*\s*", "·", s)
     s = s.replace("sqrt(", "√(")
-    return s
+    return _display_logs(s)
 
 
 def speakable(text: str) -> str:

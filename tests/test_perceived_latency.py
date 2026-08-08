@@ -273,6 +273,9 @@ async def test_a_new_problem_is_read_back_while_the_tutor_thinks(db):
     assert opener_at < problem_at < closer_at
     # and it never outlives the answer: the hint is the LAST thing said
     assert speaker.spoken[-1] != READOUT_CLOSERS[True]
+    # a NEW problem also fills the page's problem card, in display notation
+    card = next(e for e in ws.events if e["event"] == "problem")
+    assert "일차방정식" in card["data"]["text"]
 
 
 async def test_the_same_problem_is_not_read_back_twice(db):

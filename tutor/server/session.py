@@ -77,11 +77,19 @@ PROBLEM_DONE = "문제를 끝까지 풀었네요! 또 모르는 문제가 있으
 # to be checked, not helped.
 WORK_CONFIRMED = "맞아요! 이대로 하면 돼요. 또 궁금한 게 있으면 물어봐 주세요."
 
-# When it is not right, the tutor still has to say it looked before it hints.
-# Fixed text, never generated: it may say THAT the tutor looked, never WHAT is
-# wrong. Naming the mistake is the hint's job, and the leak guard's.
+# "풀이 맞아?" is a yes/no question, so the VERDICT comes first — before any
+# hint, before any question back. Fixed text, never generated: it may say THAT
+# the work is wrong, never WHAT is wrong. Naming the mistake is the hint's
+# job, and the leak guard's. Statuses that carry no verdict (STUCK, a skipped
+# estimate) claim none: saying 맞아요/틀려요 without evidence is worse than
+# a neutral "let's look".
+WORK_CHECK_WRONG = "음, 아직 맞지 않은 부분이 있어요. 지금 쓴 줄을 같이 볼까요?"
 WORK_CHECK_REACTIONS: dict[str, str] = {
     "UNCERTAIN": "",  # ASK_RECAPTURE already says it cannot see the page
+    "CALCULATION_ERROR": WORK_CHECK_WRONG,
+    "CONCEPT_ERROR": WORK_CHECK_WRONG,
+    "PROCEDURAL_ERROR": WORK_CHECK_WRONG,
+    "MISREAD": WORK_CHECK_WRONG,
 }
 WORK_CHECK_DEFAULT = "음, 지금 쓴 줄을 같이 볼까요?"
 
@@ -772,12 +780,14 @@ class Session:
                 rec.confidence, self.deps.settings.recog_conf_threshold,
             )
         else:
-            # A trustworthy read reaches the page's problem card: the student
-            # sees what the tutor believes the problem says, in notation.
-            await self._send_problem(rec)
             if self.ctx is None or not (
                 self.ctx.hash == problem_hash(rec) or self._same_problem(rec)
             ):
+                # A NEW problem reaches the page's problem card — and only a
+                # new one. The VLM re-reads the same page with small wording
+                # differences every work check, and a card that rewrites
+                # itself mid-problem reads as the tutor changing its mind.
+                await self._send_problem(rec)
                 # First sight of a NEW problem: read it back while the tagger,
                 # the matcher and the phraser think (~15s of otherwise dead
                 # air). The student hears that the tutor actually saw their

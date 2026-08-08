@@ -152,6 +152,10 @@ async def test_a_work_check_takes_a_fresh_photo_and_reads_it(db):
     assert speaker.spoken
     # the newly written line is what the diagnosis ran on
     assert session.prev_work == ["3*x = 15"]
+    # same problem, so the page's problem card is NOT rewritten: the VLM
+    # re-reads with small wording differences, and a card that changes on
+    # every "풀이 봐줘" reads as the tutor changing its mind
+    assert "problem" not in ws.event_names()
 
 
 async def test_a_work_check_survives_a_pending_question(db):
@@ -207,7 +211,14 @@ async def test_correct_work_is_confirmed_and_not_hinted_at(db):
     assert session.ctx is not None                 # still on the same problem
 
 
-async def test_a_wrong_line_is_acknowledged_without_naming_the_mistake(db):
+async def test_a_wrong_line_hears_the_verdict_first(db):
+    """"풀이 맞아?" is a yes/no question: when the answer is no, say NO first.
+
+    The verdict and nothing else — never WHAT is wrong; that stays the hint's
+    job and the leak guard's jurisdiction.
+    """
+    from tutor.server.session import WORK_CHECK_WRONG
+
     session, _, speaker, _ = build(
         db,
         "풀이 맞나요?",
@@ -223,7 +234,7 @@ async def test_a_wrong_line_is_acknowledged_without_naming_the_mistake(db):
     await session._handle_utterance(PCM, 16000)
 
     spoken = speaker.spoken[0]
-    assert spoken.startswith("음, 지금 쓴 줄을 같이 볼까요?")
+    assert spoken.startswith(WORK_CHECK_WRONG)
     assert "3*x = 15" not in spoken and "x = 5" not in spoken
 
 

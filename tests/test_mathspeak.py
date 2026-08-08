@@ -83,6 +83,16 @@ class TestTheScreenGetsNotation:
         said = displayable("f'(1) = 2*3")
         assert "f'(1)" in said and "=" in said and "2·3" in said
 
+    def test_logs_sink_their_base(self):
+        from tutor.speech.mathspeak import displayable
+
+        assert displayable("log_3 (b/a) = 1/2") == "log₃ (b/a) = 1/2"
+        assert displayable("log_a b = 3") == "logₐ b = 3"
+        assert displayable("\\log_{2} x") == "log₂ x"
+        assert displayable("log_10 x = 2") == "log₁₀ x = 2"
+        # a base with no unicode subscript stays as written, not half-sunk
+        assert displayable("log_b a = 1") == "log_b a = 1"
+
     def test_latex_becomes_print_notation(self):
         from tutor.speech.mathspeak import displayable
 
