@@ -33,6 +33,8 @@ import asyncio
 import logging
 import re
 import time
+
+from websockets.exceptions import ConnectionClosed
 from dataclasses import dataclass, field
 
 from tutor.config import Settings
@@ -279,6 +281,10 @@ class Session:
                     # a bad frame or transient backend failure must not kill
                     # the session (student state + hint history live here)
                     log.exception("frame handling failed; session continues")
+        except (ConnectionClosed, OSError) as e:
+            # A closed laptop lid or dropped Wi-Fi is a TCP reset, not a
+            # server bug: one quiet line, not an ERROR with a traceback.
+            log.info("device connection dropped (%s)", type(e).__name__)
         finally:
             for task in self._tasks:
                 task.cancel()

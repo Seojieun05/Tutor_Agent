@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from websockets.exceptions import ConnectionClosed
+
 from tutor.protocol.events import make_event, parse_event
 from tutor.protocol.frames import ImageFrame, ProtocolError, decode
 
@@ -59,6 +61,11 @@ class CameraConnection:
                     log.warning("camera protocol error: %s", e)
                 except Exception:
                     log.exception("camera frame handling failed; connection continues")
+        except (ConnectionClosed, OSError) as e:
+            # A phone locking its screen or hopping Wi-Fi is a TCP reset, not
+            # a server bug: one quiet line, not an ERROR with a traceback.
+            log.info("camera %s connection dropped (%s)", self.device_id,
+                     type(e).__name__)
         finally:
             self.hub.unregister(self)
             for future in self._pending.values():
