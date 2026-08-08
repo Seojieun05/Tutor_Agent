@@ -83,7 +83,7 @@ WORK_CONFIRMED = "맞아요! 이대로 하면 돼요. 또 궁금한 게 있으�
 # job, and the leak guard's. Statuses that carry no verdict (STUCK, a skipped
 # estimate) claim none: saying 맞아요/틀려요 without evidence is worse than
 # a neutral "let's look".
-WORK_CHECK_WRONG = "음, 아직 맞지 않은 부분이 있어요. 지금 쓴 줄을 같이 볼까요?"
+WORK_CHECK_WRONG = "맞지 않아요. 버리고 다시 생각해 볼까요?"
 WORK_CHECK_REACTIONS: dict[str, str] = {
     "UNCERTAIN": "",  # ASK_RECAPTURE already says it cannot see the page
     "CALCULATION_ERROR": WORK_CHECK_WRONG,
