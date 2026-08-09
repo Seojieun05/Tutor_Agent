@@ -74,6 +74,17 @@ One or two short spoken sentences. Korean 존댓말(해요체), never 반말. No
 no markdown, no symbols read aloud badly — say "3 x 더하기 5" rather than
 "3x + 5" when it is easier to hear.
 
+BOARD
+Besides the spoken hint you may WRITE 0-2 short expressions on the student's
+screen (`board`) — what a tutor would jot on the whiteboard while saying the
+hint. Only mathematics that is already in front of the student: the problem's
+own equation, a line they wrote themselves, the expression your question is
+pointing at. ASCII notation (3*x + 5 = 20, x**2, sqrt(2), log_3 b), one
+expression per entry, no Korean words. NEVER write anything the student has
+not reached: no next-step result, no simplified form, no final answer — the
+board must not show what the voice is forbidden to say. Most hints need an
+empty board; write only when pointing at an expression genuinely helps.
+
 HOW TO TEACH (this is the part that matters)
 - Active learning: leave the thinking to them. The best hint is the weakest one
   that still unblocks — productive struggle is the lesson, not an obstacle.
@@ -95,7 +106,7 @@ NEVER
   is written separately and is spoken just before yours; starting with your own
   makes the tutor say it twice.
 
-Return ONLY JSON: {"hint": "..."}"""
+Return ONLY JSON: {"hint": "...", "board": ["...", "..."]}"""
 
 _EXPLAIN_SYSTEM = """PERSONA
 You are a warm math tutor speaking Korean out loud to one student.
@@ -147,6 +158,29 @@ def strip_leading_acknowledgement(text: str, rounds: int = 2) -> str:
 
 class PhrasedHint(BaseModel):
     hint: str
+    # what the tutor writes while saying it: 0-2 expressions, screened by the
+    # same leak guard as the words — the board may not show what the voice
+    # may not say
+    board: list[str] = []
+
+
+class SpokenHint(str):
+    """The hint text, carrying the board it was phrased with.
+
+    A str subclass so every existing consumer (strip_leading_acknowledgement,
+    the leak guard, history records, TTS) keeps working untouched; the session
+    reads `.board` off it before any string operation strips the subclass
+    away. Plain str returns (templates, fixed actions) read as an empty board
+    through getattr.
+    """
+
+    board: tuple[str, ...] = ()
+
+
+def _with_board(text: str, board: tuple[str, ...]) -> "SpokenHint":
+    out = SpokenHint(text)
+    out.board = board
+    return out
 
 
 def visible_to_student(rec: Recognition | None) -> list[str]:
@@ -213,7 +247,7 @@ class HintGenerator:
             return text
 
         # 2) LLM phrasing fallback with minimal context.
-        text = self._phrase(
+        text, board = self._phrase(
             decision, match, slots, history, rec, reference, student_answer=student_answer
         )
         seen = visible_to_student(rec)
@@ -221,13 +255,20 @@ class HintGenerator:
             text, reference, decision.target_step, seen
         ):
             log.warning("hint leaked answer; regenerating once")
-            text = self._phrase(
+            text, board = self._phrase(
                 decision, match, slots, history, rec, reference,
                 stronger=True, student_answer=student_answer,
             )
             if leaks_answer(text, reference, decision.target_step, seen):
                 return self._generic_fallback(decision, slots)
-        return text
+        # The board passes the SAME gate as the voice, line by line: writing
+        # "x = 5" while carefully not saying it is still giving the answer.
+        if reference is not None:
+            board = tuple(
+                b for b in board
+                if not leaks_answer(b, reference, decision.target_step, seen)
+            )
+        return _with_board(text, board)
 
     def explain(
         self,
@@ -358,7 +399,8 @@ class HintGenerator:
         result = self.llm.run_with_tools(
             purpose="phrase", system=_PHRASE_SYSTEM, user="\n".join(parts), schema=PhrasedHint
         )
-        return result.hint.strip()
+        board = tuple(b.strip() for b in result.board[:2] if b and b.strip())
+        return result.hint.strip(), board
 
     def _concepts_for(self, match: MatchResult, rec: Recognition | None) -> list[str]:
         """Whitelisted concepts of the problem, tagger first, matcher second."""

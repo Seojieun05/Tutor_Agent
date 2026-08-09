@@ -140,6 +140,13 @@
   }
   .boardline:last-child { border-bottom:none; }
   .boardline .katex { font-size:1.15em; }
+  /* what the tutor deliberately WROTE, as opposed to math inside a sentence */
+  .boardline.key {
+    border-left:3px solid var(--accent); padding-left:.8rem;
+    background:var(--accent-soft); border-radius:8px; margin:.3rem 0;
+    font-size:1.2rem; text-align:center;
+  }
+  .boardline.key .katex { font-size:1.25em; }
   #boardEmpty { color:var(--dim); font-size:.85rem; padding-top:.6rem; }
 
   /* ---- conversation (right) ---- */
@@ -468,6 +475,7 @@ function onEvent(msg) {
     case "barge_in":    stopSpeaking(); break;
     case "transcript":  addTurn("you", d.text || "(인식 실패)"); break;
     case "tutor_says":  addTurn("tutor", d.text); boardWrite(d.text); break;
+    case "board":       for (const line of d.lines || []) boardWrite(line, true); break;
     case "problem":     showProblem(d); break;
     case "hint_issued": note(`힌트 L${d.level} · ${d.action}`); break;
     case "capture_request": sendWorksheet(d.capture_id); break;
@@ -519,7 +527,10 @@ function showProblem(d) {
   boardClear();                          // a new problem starts a clean board
 }
 
+let boardSeen = new Set();             // one problem's writing, no duplicates
+
 function boardClear() {
+  boardSeen = new Set();
   const lines = $("boardLines");
   lines.textContent = "";
   const empty = document.createElement("div");
@@ -529,15 +540,20 @@ function boardClear() {
 }
 
 /** Every tutor line that CONTAINS math gets written on the board, typeset.
-    Pure talk (fillers, encouragement) stays in the chat only. */
-function boardWrite(text) {
-  const { frag, hasMath } = mathify(text);
-  if (!hasMath) return;
+    Pure talk (fillers, encouragement) stays in the chat only. `key` lines are
+    the ones the tutor deliberately wrote (the board event): always written,
+    shown emphasized — the whiteboard move behind the spoken hint. */
+function boardWrite(text, key = false) {
+  const norm = (text || "").trim();
+  if (!norm || boardSeen.has(norm)) return;
+  const { frag, hasMath } = mathify(norm);
+  if (!key && !hasMath) return;
+  boardSeen.add(norm);
   const lines = $("boardLines");
   const empty = document.getElementById("boardEmpty");
   if (empty) empty.remove();
   const line = document.createElement("div");
-  line.className = "boardline";
+  line.className = key ? "boardline key" : "boardline";
   line.append(frag);
   lines.appendChild(line);
   lines.scrollTop = lines.scrollHeight;

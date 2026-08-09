@@ -174,6 +174,45 @@ class TestGenerator:
         assert not leaks_answer(text, LIN_REF, 1)
 
 
+class TestTheBoard:
+    """What the tutor WRITES travels with what it says, through the same gate:
+    writing "x = 5" while carefully not saying it is still giving the answer."""
+
+    SEEN = Recognition(
+        problem_text="다음 일차방정식을 푸시오: 3x + 5 = 20",
+        equations=["3*x + 5 = 20"],
+    )
+
+    def _llm_match(self):
+        # concepts with no seeded templates → the LLM phrasing path
+        return MatchResult(tier=Tier.NEW, concepts=["unknown_concept"], reference=LIN_REF)
+
+    def test_the_board_rides_on_the_hint(self, db):
+        llm = EchoLLMClient({"phrase": [
+            {"hint": "어느 항을 옮기면 x만 남을까요?", "board": ["3*x + 5 = 20"]}
+        ]})
+        gen = HintGenerator(llm, db)
+        text = gen.generate(decision(1), self._llm_match(), LIN_REF, self.SEEN, [])
+        assert text == "어느 항을 옮기면 x만 남을까요?"   # still a str to everyone else
+        assert text.board == ("3*x + 5 = 20",)
+
+    def test_a_leaking_board_line_is_dropped_and_the_hint_kept(self, db):
+        llm = EchoLLMClient({"phrase": [
+            {"hint": "다음에는 무엇을 하면 좋을까요?", "board": ["x = 5", "3*x + 5 = 20"]}
+        ]})
+        gen = HintGenerator(llm, db)
+        text = gen.generate(decision(1), self._llm_match(), LIN_REF, self.SEEN, [])
+        assert text == "다음에는 무엇을 하면 좋을까요?"
+        assert text.board == ("3*x + 5 = 20",)         # the answer never reaches the screen
+
+    def test_paths_without_a_board_read_as_an_empty_one(self, db):
+        gen = HintGenerator(EchoLLMClient(), db)
+        text = gen.generate(
+            Decision(Action.WAIT, 0, 1, None, "r"), lin_match(), LIN_REF, self.SEEN, []
+        )
+        assert getattr(text, "board", ()) == ()        # how the session reads plain strs
+
+
 class TestStudentAnswerInThePrompt:
     """Hints build on what the student just said, at every call site."""
 

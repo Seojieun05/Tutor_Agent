@@ -678,10 +678,11 @@ class Session:
         except Exception:
             hint_task.cancel()
             raise
+        board = getattr(text, "board", ())  # before any strip loses the subclass
         if spoke_feedback:
             # one acknowledgement per turn: the reaction already was it
             text = strip_leading_acknowledgement(text)
-        await self._deliver(decision, text, ctx.hash)
+        await self._deliver(decision, text, ctx.hash, board)
 
     async def _answer_question(
         self, ctx: ProblemContext, pending: HintRecord, question: str
@@ -904,9 +905,10 @@ class Session:
         except Exception:
             hint_task.cancel()
             raise
+        board = getattr(text, "board", ())  # before any strip loses the subclass
         if spoke_reaction:
             text = strip_leading_acknowledgement(text)
-        await self._deliver(decision, text, ctx.hash)
+        await self._deliver(decision, text, ctx.hash, board)
 
     @staticmethod
     def _work_reaction(state: StudentState) -> str:
@@ -1093,7 +1095,19 @@ class Session:
             except Exception:
                 pass
 
-    async def _deliver(self, decision: Decision, text: str, problem_hash: str = "") -> None:
+    async def _deliver(
+        self, decision: Decision, text: str, problem_hash: str = "",
+        board: tuple[str, ...] = (),
+    ) -> None:
+        if board:
+            # written as the voice starts, like a tutor's hand reaching the
+            # whiteboard mid-sentence — display notation for the eye
+            try:
+                await self.ws.send(make_event(
+                    "board", {"lines": [mathspeak.displayable(b) for b in board]}
+                ))
+            except Exception:
+                log.debug("could not send board event (connection gone)")
         if text:
             await self._speak(text)
         self.store.append_hint(

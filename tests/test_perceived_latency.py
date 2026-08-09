@@ -227,6 +227,28 @@ async def test_a_work_check_narrates_the_diagnosis_wait(db):
     assert speaker.spoken[-1] not in WORK_CHECK_NARRATIONS   # never the last word
 
 
+async def test_the_hints_board_reaches_the_page(db):
+    """What the tutor wrote arrives as a `board` event, in display notation,
+    alongside the spoken hint. Templates carry no board, so the DB pedagogy is
+    emptied here to force the phrasing model — the one path that writes."""
+    db.hint_templates_for = lambda *a, **k: []
+    session, llm, speaker, ws = build(
+        db, "이 문제 힌트 줄래?",
+        llm_responses={"phrase": [
+            {"hint": "어느 항을 옮기면 x만 남을까요?", "board": ["3*x + 5 = 20"]}
+        ]},
+    )
+
+    await session._handle_utterance(PCM, 16000)
+
+    assert "phrase" in llm.calls                        # the board-writing path ran
+    board = next(e for e in ws.events if e["event"] == "board")
+    assert board["data"]["lines"] == ["3·x + 5 = 20"]   # eye notation, not ASCII
+    # written as the voice starts: the board precedes the hint's bookkeeping
+    names = [e["event"] for e in ws.events]
+    assert names.index("board") < names.index("hint_issued")
+
+
 async def test_a_new_problem_does_not_get_the_work_narration(db):
     """First sight of a problem reads the PROBLEM back; the work-check line
     ("풀이를 다 읽었어요…") belongs to a page the tutor has already met."""
