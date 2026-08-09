@@ -13,12 +13,15 @@ answer" — are followed as behaviour rather than as a style request. That is
 exactly the instruction this tutor gives, and exactly the instruction a general
 model tends to drift out of by helpfully finishing the problem.
 
-`run_with_tools` falls through to `complete_json`, which is honest rather than
-lazy. The purposes routed here — recognize, phrase, explain — are the ones this
-codebase deliberately feeds by prefetching: the orchestrator puts the state,
+`run_with_tools` runs a real function-calling loop only when a registry is
+attached AND it offers tools for the purpose — today that is `evaluate` with
+the sympy checks (EVAL_PROVIDER=gemini). Everything else falls through to
+`complete_json`, which is honest rather than lazy: recognize, phrase and
+explain are deliberately fed by prefetching — the orchestrator puts the state,
 the history, the target step and the misconception into the prompt rather than
 letting the model go looking (CLAUDE.md, "Do not rely on autonomous tool
-calls"). A tool loop here would be dead code pretending to be a feature.
+calls"), so no registry is attached to those clients and no loop pretends to
+be a feature there.
 
 What does NOT move with the model: the policy that chose the hint level, and
 the leak guard that checks the result. Both are deterministic and both still
@@ -27,6 +30,7 @@ run. Changing the writer cannot change how much is given away.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Sequence, TypeVar
 
@@ -46,7 +50,13 @@ class GeminiClient:
     """An LLMClient backed by one Gemini model. Import is lazy so a missing
     google-genai costs nothing until someone actually asks for this provider."""
 
-    def __init__(self, settings: Settings, model: str | None = None, role: str = "gemini"):
+    def __init__(
+        self,
+        settings: Settings,
+        model: str | None = None,
+        role: str = "gemini",
+        registry=None,
+    ):
         try:
             from google import genai
         except ImportError as e:  # pragma: no cover - depends on the extra
@@ -57,6 +67,7 @@ class GeminiClient:
 
         self.settings = settings
         self.model = model or settings.gemini_vision_model or DEFAULT_MODEL
+        self.registry = registry  # None → run_with_tools falls through, toolless
         self._genai = genai
         self._client = self._connect(settings, role)
         log.info("%s: gemini %s via %s", role, self.model, self.backend)
@@ -134,7 +145,71 @@ class GeminiClient:
         schema: type[M],
         max_rounds: int = 6,
     ) -> M:
-        """No tools: `recognize` is the only purpose routed here, and it has none."""
-        return self.complete_json(
-            purpose=purpose, system=system, user=user, images=images, schema=schema
+        """Function-calling loop when the registry offers tools; fallthrough
+        otherwise. Any failure raises LLMError, which is FallbackLLM's cue to
+        rerun the whole call on the Grok standby (whose loop has the same
+        tools) — so a Gemini quirk costs a retry, never the turn."""
+        tools = self.registry.openai_tools(purpose) if self.registry is not None else []
+        if not tools:
+            return self.complete_json(
+                purpose=purpose, system=system, user=user, images=images, schema=schema
+            )
+        from google.genai import types
+
+        declarations = [
+            types.FunctionDeclaration(
+                name=t["function"]["name"],
+                description=t["function"]["description"],
+                parameters=t["function"]["parameters"],
+            )
+            for t in tools
+        ]
+        parts = [
+            types.Part.from_bytes(data=jpeg, mime_type="image/jpeg") for jpeg in images
+        ]
+        parts.append(types.Part.from_text(text=user))
+        contents = [types.Content(role="user", parts=parts)]
+        # tools and response_schema do not combine reliably, so the schema
+        # rides in the system instruction and the final text is validated here
+        config = types.GenerateContentConfig(
+            system_instruction=(
+                f"{system}\n\nRespond with ONLY a JSON object matching this schema:\n"
+                + json.dumps(schema.model_json_schema(), ensure_ascii=False)
+            ),
+            tools=[types.Tool(function_declarations=declarations)],
+            temperature=0,
         )
+        for round_no in range(1, max_rounds + 1):
+            try:
+                response = self._client.models.generate_content(
+                    model=self.model, contents=contents, config=config
+                )
+            except Exception as e:  # noqa: BLE001 — one seam, one error type
+                raise LLMError(f"{purpose}: gemini call failed: {e}") from e
+            calls = list(getattr(response, "function_calls", None) or [])
+            if not calls:
+                if round_no > 1:
+                    log.info("%s: gemini answered after %d rounds", purpose, round_no)
+                text = getattr(response, "text", None) or ""
+                if not text.strip():
+                    raise LLMError(f"{purpose}: gemini returned nothing to parse")
+                try:
+                    return parse_into(schema, text)
+                except Exception as e:  # noqa: BLE001 — same seam
+                    raise LLMError(
+                        f"{purpose}: gemini output failed validation: {e}"
+                    ) from e
+            log.info(
+                "%s round %d: gemini looking up %s",
+                purpose, round_no, ", ".join(c.name for c in calls),
+            )
+            contents.append(response.candidates[0].content)
+            results = [
+                types.Part.from_function_response(
+                    name=call.name,
+                    response=self.registry.dispatch(purpose, call.name, dict(call.args or {})),
+                )
+                for call in calls
+            ]
+            contents.append(types.Content(role="user", parts=results))
+        raise LLMError(f"{purpose}: gemini tool loop exceeded {max_rounds} rounds")

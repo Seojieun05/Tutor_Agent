@@ -26,6 +26,11 @@ Rules:
 - final_answer.kind: "SCALAR" for a single value, "ROOT_SET" for multiple roots,
   "EXPRESSION" for a symbolic result (e.g. a derivative).
 - You may search the domain knowledge base for similar solved problems.
+- Check yourself as you go: `compute` evaluates an expression or solves a
+  one-variable equation; `check_equivalence` confirms a step's expression is
+  still the same claim as the one before it. Verify the final answer with
+  `compute` before returning. If a check contradicts a step, fix the step —
+  never return work a tool call disagreed with.
 - concepts: short English snake_case tags like "linear_equation".
 - origin must be "grok" and verified must be false.
 

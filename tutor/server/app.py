@@ -113,7 +113,7 @@ def build_shared(settings: Settings):
     semantic = getattr(getattr(registry, "kb", None), "semantic", None)
     vision_llm = build_vision_llm(settings, llm)
     hint_llm = build_hint_llm(settings, llm)
-    eval_llm = build_eval_llm(settings, llm)
+    eval_llm = build_eval_llm(settings, llm, registry)
     # One log line per model call, always on. The tutor's latency is almost
     # entirely other people's servers, so the only useful question is which
     # call — and that is not answerable after the fact without this.
@@ -182,18 +182,23 @@ def build_hint_llm(settings: Settings, llm):
                       settings.gemini_hint_model, "HINT_PROVIDER")
 
 
-def build_eval_llm(settings: Settings, llm):
+def build_eval_llm(settings: Settings, llm, registry=None):
     """Whichever model grades a spoken answer. Only AnswerEvaluator sees this.
 
     The verdict feeds the same deterministic policy either way (correct → next
     step, wrong → escalate), so swapping the model changes grading judgement
     and nothing about what the tutor is allowed to do with it.
+
+    Eval is the one Gemini client that gets the tool registry: grading turns
+    on equivalence ("3x가 15" vs "x = 5"), which is the sympy tools' job.
+    Vision and hints stay toolless by design — their context is prefetched.
     """
     return _gemini_or(settings, llm, settings.eval_provider,
-                      settings.gemini_eval_model, "EVAL_PROVIDER")
+                      settings.gemini_eval_model, "EVAL_PROVIDER", registry=registry)
 
 
-def _gemini_or(settings: Settings, llm, provider: str, model: str, knob: str):
+def _gemini_or(settings: Settings, llm, provider: str, model: str, knob: str,
+               registry=None):
     """A bad key or a missing package must not cost the student the whole
     lesson, so a failure here falls back to the chat model rather than
     refusing to start — loudly, because reading with a model you did not
@@ -204,7 +209,7 @@ def _gemini_or(settings: Settings, llm, provider: str, model: str, knob: str):
     from tutor.llm.gemini import GeminiClient
 
     try:
-        chosen = GeminiClient(settings, model, role=knob)
+        chosen = GeminiClient(settings, model, role=knob, registry=registry)
     except Exception as e:  # noqa: BLE001 — degrade to Grok, loudly
         log.error("%s=gemini unavailable (%s); using %s instead",
                   knob, e, settings.chat_model)

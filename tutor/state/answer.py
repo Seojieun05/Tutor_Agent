@@ -2,9 +2,11 @@
 
 This is the turn *after* a hint. It deliberately does NOT re-capture or
 re-recognize the worksheet — the student answered out loud, so the only new
-evidence is the transcript. One small no-tools LLM call replaces the whole
-capture → VLM → match → estimate chain, which is what makes the answer turn
-fast enough to feel like a conversation.
+evidence is the transcript. One small LLM call replaces the whole capture →
+VLM → match → estimate chain, which is what makes the answer turn fast enough
+to feel like a conversation. Its only tools are the sympy checks (compute /
+check_equivalence), and the prompt gates them to the answers whose grade
+actually turns on arithmetic — no KB round trips, ever.
 
 The verdict drives the existing policy through the store, with no new rules:
 
@@ -73,6 +75,13 @@ misconception: an id from the given list if the wrong answer matches one, else n
 status: the student's state after this answer, one of CORRECT, CALCULATION_ERROR,
 CONCEPT_ERROR, PROCEDURAL_ERROR, MISREAD, STUCK.
 
+tools (when available): `compute` and `check_equivalence` do real math. Use one
+ONLY when the grade genuinely turns on arithmetic or equivalence you cannot see
+at a glance — the student claims a number or a rearranged equation and you are
+not certain it matches the reference step. Conceptual answers ("5를 빼면 돼요")
+need no tool; obviously right or wrong answers need no tool. Every call is a
+beat of silence the student sits through, so at most one or two, then decide.
+
 Return ONLY the JSON object."""
 
 
@@ -100,7 +109,7 @@ class AnswerEvaluator:
         target_step: int,
         transcript: str,
     ) -> AnswerVerdict:
-        verdict = self.llm.complete_json(
+        verdict = self.llm.run_with_tools(
             purpose="evaluate",
             system=_SYSTEM,
             user=self._context(problem_text, reference, question, target_step, transcript),

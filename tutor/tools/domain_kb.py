@@ -1,4 +1,5 @@
-"""Domain KB search tool: the only tool the LLM can call. Read-only."""
+"""Domain KB search tool. Read-only, like every tool the LLM can call
+(the full roster per purpose lives in tutor/tools/registry.py)."""
 
 from __future__ import annotations
 
