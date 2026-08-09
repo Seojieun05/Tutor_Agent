@@ -24,16 +24,26 @@
 
   Chrome/Edge recommended (AudioWorklet at a 16 kHz AudioContext).
 
-  DESIGN: light theme, one green accent, locked. The page is a session room,
-  not a dashboard: problem card pinned top-center (notation, never the photo),
-  the conversation below it, the mic at the bottom. Every control on this page
-  is wired to something real; there are deliberately no decorative buttons.
+  DESIGN: light theme, one green accent, locked. Three zones: the problem
+  pinned top-center (notation, never the photo), the BOARD in the middle where
+  every mathematical line the tutor says is written out in real type (KaTeX),
+  the conversation on the right, the mic at the bottom. Every control on this
+  page is wired to something real; there are deliberately no decorative
+  buttons.
+
+  MATH: the server sends one normalized display vocabulary (x², ·, √, log₃,
+  1/5 — see tutor/speech/mathspeak.py displayable()). This page converts that
+  small alphabet to TeX and typesets it with KaTeX. If the KaTeX CDN cannot be
+  reached, everything falls back to the plain unicode text, which is exactly
+  what the page showed before KaTeX existed.
 -->
 <html lang="ko">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Visual Socratic Tutor</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js"></script>
 <style>
   :root {
     --bg:#f4f7f5; --surface:#ffffff; --line:#e3e9e5;
@@ -70,77 +80,103 @@
   #conn.ok { color:var(--accent-deep); border-color:var(--accent-line); background:var(--accent-soft); }
   #conn.down { color:var(--err); }
 
-  /* ---- middle column ---- */
+  /* ---- middle: problem on top, board center, chat right ---- */
   main {
     flex:1 1 auto; min-height:0; width:100%;
-    display:flex; flex-direction:column; align-items:center;
-    padding:1.25rem 1rem 0;
+    display:flex; justify-content:center;
+    padding:1.1rem 1rem 0;
   }
-  .col {
-    width:100%; max-width:760px; min-height:0; flex:1 1 auto;
-    display:flex; flex-direction:column; gap:.9rem;
+  .grid {
+    width:100%; max-width:1180px; min-height:0;
+    display:grid; gap:.9rem;
+    grid-template-columns:minmax(0,1fr) 340px;
+    grid-template-rows:auto auto minmax(0,1fr);
   }
+  .span2 { grid-column:1 / -1; }
 
   /* ---- problem card: notation, not a photo ---- */
   #problemCard {
-    flex:none; background:var(--surface); border:1px solid var(--line);
+    background:var(--surface); border:1px solid var(--line);
     border-radius:16px; box-shadow:var(--shadow);
-    padding:1.15rem 1.5rem 1.3rem; text-align:center;
+    padding:1.1rem 1.5rem 1.2rem; text-align:center;
   }
   #problemCard[hidden] { display:none; }
   .cardlabel {
     display:inline-block; font-size:.75rem; font-weight:700;
     color:var(--accent-deep); background:var(--accent-soft);
-    border-radius:999px; padding:.15rem .7rem; margin-bottom:.6rem;
+    border-radius:999px; padding:.15rem .7rem; margin-bottom:.55rem;
   }
-  #problemText { font-size:1.2rem; font-weight:700; line-height:1.55; word-break:keep-all; }
-  #problemEqs { margin-top:.45rem; font-family:var(--math); font-size:1.15rem; color:var(--text); }
-  #problemEqs div { padding:.1rem 0; }
+  #problemText { font-size:1.15rem; font-weight:700; line-height:1.6; word-break:keep-all; }
+  #problemEqs { margin-top:.4rem; font-family:var(--math); font-size:1.15rem; }
+  #problemEqs div { padding:.12rem 0; }
 
   /* ---- worksheet photo (click / drag / paste) ---- */
   #sheet { display:none; }
   #drop {
-    flex:none; display:flex; align-items:center; justify-content:center; gap:.9rem;
+    display:flex; align-items:center; justify-content:center; gap:.9rem;
     background:var(--surface); border:1.5px dashed var(--line); border-radius:16px;
-    padding:.8rem 1rem; color:var(--dim); font-size:.85rem; line-height:1.5;
+    padding:.7rem 1rem; color:var(--dim); font-size:.82rem; line-height:1.5;
     text-align:center; cursor:pointer;
   }
   #drop:hover, #drop.over { border-color:var(--accent); color:var(--text); }
   #drop.has { border-style:solid; border-color:var(--accent-line); background:var(--accent-soft); color:var(--text); }
   #drop b { font-weight:700; }
-  #thumb { max-height:3.4rem; border-radius:8px; display:none; }
+  #thumb { max-height:3rem; border-radius:8px; display:none; }
   #thumb.has { display:block; }
   .meta { font-size:.75rem; color:var(--dim); }
 
-  /* ---- conversation ---- */
+  /* ---- the board: every mathematical line the tutor says ---- */
+  #board {
+    min-height:0; display:flex; flex-direction:column;
+    background:var(--surface); border:1px solid var(--line);
+    border-radius:16px; box-shadow:var(--shadow); padding:1rem 1.3rem;
+  }
+  #board .cardlabel { align-self:flex-start; }
+  #boardLines { flex:1 1 auto; min-height:0; overflow-y:auto; padding-top:.4rem; }
+  .boardline {
+    padding:.45rem .2rem; font-size:1.06rem; line-height:1.7;
+    word-break:keep-all; overflow-wrap:anywhere;
+    border-bottom:1px dashed var(--line);
+  }
+  .boardline:last-child { border-bottom:none; }
+  .boardline .katex { font-size:1.15em; }
+  #boardEmpty { color:var(--dim); font-size:.85rem; padding-top:.6rem; }
+
+  /* ---- conversation (right) ---- */
+  #chatPanel {
+    min-height:0; display:flex; flex-direction:column;
+    background:var(--surface); border:1px solid var(--line);
+    border-radius:16px; box-shadow:var(--shadow); padding:.9rem .9rem .6rem;
+  }
+  #chatPanel .cardlabel { align-self:flex-start; }
   #chat {
     flex:1 1 auto; min-height:0; overflow-y:auto;
-    display:flex; flex-direction:column; gap:.9rem;
-    padding:.3rem .15rem 1.1rem; scrollbar-width:thin;
+    display:flex; flex-direction:column; gap:.8rem;
+    padding:.5rem .1rem .6rem; scrollbar-width:thin;
   }
-  .msg { max-width:78%; display:flex; flex-direction:column; gap:.25rem; }
-  .msg .who { font-size:.72rem; font-weight:700; color:var(--dim); padding:0 .3rem; }
+  .msg { max-width:92%; display:flex; flex-direction:column; gap:.22rem; }
+  .msg .who { font-size:.7rem; font-weight:700; color:var(--dim); padding:0 .3rem; }
   .msg .bubble {
-    border-radius:14px; padding:.6rem .95rem; white-space:pre-wrap;
-    word-break:keep-all; overflow-wrap:anywhere;
+    border-radius:13px; padding:.5rem .8rem; font-size:.88rem;
+    white-space:pre-wrap; word-break:keep-all; overflow-wrap:anywhere;
   }
   .msg.tutor { align-self:flex-start; }
-  .msg.tutor .bubble { background:var(--surface); border:1px solid var(--line); border-top-left-radius:6px; }
+  .msg.tutor .bubble { background:var(--bg); border:1px solid var(--line); border-top-left-radius:5px; }
   .msg.you { align-self:flex-end; align-items:flex-end; }
-  .msg.you .bubble { background:var(--accent-soft); border:1px solid var(--accent-line); border-top-right-radius:6px; }
-  .msg .note { font-size:.72rem; color:var(--dim); padding:0 .3rem; }
-  .sys { align-self:center; font-size:.78rem; color:var(--err); }
+  .msg.you .bubble { background:var(--accent-soft); border:1px solid var(--accent-line); border-top-right-radius:5px; }
+  .msg .note { font-size:.7rem; color:var(--dim); padding:0 .3rem; }
+  .sys { align-self:center; font-size:.75rem; color:var(--err); text-align:center; }
 
   /* the tutor is thinking: shown only during PROCESSING */
   #thinking { align-self:flex-start; }
   #thinking[hidden] { display:none; }
   #thinking .bubble {
-    display:flex; align-items:center; gap:.55rem;
+    display:flex; align-items:center; gap:.5rem;
     background:var(--accent-soft); border:1px solid var(--accent-line);
-    color:var(--accent-deep); font-size:.85rem; font-weight:600;
+    color:var(--accent-deep); font-size:.8rem; font-weight:600;
   }
   .dots { display:inline-flex; gap:.22rem; }
-  .dots i { width:.32rem; height:.32rem; border-radius:50%; background:var(--accent); opacity:.4; }
+  .dots i { width:.3rem; height:.3rem; border-radius:50%; background:var(--accent); opacity:.4; }
   @media (prefers-reduced-motion: no-preference) {
     .dots i { animation:blink 1.2s ease-in-out infinite; }
     .dots i:nth-child(2) { animation-delay:.2s; }
@@ -151,11 +187,11 @@
   /* ---- mic bar ---- */
   footer {
     flex:none; background:var(--surface); border-top:1px solid var(--line);
-    display:flex; justify-content:center; padding:.8rem 1rem 1rem;
+    display:flex; justify-content:center; padding:.7rem 1rem .9rem; margin-top:1rem;
   }
-  .micbar { width:100%; max-width:760px; display:flex; align-items:center; gap:1rem; }
+  .micbar { width:100%; max-width:1180px; display:flex; align-items:center; gap:1rem; }
   #orb {
-    flex:none; width:64px; height:64px; border-radius:50%; border:2px solid var(--line);
+    flex:none; width:60px; height:60px; border-radius:50%; border:2px solid var(--line);
     background:var(--bg); color:var(--text); font:700 .85rem var(--font);
     cursor:pointer; transition:background .2s, border-color .2s, box-shadow .2s;
   }
@@ -176,10 +212,12 @@
   #stateLabel { font-size:.95rem; font-weight:700; }
   #status { font-size:.8rem; color:var(--dim); }
 
-  @media (max-width: 640px) {
-    header { padding:0 1rem; }
+  /* single column on narrow screens: problem, photo, board, chat, mic */
+  @media (max-width: 900px) {
+    .grid { grid-template-columns:minmax(0,1fr); grid-template-rows:auto auto minmax(14rem,42dvh) minmax(0,1fr); }
+    .span2 { grid-column:auto; }
+    #problemText { font-size:1.02rem; }
     .msg { max-width:88%; }
-    #problemText { font-size:1.05rem; }
   }
 </style>
 </head>
@@ -190,14 +228,14 @@
   </header>
 
   <main>
-    <div class="col">
-      <section id="problemCard" hidden>
+    <div class="grid">
+      <section id="problemCard" class="span2" hidden>
         <span class="cardlabel">현재 문제</span>
         <div id="problemText"></div>
         <div id="problemEqs"></div>
       </section>
 
-      <div id="drop">
+      <div id="drop" class="span2">
         <img id="thumb" alt="문제 사진 미리보기">
         <div>
           <b>문제 사진 올리기</b> · 클릭해서 고르거나, 끌어다 놓거나, Ctrl+V로 붙여넣기
@@ -206,14 +244,24 @@
       </div>
       <input type="file" id="sheet" accept="image/*">
 
-      <div id="chat">
-        <div id="thinking" class="msg tutor" hidden>
-          <div class="bubble">
-            튜터가 생각하는 중이에요
-            <span class="dots"><i></i><i></i><i></i></span>
+      <section id="board">
+        <span class="cardlabel">튜터 풀이</span>
+        <div id="boardLines">
+          <div id="boardEmpty">튜터가 수식을 말하면 여기에 적어 드릴게요.</div>
+        </div>
+      </section>
+
+      <section id="chatPanel">
+        <span class="cardlabel">대화</span>
+        <div id="chat">
+          <div id="thinking" class="msg tutor" hidden>
+            <div class="bubble">
+              튜터가 생각하는 중이에요
+              <span class="dots"><i></i><i></i><i></i></span>
+            </div>
           </div>
         </div>
-      </div>
+      </section>
     </div>
   </main>
 
@@ -278,6 +326,57 @@ const sendEvent = (event, data = {}) => {
   if (ws && ws.readyState === WebSocket.OPEN)
     ws.send(JSON.stringify({ type: "EVENT", event, data, ts: Date.now() }));
 };
+
+// --- math typesetting -------------------------------------------------------
+// The server normalizes everything the tutor writes into ONE small display
+// vocabulary (x² · √ log₃ f'(1) 1/5 — mathspeak.displayable). These two
+// functions take that vocabulary the last mile: find the math runs inside a
+// Korean sentence, translate the run to TeX, hand it to KaTeX. No KaTeX (CDN
+// down, offline) → the unicode text stands as-is, which is yesterday's page.
+const SUBS = { "₀":"0","₁":"1","₂":"2","₃":"3","₄":"4","₅":"5","₆":"6","₇":"7",
+               "₈":"8","₉":"9","ₐ":"a","ₑ":"e","ₕ":"h","ₖ":"k","ₗ":"l","ₘ":"m",
+               "ₙ":"n","ₒ":"o","ₚ":"p","ₛ":"s","ₜ":"t","ₓ":"x" };
+const MATH_RUN = /[0-9A-Za-z+\-=^*/().,'′²³√·₀-₉ₐₑₕₖₗₘₙₒₚₛₜₓ ]+/g;
+const MATH_SIGNAL = /[=^²³√·′]|[₀-₉ₐₑₕₖₗₘₙₒₚₛₜₓ]|\w\/\w|[A-Za-z]'|\b(?:log|sqrt|sin|cos|tan)\b/;
+
+function toTex(s) {
+  // function names first: "log₃" has no word boundary before the subscript
+  s = s.replace(/\b(log|sin|cos|tan)(?![A-Za-z])/g, "\\$1");
+  s = s.replace(/√\(([^()]*)\)/g, "\\sqrt{$1}");
+  s = s.replace(/²/g, "^{2}").replace(/³/g, "^{3}");
+  s = s.replace(/\^(\d+|[A-Za-z])/g, "^{$1}");
+  s = s.replace(/[₀-₉ₐₑₕₖₗₘₙₒₚₛₜₓ]+/g, (m) => "_{" + [...m].map(c => SUBS[c]).join("") + "}");
+  s = s.replace(/·/g, "\\cdot ");
+  s = s.replace(/(?<![}\w])(\w+)\s*\/\s*(\w+)(?![\w{])/g, "\\frac{$1}{$2}");
+  return s;
+}
+
+/** text → { frag, hasMath }: math runs typeset, everything else plain text. */
+function mathify(text) {
+  const frag = document.createDocumentFragment();
+  if (!window.katex) { frag.append(text); return { frag, hasMath: false }; }
+  let last = 0, found = false;
+  for (const m of text.matchAll(MATH_RUN)) {
+    const run = m[0], at = m.index;
+    // a run must LOOK like math, not just be latin letters in a sentence
+    const core = run.trim();
+    if (core.length < 2 || !MATH_SIGNAL.test(core)) continue;
+    frag.append(text.slice(last, at));
+    frag.append(run.slice(0, run.indexOf(core)));          // leading spaces
+    const span = document.createElement("span");
+    try {
+      span.innerHTML = katex.renderToString(toTex(core), { throwOnError: true });
+    } catch (e) {
+      span.textContent = core;         // one bad run must not lose the sentence
+    }
+    frag.append(span);
+    frag.append(run.slice(run.indexOf(core) + core.length)); // trailing spaces
+    last = at + run.length;
+    found = true;
+  }
+  frag.append(text.slice(last));
+  return { frag, hasMath: found };
+}
 
 // --- 1. capture: mic → worklet → 512-sample int16 frames → server ----------
 async function start() {
@@ -368,7 +467,7 @@ function onEvent(msg) {
     case "config":      bargeIn = !!d.barge_in; break;
     case "barge_in":    stopSpeaking(); break;
     case "transcript":  addTurn("you", d.text || "(인식 실패)"); break;
-    case "tutor_says":  addTurn("tutor", d.text); break;
+    case "tutor_says":  addTurn("tutor", d.text); boardWrite(d.text); break;
     case "problem":     showProblem(d); break;
     case "hint_issued": note(`힌트 L${d.level} · ${d.action}`); break;
     case "capture_request": sendWorksheet(d.capture_id); break;
@@ -399,22 +498,49 @@ function setState(s) {
   }
 }
 
-// --- the problem card: what the tutor read, in notation --------------------
+// --- the problem card and the board ----------------------------------------
 function showProblem(d) {
   const text = (d.text || "").trim();
   const eqs = d.equations || [];
   if (!text && !eqs.length) return;
-  $("problemText").textContent = text;
+  const pt = $("problemText");
+  pt.textContent = "";
+  pt.append(mathify(text).frag);
   const box = $("problemEqs");
   box.textContent = "";
   for (const eq of eqs) {
     // skip equations the problem statement already spells out
     if (text.includes(eq)) continue;
     const line = document.createElement("div");
-    line.textContent = eq;
+    line.append(mathify(eq).frag);
     box.appendChild(line);
   }
   $("problemCard").hidden = false;
+  boardClear();                          // a new problem starts a clean board
+}
+
+function boardClear() {
+  const lines = $("boardLines");
+  lines.textContent = "";
+  const empty = document.createElement("div");
+  empty.id = "boardEmpty";
+  empty.textContent = "튜터가 수식을 말하면 여기에 적어 드릴게요.";
+  lines.appendChild(empty);
+}
+
+/** Every tutor line that CONTAINS math gets written on the board, typeset.
+    Pure talk (fillers, encouragement) stays in the chat only. */
+function boardWrite(text) {
+  const { frag, hasMath } = mathify(text);
+  if (!hasMath) return;
+  const lines = $("boardLines");
+  const empty = document.getElementById("boardEmpty");
+  if (empty) empty.remove();
+  const line = document.createElement("div");
+  line.className = "boardline";
+  line.append(frag);
+  lines.appendChild(line);
+  lines.scrollTop = lines.scrollHeight;
 }
 
 // --- 3. playback: the tutor's audio, then tell the server we are done ------
@@ -622,7 +748,7 @@ function addTurn(kind, text) {
     div.className = `msg ${kind}`;
     div.innerHTML = `<div class="who"></div><div class="bubble"></div>`;
     div.querySelector(".who").textContent = kind === "you" ? "나" : "튜터";
-    div.querySelector(".bubble").textContent = text;
+    div.querySelector(".bubble").append(mathify(text).frag);
   }
   // the thinking bubble stays glued to the end while it is visible
   const thinking = $("thinking");
