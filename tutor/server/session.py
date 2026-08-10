@@ -732,6 +732,15 @@ class Session:
             feedback, ctx.reference, target_step, visible_to_student(ctx.recognition)
         ):
             feedback = ""
+        # The page files the problem under "해결한 문제" with its conversation.
+        # An event, not a model call: which problem just closed is a fact the
+        # orchestrator already holds, and facts ship as events here.
+        try:
+            await self.ws.send(make_event("solved", {
+                "text": mathspeak.displayable(ctx.recognition.problem_text),
+            }))
+        except Exception:
+            log.debug("could not send solved event (connection gone)")
         try:
             await self._speak(" ".join(part for part in (feedback, PROBLEM_DONE) if part))
         finally:

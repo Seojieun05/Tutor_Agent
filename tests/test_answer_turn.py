@@ -217,6 +217,12 @@ class TestProblemCompletion:
         assert session.ctx is None
         assert session.store.get_state() is None
         assert session.prev_work is None
+        # and the page is told, so it can file the conversation on the left
+        import json
+        solved = next(
+            e for e in map(json.loads, session.ws.events) if e["event"] == "solved"
+        )
+        assert solved["data"]["text"]          # the problem, for the archive title
 
     async def test_a_middle_step_still_continues_the_dialogue(self, db):
         session, _, speaker = build_session(
@@ -230,6 +236,7 @@ class TestProblemCompletion:
         assert "hint_issued" in session.ws.event_names()
         assert session.store.get_history(problem_hash="p1")[-1].step == 2
         assert "또 모르는 문제가 있으면" not in speaker.spoken[0]
+        assert "solved" not in session.ws.event_names()  # a middle step is not a win
 
     async def test_completion_feedback_that_leaks_is_dropped(self, db):
         session, _, speaker = build_session(

@@ -87,9 +87,9 @@
     padding:1.1rem 1rem 0;
   }
   .grid {
-    width:100%; max-width:1180px; min-height:0;
+    width:100%; max-width:1280px; min-height:0;
     display:grid; gap:.9rem;
-    grid-template-columns:minmax(0,1fr) 340px;
+    grid-template-columns:250px minmax(0,1fr) 340px;
     grid-template-rows:auto auto minmax(0,1fr);
   }
   .span2 { grid-column:1 / -1; }
@@ -148,6 +148,27 @@
   }
   .boardline.key .katex { font-size:1.25em; }
   #boardEmpty { color:var(--dim); font-size:.85rem; padding-top:.6rem; }
+
+  /* ---- solved problems (left) ---- */
+  #solvedPanel {
+    min-height:0; display:flex; flex-direction:column;
+    background:var(--surface); border:1px solid var(--line);
+    border-radius:16px; box-shadow:var(--shadow); padding:.9rem .9rem .6rem;
+  }
+  #solvedPanel .cardlabel { align-self:flex-start; }
+  #solvedList { flex:1 1 auto; min-height:0; overflow-y:auto; padding:.4rem 0 .5rem; scrollbar-width:thin; }
+  #solvedEmpty { color:var(--dim); font-size:.8rem; }
+  details.solved { border-bottom:1px dashed var(--line); padding:.35rem 0; }
+  details.solved:last-child { border-bottom:none; }
+  details.solved summary {
+    cursor:pointer; font-size:.82rem; font-weight:600; line-height:1.5;
+    word-break:keep-all; overflow-wrap:anywhere; list-style-position:outside;
+  }
+  details.solved summary::marker { color:var(--accent); }
+  .minichat { padding:.4rem 0 .2rem .4rem; display:flex; flex-direction:column; gap:.35rem; }
+  .miniline { font-size:.76rem; line-height:1.55; word-break:keep-all; overflow-wrap:anywhere; }
+  .miniline b { font-weight:700; color:var(--dim); }
+  .miniline.you b { color:var(--accent-deep); }
 
   /* ---- conversation (right) ---- */
   #chatPanel {
@@ -219,10 +240,14 @@
   #stateLabel { font-size:.95rem; font-weight:700; }
   #status { font-size:.8rem; color:var(--dim); }
 
-  /* single column on narrow screens: problem, photo, board, chat, mic */
+  /* single column on narrow screens: problem, photo, board, chat, solved, mic */
   @media (max-width: 900px) {
-    .grid { grid-template-columns:minmax(0,1fr); grid-template-rows:auto auto minmax(14rem,42dvh) minmax(0,1fr); }
+    .grid {
+      grid-template-columns:minmax(0,1fr);
+      grid-template-rows:auto auto minmax(12rem,38dvh) minmax(0,1fr) minmax(0,24dvh);
+    }
     .span2 { grid-column:auto; }
+    #solvedPanel { order:5; }            /* the archive yields to the lesson */
     #problemText { font-size:1.02rem; }
     .msg { max-width:88%; }
   }
@@ -250,6 +275,13 @@
         </div>
       </div>
       <input type="file" id="sheet" accept="image/*">
+
+      <aside id="solvedPanel">
+        <span class="cardlabel">해결한 문제</span>
+        <div id="solvedList">
+          <div id="solvedEmpty">끝까지 푼 문제가 여기에 쌓여요.</div>
+        </div>
+      </aside>
 
       <section id="board">
         <span class="cardlabel">튜터 풀이</span>
@@ -477,6 +509,7 @@ function onEvent(msg) {
     case "tutor_says":  addTurn("tutor", d.text); boardWrite(d.text); break;
     case "board":       for (const line of d.lines || []) boardWrite(line, true); break;
     case "stage":       setStage(d.text); break;
+    case "solved":      addSolved(d.text); break;
     case "problem":     showProblem(d); break;
     case "hint_issued": note(`힌트 L${d.level} · ${d.action}`); break;
     case "capture_request": sendWorksheet(d.capture_id); break;
@@ -522,6 +555,8 @@ function showProblem(d) {
   const text = (d.text || "").trim();
   const eqs = d.equations || [];
   if (!text && !eqs.length) return;
+  problemTitle = text;
+  currentDialogue = [];                // a new problem starts a fresh transcript
   const pt = $("problemText");
   pt.textContent = "";
   pt.append(mathify(text).frag);
@@ -536,6 +571,38 @@ function showProblem(d) {
   }
   $("problemCard").hidden = false;
   boardClear();                          // a new problem starts a clean board
+}
+
+// --- the solved-problems archive (left panel) ------------------------------
+// The page keeps this problem's conversation as it happens; when the server
+// says the problem is DONE (a `solved` event from the finish path, not from a
+// mere "맞아요"), the dialogue is filed under the problem in the left panel.
+let currentDialogue = [];              // {kind, text} since the last problem event
+let problemTitle = "";
+
+function addSolved(title) {
+  const list = $("solvedList");
+  const empty = document.getElementById("solvedEmpty");
+  if (empty) empty.remove();
+  const item = document.createElement("details");
+  item.className = "solved";
+  const label = document.createElement("summary");
+  label.append(mathify(title || problemTitle || "문제").frag);
+  item.appendChild(label);
+  const box = document.createElement("div");
+  box.className = "minichat";
+  for (const m of currentDialogue) {
+    const line = document.createElement("div");
+    line.className = `miniline ${m.kind}`;
+    const who = document.createElement("b");
+    who.textContent = m.kind === "you" ? "나 · " : "튜터 · ";
+    line.appendChild(who);
+    line.append(mathify(m.text).frag);
+    box.appendChild(line);
+  }
+  item.appendChild(box);
+  list.prepend(item);                  // newest victory on top
+  currentDialogue = [];
 }
 
 let boardSeen = new Set();             // one problem's writing, no duplicates
@@ -776,6 +843,7 @@ function addTurn(kind, text) {
     div.innerHTML = `<div class="who"></div><div class="bubble"></div>`;
     div.querySelector(".who").textContent = kind === "you" ? "나" : "튜터";
     div.querySelector(".bubble").append(mathify(text).frag);
+    currentDialogue.push({ kind, text });  // this problem's transcript-so-far
   }
   // the thinking bubble stays glued to the end while it is visible
   const thinking = $("thinking");
