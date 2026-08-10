@@ -9,13 +9,17 @@ SSH host nobody is sitting at). Speakers with no audio return None.
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 
@@ -70,6 +74,12 @@ class XaiSpeaker:
             log.warning("ffplay not found: TTS audio cannot play here. %s", NO_AUDIO_HINT)
         elif not self._can_play:
             log.warning("no audio output device. %s", NO_AUDIO_HINT)
+        # TTS_TRANSPORT=ws: ONE bidirectional socket, held open and reused per
+        # utterance. The ~1s the HTTP path pays per request is mostly TLS and
+        # request setup; over a live socket the first audio arrives in ~0.3s.
+        self._ws = None
+        self._ws_lock = threading.Lock()
+        self._ws_connect = None  # lazily imported; tests inject a fake
 
     audio_format = "mp3"
 
@@ -95,18 +105,97 @@ class XaiSpeaker:
     def synthesize_stream(self, text: str):
         """Yield the utterance as MP3 chunks while xAI is still rendering it.
 
-        The /tts endpoint answers with Transfer-Encoding: chunked — measured on
-        a typical hint: first chunk at ~1.3s, full file at ~2.5s. Playing from
-        the first chunk halves the time to first sound, with no new endpoint.
+        Two transports, same shape. HTTP: the /tts endpoint answers with
+        Transfer-Encoding: chunked — first chunk ~1.3s, full file ~2.5s.
+        WS (TTS_TRANSPORT=ws): a held-open socket skips the per-request
+        setup, first chunk ~0.3s. A websocket failure BEFORE any audio falls
+        back to HTTP for that line — the student hears it either way; a
+        failure mid-utterance cannot (replaying from the top would stutter),
+        so the line ends where the socket did.
         """
         if not text:
             return
+        if self.settings.tts_transport == "ws":
+            spoke = False
+            try:
+                for chunk in self._stream_ws(text):
+                    spoke = True
+                    yield chunk
+                return
+            except GeneratorExit:
+                raise  # barge-in: _stream_ws already reset the socket
+            except Exception as e:  # noqa: BLE001 — any ws trouble → HTTP
+                if spoke:
+                    log.warning("TTS websocket died mid-utterance (%s); line truncated", e)
+                    return
+                log.warning("TTS websocket failed (%s); HTTP fallback for this line", e)
         req = self._request(text)
         with httpx.stream(
             "POST", req["url"], headers=req["headers"], json=req["json"], timeout=60
         ) as resp:
             resp.raise_for_status()
             yield from resp.iter_bytes()
+
+    # --- the websocket transport ---------------------------------------------
+
+    def _ws_url(self) -> str:
+        host = (self.settings.xai_base_url.rstrip("/")
+                .replace("https://", "wss://").replace("http://", "ws://"))
+        return (f"{host}/tts?language={quote(self.settings.tutor_language)}"
+                f"&voice={quote(self.settings.tts_voice)}&codec=mp3")
+
+    def _ws_open(self):
+        if self._ws is None:
+            if self._ws_connect is None:
+                from websockets.sync.client import connect
+                self._ws_connect = connect
+            self._ws = self._ws_connect(
+                self._ws_url(),
+                additional_headers={
+                    "Authorization": f"Bearer {self.settings.xai_api_key}"
+                },
+                open_timeout=10,
+            )
+            log.info("TTS websocket open (reused across utterances)")
+        return self._ws
+
+    def _ws_reset(self) -> None:
+        ws, self._ws = self._ws, None
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:  # noqa: BLE001 — it is already being discarded
+                pass
+
+    def _stream_ws(self, text: str):
+        """One utterance over the shared socket: text in, MP3 chunks out.
+
+        The lock serializes utterances — the protocol interleaves nothing, so
+        a second speaker thread must wait, exactly like the audio queue does.
+        Any exit that is not a clean audio.done leaves the stream state
+        unknowable (a barge-in dropped us mid-reply, the socket broke), so the
+        connection is thrown away and the next utterance redials.
+        """
+        with self._ws_lock:
+            try:
+                ws = self._ws_open()
+                ws.send(json.dumps({"type": "text.delta", "delta": text}))
+                ws.send(json.dumps({"type": "text.done"}))
+                while True:
+                    msg = json.loads(ws.recv(timeout=30))
+                    kind = msg.get("type")
+                    if kind == "audio.delta":
+                        audio = base64.b64decode(msg.get("delta") or "")
+                        if audio:
+                            yield audio
+                    elif kind == "audio.done":
+                        return
+                    elif kind == "error":
+                        raise RuntimeError(msg.get("message") or "tts websocket error")
+                    # anything else (audio.clear, future frames): keep reading
+            except BaseException:
+                self._ws_reset()
+                raise
 
     def speak(self, text: str) -> None:
         audio = self.synthesize(text)

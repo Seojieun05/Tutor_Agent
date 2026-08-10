@@ -81,13 +81,13 @@ def build(settings):
     from tutor.vision.recognizer import Recognizer
 
     (db, llm, _transcriber, speaker, semantic,
-     vision_llm, hint_llm, eval_llm) = build_shared(settings)
+     vision_llm, hint_llm, eval_llm, estimate_llm) = build_shared(settings)
     return {
         "db": db,
         "recognizer": Recognizer(vision_llm, settings),
         "matcher": Matcher(db, semantic=semantic),
         "solver": GrokSolver(llm, db),
-        "estimator": StudentStateEstimator(llm, db, settings.recog_conf_threshold),
+        "estimator": StudentStateEstimator(estimate_llm, db, settings.recog_conf_threshold),
         "hint_gen": HintGenerator(hint_llm, db, settings.input_mode),
         "evaluator": AnswerEvaluator(eval_llm, db),
         "speaker": speaker,

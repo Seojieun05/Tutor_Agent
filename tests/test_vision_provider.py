@@ -127,9 +127,48 @@ class TestEvalProvider:
         llm, eval_llm = EchoLLMClient(), EchoLLMClient()
         deps = make_deps(Settings(), db, llm, None, None, eval_llm=eval_llm)
         assert deps.evaluator.llm is eval_llm
-        assert deps.solver.llm is llm
-        assert deps.estimator.llm is llm
+
+
+class TestEstimateProvider:
+    """Diagnosing written work sits on the WORK_CHECK critical path: the
+    student asked a yes/no question and waits on this one call for the
+    verdict. Same knob shape as eval; the sympy arithmetic check still
+    outranks whatever model runs."""
+
+    def test_diagnosis_stays_on_grok_by_default(self):
+        from tutor.server.app import build_estimate_llm
+
+        llm = EchoLLMClient()
+        assert build_estimate_llm(Settings(xai_api_key="k"), llm) is llm
+
+    def test_the_knob_reads_from_the_environment(self, env, monkeypatch):
+        monkeypatch.setenv("ESTIMATE_PROVIDER", "gemini")
+        monkeypatch.setenv("GEMINI_ESTIMATE_MODEL", "gemini-3.6-flash")
+        s = load_settings(env)
+        assert (s.estimate_provider, s.gemini_estimate_model) == (
+            "gemini", "gemini-3.6-flash"
+        )
+
+    def test_a_missing_key_degrades_instead_of_refusing_to_start(self, caplog):
+        from tutor.server.app import build_estimate_llm
+
+        llm = EchoLLMClient()
+        settings = Settings(
+            xai_api_key="k", estimate_provider="gemini", google_api_key=""
+        )
+        with caplog.at_level(logging.ERROR):
+            assert build_estimate_llm(settings, llm) is llm
+        assert "ESTIMATE_PROVIDER" in caplog.text
+
+    def test_only_the_estimator_changes_diagnostician(self, db):
+        from tutor.server.app import make_deps
+
+        llm, estimate_llm = EchoLLMClient(), EchoLLMClient()
+        deps = make_deps(Settings(), db, llm, None, None, estimate_llm=estimate_llm)
+        assert deps.estimator.llm is estimate_llm
+        assert deps.evaluator.llm is llm
         assert deps.hint_gen.llm is llm
+        assert deps.solver.llm is llm
 
 
 class TestHintProvider:

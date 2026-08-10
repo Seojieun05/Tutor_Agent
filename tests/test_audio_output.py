@@ -72,6 +72,112 @@ class TestSilentFailureIsLoud:
         assert speaker.synthesize("안녕하세요") == b"ID3-audio"
 
 
+class FakeWs:
+    """The xAI TTS websocket, scripted: frames out, sent messages recorded."""
+
+    def __init__(self, frames):
+        self.frames = list(frames)
+        self.sent = []
+        self.closed = False
+
+    def send(self, data):
+        import json
+
+        self.sent.append(json.loads(data))
+
+    def recv(self, timeout=None):
+        import json
+
+        frame = self.frames.pop(0)
+        if isinstance(frame, Exception):
+            raise frame
+        return json.dumps(frame)
+
+    def close(self):
+        self.closed = True
+
+
+def b64(data: bytes) -> str:
+    import base64
+
+    return base64.b64encode(data).decode()
+
+
+class TestWebSocketTts:
+    """TTS_TRANSPORT=ws: one held-open socket, ~0.3s to first audio instead of
+    the ~1.3s the per-request HTTP path pays in setup."""
+
+    def _speaker(self, monkeypatch, frames) -> tuple[XaiSpeaker, FakeWs, list]:
+        monkeypatch.setattr(tts.shutil, "which", lambda name: None)
+        speaker = XaiSpeaker(Settings(xai_api_key="k", tts_transport="ws"))
+        ws = FakeWs(frames)
+        connects: list = []
+        speaker._ws_connect = lambda url, **kw: (connects.append(url), ws)[1]
+        return speaker, ws, connects
+
+    def test_chunks_stream_in_order_and_the_socket_is_reused(self, monkeypatch):
+        speaker, ws, connects = self._speaker(monkeypatch, [
+            {"type": "audio.delta", "delta": b64(b"one")},
+            {"type": "audio.delta", "delta": b64(b"two")},
+            {"type": "audio.done"},
+            {"type": "audio.delta", "delta": b64(b"three")},
+            {"type": "audio.done"},
+        ])
+        assert list(speaker.synthesize_stream("첫 문장")) == [b"one", b"two"]
+        assert list(speaker.synthesize_stream("둘째 문장")) == [b"three"]
+        assert len(connects) == 1                    # ONE dial, many utterances
+        assert [m["type"] for m in ws.sent] == [
+            "text.delta", "text.done", "text.delta", "text.done",
+        ]
+        assert not ws.closed
+
+    def test_a_dead_socket_falls_back_to_http_for_that_line(self, monkeypatch):
+        monkeypatch.setattr(tts.shutil, "which", lambda name: None)
+        speaker = XaiSpeaker(Settings(xai_api_key="k", tts_transport="ws"))
+        speaker._ws_connect = lambda url, **kw: (_ for _ in ()).throw(OSError("refused"))
+
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_bytes(self):
+                yield b"http-audio"
+
+        monkeypatch.setattr(tts.httpx, "stream", lambda *a, **k: FakeResp())
+        assert list(speaker.synthesize_stream("안녕하세요")) == [b"http-audio"]
+
+    def test_a_mid_utterance_death_truncates_instead_of_replaying(self, monkeypatch):
+        """After audio has played, an HTTP retry would replay the line from the
+        top over what was already heard: the line ends where the socket did."""
+        speaker, ws, _ = self._speaker(monkeypatch, [
+            {"type": "audio.delta", "delta": b64(b"heard")},
+            OSError("connection reset"),
+        ])
+        monkeypatch.setattr(tts.httpx, "stream",
+                            lambda *a, **k: (_ for _ in ()).throw(AssertionError("no HTTP retry")))
+        assert list(speaker.synthesize_stream("깨진 문장")) == [b"heard"]
+        assert speaker._ws is None                   # thrown away, next line redials
+
+    def test_a_barge_in_resets_the_socket(self, monkeypatch):
+        """A dropped generator mid-reply leaves the stream unknowable: the
+        next utterance must not read this one's tail."""
+        speaker, ws, _ = self._speaker(monkeypatch, [
+            {"type": "audio.delta", "delta": b64(b"start")},
+            {"type": "audio.delta", "delta": b64(b"never-read")},
+            {"type": "audio.done"},
+        ])
+        stream = speaker.synthesize_stream("끊길 문장")
+        assert next(stream) == b"start"
+        stream.close()                               # the barge-in
+        assert ws.closed and speaker._ws is None
+
+
 class TestBrowserPage:
     """The page is what actually makes sound on the laptop."""
 

@@ -114,11 +114,13 @@ def build_shared(settings: Settings):
     vision_llm = build_vision_llm(settings, llm)
     hint_llm = build_hint_llm(settings, llm)
     eval_llm = build_eval_llm(settings, llm, registry)
+    estimate_llm = build_estimate_llm(settings, llm, registry)
     # One log line per model call, always on. The tutor's latency is almost
     # entirely other people's servers, so the only useful question is which
     # call — and that is not answerable after the fact without this.
     return (db, timed(llm, settings.chat_model), transcriber, speaker, semantic,
-            timed(vision_llm), timed(hint_llm), timed(eval_llm))
+            timed(vision_llm), timed(hint_llm), timed(eval_llm),
+            timed(estimate_llm))
 
 
 def wrap_with_cache(settings: Settings, speaker):
@@ -197,6 +199,21 @@ def build_eval_llm(settings: Settings, llm, registry=None):
                       settings.gemini_eval_model, "EVAL_PROVIDER", registry=registry)
 
 
+def build_estimate_llm(settings: Settings, llm, registry=None):
+    """Whichever model diagnoses the written work. Only the estimator sees it.
+
+    Estimate sits on the WORK_CHECK critical path — the student asked "풀이
+    맞아?" and is waiting on this call for the verdict. The registry rides
+    along so the misconception KB lookups survive the move, and the sympy
+    arithmetic check (_arithmetic_check) still outranks whatever model runs:
+    swapping it changes diagnosis speed and judgement, never the final say
+    on arithmetic.
+    """
+    return _gemini_or(settings, llm, settings.estimate_provider,
+                      settings.gemini_estimate_model, "ESTIMATE_PROVIDER",
+                      registry=registry)
+
+
 def _gemini_or(settings: Settings, llm, provider: str, model: str, knob: str,
                registry=None):
     """A bad key or a missing package must not cost the student the whole
@@ -221,7 +238,7 @@ def _gemini_or(settings: Settings, llm, provider: str, model: str, knob: str,
 
 def make_deps(
     settings: Settings, db, llm, transcriber, speaker, semantic=None, cameras=None,
-    vision_llm=None, hint_llm=None, eval_llm=None,
+    vision_llm=None, hint_llm=None, eval_llm=None, estimate_llm=None,
 ) -> Deps:
     """Per-connection dependencies (fresh SessionStore each time)."""
     return Deps(
@@ -229,7 +246,7 @@ def make_deps(
         recognizer=Recognizer(vision_llm or llm, settings),
         matcher=Matcher(db, semantic=semantic),
         solver=GrokSolver(llm, db),
-        estimator=StudentStateEstimator(llm, db, settings.recog_conf_threshold),
+        estimator=StudentStateEstimator(estimate_llm or llm, db, settings.recog_conf_threshold),
         hint_gen=HintGenerator(hint_llm or llm, db, settings.input_mode),
         transcriber=transcriber,
         speaker=speaker,
@@ -284,7 +301,7 @@ async def amain(settings: Settings) -> None:
         if not port_is_free(settings.ws_host, port):
             raise PortInUse(port)
     (db, llm, transcriber, speaker, semantic,
-     vision_llm, hint_llm, eval_llm) = build_shared(settings)
+     vision_llm, hint_llm, eval_llm, estimate_llm) = build_shared(settings)
 
     cameras = CameraHub()
 
@@ -311,7 +328,7 @@ async def amain(settings: Settings) -> None:
             return
         deps = make_deps(
             settings, db, llm, transcriber, speaker, semantic, cameras,
-            vision_llm, hint_llm, eval_llm,
+            vision_llm, hint_llm, eval_llm, estimate_llm,
         )
         if path.rstrip("/") == "/browser":
             from tutor.server.browser import BrowserSession

@@ -46,7 +46,18 @@ class Settings:
     # FallbackLLM keeps Grok on standby exactly as with hints and vision.
     eval_provider: str = "grok"
     gemini_eval_model: str = "gemini-3.6-flash"
+    # Diagnosing written work (estimate) sits on the WORK_CHECK critical path:
+    # the student asked a yes/no question and is waiting on this call for the
+    # verdict. ESTIMATE_PROVIDER=gemini moves it off grok; the estimate feeds
+    # the same deterministic policy and the same sympy arithmetic check either
+    # way, and a FallbackLLM keeps Grok on standby exactly as with eval.
+    estimate_provider: str = "grok"
+    gemini_estimate_model: str = "gemini-3.6-flash"
     tts_voice: str = "eve"
+    # "ws" holds one bidirectional TTS socket open and reuses it per utterance
+    # (~0.3s to first audio instead of ~1.3s per-request HTTP). Any websocket
+    # failure falls back to the HTTP stream for that line, loudly.
+    tts_transport: str = "http"
     ws_host: str = "0.0.0.0"
     ws_port: int = 8765
     # HTTPS/WSS, for the phone camera only. getUserMedia runs in a secure
@@ -147,6 +158,17 @@ def load_settings(env_file: Path | None = None) -> Settings:
     )
     s.gemini_eval_model = (
         os.getenv("GEMINI_EVAL_MODEL", s.gemini_eval_model).strip() or s.gemini_eval_model
+    )
+    s.estimate_provider = (
+        os.getenv("ESTIMATE_PROVIDER", s.estimate_provider).strip().lower()
+        or s.estimate_provider
+    )
+    s.gemini_estimate_model = (
+        os.getenv("GEMINI_ESTIMATE_MODEL", s.gemini_estimate_model).strip()
+        or s.gemini_estimate_model
+    )
+    s.tts_transport = (
+        os.getenv("TTS_TRANSPORT", s.tts_transport).strip().lower() or s.tts_transport
     )
     s.gemini_vision_model = (
         os.getenv("GEMINI_VISION_MODEL", s.gemini_vision_model).strip()
