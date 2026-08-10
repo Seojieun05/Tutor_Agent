@@ -46,10 +46,10 @@ FILLER_PHRASES: tuple[str, ...] = (
     "지금 문제를 보고 있어요.",
 )
 
-# The work-check wait, narrated: queued once the VLM has read the page, spoken
-# while the diagnosis still runs. Deliberately verdict-free — these may say the
-# tutor SAW the work, never whether it is right; that is the reaction's job and
-# the leak guard's jurisdiction.
+# The work-check wait, narrated. NO LONGER SPOKEN by default: the screen's
+# stage events ("쓴 풀이를 읽고 있어요") carry this progress now, and the voice
+# keeps to one filler per turn. Kept registered and pre-rendered so putting a
+# line back is a one-line session change, not a TTS round trip.
 WORK_CHECK_NARRATIONS: tuple[str, ...] = (
     "풀이를 다 읽었어요. 한 줄씩 맞는지 보고 있어요.",
     "쓴 풀이가 잘 보여요. 차근차근 따라가 보고 있어요.",

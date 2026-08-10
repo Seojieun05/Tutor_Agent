@@ -263,7 +263,7 @@
         <div id="chat">
           <div id="thinking" class="msg tutor" hidden>
             <div class="bubble">
-              튜터가 생각하는 중이에요
+              <span id="stageText">튜터가 생각하는 중이에요</span>
               <span class="dots"><i></i><i></i><i></i></span>
             </div>
           </div>
@@ -476,6 +476,7 @@ function onEvent(msg) {
     case "transcript":  addTurn("you", d.text || "(인식 실패)"); break;
     case "tutor_says":  addTurn("tutor", d.text); boardWrite(d.text); break;
     case "board":       for (const line of d.lines || []) boardWrite(line, true); break;
+    case "stage":       setStage(d.text); break;
     case "problem":     showProblem(d); break;
     case "hint_issued": note(`힌트 L${d.level} · ${d.action}`); break;
     case "capture_request": sendWorksheet(d.capture_id); break;
@@ -504,6 +505,16 @@ function setState(s) {
     $("chat").appendChild(thinking);     // always after the newest message
     scrollChat();
   }
+  if (s === "LISTENING")                 // a fresh turn starts generic
+    $("stageText").textContent = "튜터가 생각하는 중이에요";
+}
+
+// What the pipeline is doing right now (server `stage` events) — the screen
+// carries the progress so the voice does not have to narrate it.
+function setStage(text) {
+  if (!text) return;
+  $("stageText").textContent = text;
+  if (!$("thinking").hidden) scrollChat();
 }
 
 // --- the problem card and the board ----------------------------------------

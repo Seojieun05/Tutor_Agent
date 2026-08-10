@@ -209,9 +209,10 @@ async def test_a_work_check_opens_by_saying_it_is_looking(db):
     assert len(speaker.spoken) >= 2                  # the real turn still spoke
 
 
-async def test_a_work_check_narrates_the_diagnosis_wait(db):
-    """After the VLM has read the page, the wait for the verdict is narrated —
-    a cached, verdict-free line, dropped like any narration if the answer wins."""
+async def test_a_work_check_shows_its_stages_and_speaks_one_filler(db):
+    """The voice diet: progress goes on the SCREEN (stage events), and the only
+    filler the turn speaks is its opener. The old spoken narration
+    ("풀이를 다 읽었어요…") stays retired."""
     from tutor.speech.filler import WORK_CHECK_NARRATIONS
 
     session, llm, speaker, ws = build(db, "풀이 맞아?")
@@ -221,10 +222,21 @@ async def test_a_work_check_narrates_the_diagnosis_wait(db):
     await session._handle_utterance(PCM, 16000)
     await asyncio.sleep(0)
 
-    notes = [s for s in speaker.spoken if s in WORK_CHECK_NARRATIONS]
-    assert notes, f"no work narration in {speaker.spoken}"
-    assert speaker.spoken.index(notes[0]) > 0                # the opener spoke first
-    assert speaker.spoken[-1] not in WORK_CHECK_NARRATIONS   # never the last word
+    stages = [e["data"]["text"] for e in ws.events if e["event"] == "stage"]
+    assert "쓴 풀이를 읽고 있어요" in stages
+    assert "풀이를 살펴보고 있어요" in stages
+    assert not [s for s in speaker.spoken if s in WORK_CHECK_NARRATIONS]
+    fillers = [s for s in speaker.spoken if s in WORK_CHECK_OPENERS]
+    assert len(fillers) == 1                                 # one filler, total
+
+
+async def test_a_hint_turn_reports_reading_then_making(db):
+    session, llm, speaker, ws = build(db, "이 문제 힌트 줄래?")
+
+    await session._handle_utterance(PCM, 16000)
+
+    stages = [e["data"]["text"] for e in ws.events if e["event"] == "stage"]
+    assert stages.index("문제를 읽고 있어요") < stages.index("힌트를 만들고 있어요")
 
 
 async def test_the_hints_board_reaches_the_page(db):

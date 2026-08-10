@@ -412,6 +412,19 @@ class Session:
         except Exception:
             log.debug("could not send transcript event (connection gone)")
 
+    async def _stage(self, text: str) -> None:
+        """What the pipeline is doing right now, for the SCREEN, not the voice.
+
+        The stages used to be narrated ("풀이를 다 읽었어요…"), and a turn could
+        say three filler-ish lines before its first real word. Now the screen
+        carries the progress and the voice keeps at most ONE filler per turn —
+        the delay-gated opener — plus the problem readout, which is content.
+        """
+        try:
+            await self.ws.send(make_event("stage", {"text": text}))
+        except Exception:
+            log.debug("could not send stage event (connection gone)")
+
     async def _send_problem(self, rec: Recognition) -> None:
         """What the tutor read off the page, for the browser's problem card.
 
@@ -584,6 +597,7 @@ class Session:
             await self._handle_hint_request()
             return
 
+        await self._stage("답을 확인하고 있어요")
         verdict = await asyncio.to_thread(
             self.deps.evaluator.evaluate,
             problem_text=ctx.recognition.problem_text,
@@ -662,6 +676,7 @@ class Session:
         decision = decide(state, history, "HINT_REQUEST")
         log.info("decision after answer (%s): %s", verdict.verdict, decision)
 
+        await self._stage("다음 질문을 만들고 있어요")
         # The reaction is ready NOW and the hint needs ~5s of model. Speaking
         # "맞아요, 그렇게 하면 돼요!" WHILE the next question is being written
         # is where the answer turn stops feeling slow: first meaningful sound
@@ -758,6 +773,7 @@ class Session:
         changes what comes out: their question reaches the hint phrasing, and
         the tutor says what it saw before hinting.
         """
+        await self._stage("카메라에서 사진을 받고 있어요")
         jpeg = await self._request_capture()
         state = self.store.get_state() or StudentState()
         if jpeg is None:
@@ -771,6 +787,7 @@ class Session:
             ), cur_hash)
             return
 
+        await self._stage("쓴 풀이를 읽고 있어요" if question else "문제를 읽고 있어요")
         rec = await asyncio.to_thread(self.deps.recognizer.recognize, jpeg)
         # What the VLM actually read. Nothing here comes from the solver, so no
         # answer can reach the log through this line — it is the worksheet, which
@@ -803,18 +820,12 @@ class Session:
                 # the middle one costs TTS.
                 for line in readout_of(rec):
                     self._narrate(line)
-            elif question and self.deps.fillers is not None:
-                # Same problem, and they asked about THEIR work: the readout
-                # above will not fire, so this is the line that fills the
-                # diagnosis wait. Cached TTS, verdict-free — it says the page
-                # was READ, never whether it is right; that stays the
-                # reaction's job.
-                self._narrate(self.deps.fillers.work_note())
         ctx = await self._problem_context(rec)
 
         # Diagnose before helping (spec rule 4). State/history are prefetched
         # here by the orchestrator — never fetched by the model itself.
         # History is always scoped to THIS problem's hash.
+        await self._stage("풀이를 살펴보고 있어요")
         prev_state = self.store.get_state()
         history = self.store.get_history(problem_hash=ctx.hash)
         reference = ctx.reference_if_ready()
@@ -888,6 +899,7 @@ class Session:
         decision = decide(current, fresh_history, "HINT_REQUEST")
         log.info("decision: %s", decision)
 
+        await self._stage("힌트를 만들고 있어요")
         # Same overlap as the answer turn: the reaction ("음, 지금 쓴 줄을 같이
         # 볼까요?") is fixed text with cached TTS, so it plays at once while the
         # hint is still being generated.
