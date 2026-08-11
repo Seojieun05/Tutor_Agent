@@ -230,6 +230,35 @@ async def test_a_work_check_shows_its_stages_and_speaks_one_filler(db):
     assert len(fillers) == 1                                 # one filler, total
 
 
+async def test_a_sloppy_reread_does_not_turn_a_work_check_into_a_readout(db):
+    """The regression behind "풀이 확인이 말이 많다": handwriting re-read badly
+    enough to miss the same-problem match used to take the NEW-problem branch
+    mid work check — rewriting the card and stacking the 3-line readout on the
+    opener. A work check speaks its ONE opener; the screen does the rest."""
+    from tutor.speech.filler import FILLER_PHRASES
+
+    session, llm, speaker, ws = build(
+        db, "풀이 맞아?",
+        llm_responses={"recognize": [dict(
+            problem_text="방정식을 푸시오: x**5 - 7 = 0",   # not the problem on ctx
+            equations=["x**5 - 7 = 0"], student_work=["x**5 = 7"], choices=[],
+            diagram_conditions=[], uncertain_regions=[], confidence=0.95,
+        )]},
+    )
+    with_problem(session)
+    ask_l1(session)
+
+    await session._handle_utterance(PCM, 16000)
+    await asyncio.sleep(0)
+
+    assert "problem" not in [e["event"] for e in ws.events]   # the card held still
+    assert READOUT_OPENER not in speaker.spoken               # nothing read back
+    assert not any(s in READOUT_CLOSERS.values() for s in speaker.spoken)
+    fillers = [s for s in speaker.spoken
+               if s in WORK_CHECK_OPENERS or s in FILLER_PHRASES]
+    assert len(fillers) == 1                                  # one filler, total
+
+
 async def test_a_hint_turn_reports_reading_then_making(db):
     session, llm, speaker, ws = build(db, "이 문제 힌트 줄래?")
 

@@ -812,14 +812,22 @@ class Session:
                 "ask to see the worksheet again",
                 rec.confidence, self.deps.settings.recog_conf_threshold,
             )
-        else:
+        elif question is None:
+            # A work check never enters here, whatever the VLM read: the same
+            # page re-read with sloppy handwriting can miss the same-problem
+            # match, and that used to rewrite the card AND stack the 3-line
+            # readout on top of the opener — four filler-ish lines before the
+            # verdict the student actually asked for. On a work check the card
+            # holds still, nothing is read back, and the one opener is all the
+            # filler the turn speaks; the stage line ("쓴 풀이를 읽고 있어요")
+            # carries the progress on screen.
             if self.ctx is None or not (
                 self.ctx.hash == problem_hash(rec) or self._same_problem(rec)
             ):
                 # A NEW problem reaches the page's problem card — and only a
                 # new one. The VLM re-reads the same page with small wording
-                # differences every work check, and a card that rewrites
-                # itself mid-problem reads as the tutor changing its mind.
+                # differences every turn, and a card that rewrites itself
+                # mid-problem reads as the tutor changing its mind.
                 await self._send_problem(rec)
                 # First sight of a NEW problem: read it back while the tagger,
                 # the matcher and the phraser think (~15s of otherwise dead
