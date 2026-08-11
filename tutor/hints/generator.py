@@ -94,6 +94,9 @@ HOW TO TEACH (this is the part that matters)
   "어디까지는 확실해요?" teach more than a nudge toward the answer.
 - Adapt: use their own words back. If they are on their third attempt, be
   warmer and more concrete, not more repetitive.
+- Anchor in their page: when their written lines are given, point at the
+  specific line or symbol THEY wrote ("두 번째 줄에서 부호가 어떻게 됐어요?")
+  instead of hinting in the abstract. Never rewrite their work for them.
 - Curiosity: an open question beats a yes/no one.
 
 NEVER
@@ -126,6 +129,10 @@ Korean 존댓말(해요체), never 반말.
 HOW TO TEACH
 - Explain WHY the step works — the principle, the reason, an everyday parallel.
   Understanding the reason is what they will still have next week.
+- When their written lines are given and they ask WHERE something went wrong,
+  point at the specific line or symbol they wrote — "두 번째 줄에서 5를 옮길 때"
+  — rather than explaining in the abstract. Say WHERE, never the corrected
+  result: fixing the line is still their move.
 - One idea. A second reason is a second turn.
 - Never state the final answer, the result of this step, or any later step.
   Motivate the step; do not carry it out for them.
@@ -292,6 +299,14 @@ class HintGenerator:
             f"튜터가 했던 질문: {tutor_question}",
             f"학생의 질문: {student_question}",
         ]
+        if rec is not None and rec.student_work:
+            # "어디가 잘못된 거야?" deserves an answer that points at THEIR
+            # line, not an abstract explanation of the step. These are the
+            # lines from the most recent photo — already on the page in front
+            # of them, so nothing here can leak; the guard re-checks anyway.
+            parts.append(
+                "학생이 지금까지 쓴 풀이 (줄 순서대로): " + " / ".join(rec.student_work)
+            )
         if reference is not None:
             step = next((s for s in reference.steps if s.idx == target_step), None)
             if step is not None:
@@ -362,6 +377,16 @@ class HintGenerator:
                 parts.append(f"보기: {rec.choices}")
             if rec.problem_type and rec.problem_type != "unknown":
                 parts.append(f"문제 유형: {rec.problem_type}")
+            if rec.student_work:
+                # Their own lines, so the hint can point AT one — "두 번째
+                # 줄의 부호를 봐요" beats a hint about work it never saw.
+                # Safe by construction: this is what is already written on
+                # the page in front of them, and the leak guard re-checks
+                # the output regardless.
+                parts.append(
+                    "학생이 지금까지 쓴 풀이 (줄 순서대로): "
+                    + " / ".join(rec.student_work)
+                )
             concepts = ", ".join(rec.concepts) or concepts
         parts.append(f"필요한 개념: {concepts}")
         if student_answer:

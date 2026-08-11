@@ -174,6 +174,62 @@ class TestGenerator:
         assert not leaks_answer(text, LIN_REF, 1)
 
 
+class TestTheirWorkReachesThePrompt:
+    """The wording models see what the student actually wrote — from the most
+    recent photo, no extra capture — so "어디가 잘못된 거야?" can be answered
+    by pointing at THEIR line instead of explaining the step in the abstract."""
+
+    class RecordingLLM(EchoLLMClient):
+        def __init__(self, responses=None):
+            super().__init__(responses)
+            self.prompts: dict[str, str] = {}
+
+        def run_with_tools(self, *, purpose, system, user, images=(), schema, max_rounds=6):
+            self.prompts[purpose] = user
+            return super().run_with_tools(
+                purpose=purpose, system=system, user=user, images=images,
+                schema=schema, max_rounds=max_rounds,
+            )
+
+    WORKED = Recognition(
+        problem_text="다음 일차방정식을 푸시오: 3x + 5 = 20",
+        equations=["3*x + 5 = 20"],
+        student_work=["3*x = 20 + 5", "3*x = 25"],
+        confidence=0.95,
+    )
+
+    def _llm_match(self):
+        return MatchResult(tier=Tier.NEW, concepts=["unknown_concept"], reference=LIN_REF)
+
+    def test_the_hint_prompt_carries_their_lines(self, db):
+        llm = self.RecordingLLM()
+        gen = HintGenerator(llm, db)
+        gen.generate(decision(1), self._llm_match(), LIN_REF, self.WORKED, [])
+        assert "3*x = 20 + 5" in llm.prompts["phrase"]
+
+    def test_the_explain_prompt_carries_their_lines(self, db):
+        llm = self.RecordingLLM()
+        gen = HintGenerator(llm, db)
+        gen.explain(
+            student_question="어디가 잘못된 거예요?",
+            tutor_question="어떤 항을 옮겨야 할까요?",
+            match=self._llm_match(),
+            reference=LIN_REF,
+            rec=self.WORKED,
+            target_step=1,
+        )
+        assert "3*x = 20 + 5" in llm.prompts["explain"]
+
+    def test_an_empty_page_adds_nothing(self, db):
+        llm = self.RecordingLLM()
+        gen = HintGenerator(llm, db)
+        gen.generate(
+            decision(1), self._llm_match(), LIN_REF,
+            Recognition(problem_text="p", student_work=[]), [],
+        )
+        assert "쓴 풀이" not in llm.prompts["phrase"]
+
+
 class TestTheBoard:
     """What the tutor WRITES travels with what it says, through the same gate:
     writing "x = 5" while carefully not saying it is still giving the answer."""
