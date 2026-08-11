@@ -311,13 +311,15 @@ def test_readout_strips_exam_numbering_and_point_tags():
     assert readout_of(rec) == [
         READOUT_OPENER,
         "1보다 큰 두 실수 a, b가 주어질 때 값은?",
-        READOUT_CLOSERS[True],   # heard last: "값은" — final consonant, 이라는
     ]
 
 
-def test_readout_particle_follows_the_spoken_ending():
-    vowel = Recognition(problem_text="x의 값을 구하시오.")
-    assert readout_of(vowel)[-1] == READOUT_CLOSERS[False]   # "구하시오" — 라는
+def test_the_readout_closer_stays_retired():
+    """The closer was the turn's longest line (~6s) queued exactly where the
+    hint comes ready, so it bought the least wait-cover at the highest delay.
+    It stays out until the recognition step itself gets faster."""
+    rec = Recognition(problem_text="x의 값을 구하시오.")
+    assert not any(line in READOUT_CLOSERS.values() for line in readout_of(rec))
     assert readout_of(Recognition(problem_text="")) == []    # nothing to read
 
 
@@ -332,10 +334,11 @@ async def test_a_new_problem_is_read_back_while_the_tutor_thinks(db):
 
     opener_at = speaker.spoken.index(READOUT_OPENER)
     problem_at = next(i for i, s in enumerate(speaker.spoken) if "일차방정식" in s)
-    closer_at = speaker.spoken.index(READOUT_CLOSERS[True])   # "…20" — 이라는
-    assert opener_at < problem_at < closer_at
-    # and it never outlives the answer: the hint is the LAST thing said
-    assert speaker.spoken[-1] != READOUT_CLOSERS[True]
+    assert opener_at < problem_at
+    # the retired closer stays retired, and the readout never outlives the
+    # answer: the hint is the LAST thing said
+    assert not any(s in READOUT_CLOSERS.values() for s in speaker.spoken)
+    assert speaker.spoken[-1] != READOUT_OPENER
     # a NEW problem also fills the page's problem card, in display notation
     card = next(e for e in ws.events if e["event"] == "problem")
     assert "일차방정식" in card["data"]["text"]

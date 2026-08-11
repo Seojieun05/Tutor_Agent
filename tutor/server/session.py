@@ -105,12 +105,15 @@ WORK_CHECK_OPENERS: tuple[str, ...] = (
     "네, 풀이를 같이 확인해 볼게요.",
 )
 
-# The readout frame: everything around the problem text is fixed, so its TTS
-# is pre-rendered and the only synthesis the narration waits for is the one
-# line that is different every time — the problem itself. The closer turns the
-# readout into a teaching move: the things worth checking before starting.
-# Two variants because Korean quotes with 라는 after a vowel, 이라는 after a
-# final consonant — chosen off the LAST SPOKEN syllable of the problem line.
+# The readout frame: the opener is fixed (pre-rendered TTS), so the only
+# synthesis the narration waits for is the one line that is different every
+# time — the problem itself.
+#
+# The closers are NO LONGER SPOKEN by default. The closer was the longest
+# line of the turn (~6s alone), and it queued right where the hint tends to
+# come ready — a narration line that has started must finish, so it routinely
+# delayed the hint by seconds while adding the least information. Kept
+# registered and pre-rendered so putting it back is a one-line change.
 READOUT_OPENER = "좋아요, 문제 확인해 볼게요."
 _READOUT_QUESTION = (
     "라는 문제군요. 범위 제한이나 최고차항의 계수, "
@@ -154,10 +157,10 @@ def answer_core(transcript: str) -> str | None:
 
 
 def readout_of(rec: Recognition) -> list[str]:
-    """The problem, read back while the tagger and phraser think — as three
-    LINES, because the split is what the latency comes down to: the opener and
-    the closer never change, so their audio is already rendered (CachedSpeech),
-    and the problem itself is the only line that pays for TTS.
+    """The problem, read back while the tagger and phraser think — as two
+    LINES, because the split is what the latency comes down to: the opener
+    never changes, so its audio is already rendered (CachedSpeech), and the
+    problem itself is the only line that pays for TTS.
 
     Also the moment a misread photo gets caught: the student hears what the
     tutor believes the problem says, seconds before any hint depends on it.
@@ -171,11 +174,7 @@ def readout_of(rec: Recognition) -> list[str]:
     # it through displayable() — one narration, two renderings
     if len(text) > 130:
         text = text[:130] + "…"
-    # 라는/이라는 follows what the EAR will hear last, not what the page shows:
-    # the particle attaches to the spoken form of the problem's final syllable.
-    heard = mathspeak.speakable(text).rstrip("?.!…, \"'")
-    closer = READOUT_CLOSERS[mathspeak.ends_in_consonant(heard)]
-    return [READOUT_OPENER, text, closer]
+    return [READOUT_OPENER, text]
 
 
 def _solve_dead(task: asyncio.Task | None) -> bool:
