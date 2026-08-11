@@ -137,8 +137,13 @@ class BrowserSession(Session):
             await self._ensure_taker()
             await super()._on_event(raw)
             # The browser gates its own mic too, and needs to know whether it
-            # may keep it open while the tutor talks.
-            await self.ws.send(make_event("config", {"barge_in": self.config.barge_in}))
+            # may keep it open while the tutor talks — and whether it is an eye
+            # at all: with a phone on /camera the laptop never supplies a
+            # photo, so offering an upload box would be offering a dead end.
+            await self.ws.send(make_event("config", {
+                "barge_in": self.config.barge_in,
+                "input_mode": self.deps.settings.input_mode,
+            }))
             await self._push_state()
             return
         await super()._on_event(raw)

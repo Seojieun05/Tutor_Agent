@@ -110,8 +110,12 @@
   #problemEqs { margin-top:.4rem; font-family:var(--math); font-size:1.15rem; }
   #problemEqs div { padding:.12rem 0; }
 
-  /* ---- worksheet photo (click / drag / paste) ---- */
+  /* ---- worksheet photo (click / drag / paste) ----
+     Hidden until the server says this laptop is the eye (INPUT_MODE=upload).
+     With a phone on /camera the box would be a dead end: the phone is asked
+     first and answers every capture. */
   #sheet { display:none; }
+  #drop[hidden] { display:none; }
   #drop {
     display:flex; align-items:center; justify-content:center; gap:.9rem;
     background:var(--surface); border:1.5px dashed var(--line); border-radius:16px;
@@ -267,7 +271,7 @@
         <div id="problemEqs"></div>
       </section>
 
-      <div id="drop" class="span2">
+      <div id="drop" class="span2" hidden>
         <img id="thumb" alt="문제 사진 미리보기">
         <div>
           <b>문제 사진 올리기</b> · 클릭해서 고르거나, 끌어다 놓거나, Ctrl+V로 붙여넣기
@@ -329,6 +333,7 @@ let ws = null;
 let turnState = "";                 // LISTENING | USER_SPEAKING | PROCESSING | AGENT_SPEAKING
 let streamSeq = 0;
 let worksheet = null;               // optional jpeg bytes for capture_request
+let uploadMode = false;             // set from the server's config event
 
 // With barge-in the mic stays open while the tutor talks, so the student can
 // cut in; the server judges those frames at a higher bar. It stays shut during
@@ -512,7 +517,13 @@ function onEvent(msg) {
   switch (msg.event) {
     case "hello_ack":   setConn("연결됨", "ok"); setStatus("연결됐어요. 말을 시작하세요."); break;
     case "turn_state":  setState(d.state); break;
-    case "config":      bargeIn = !!d.barge_in; break;
+    case "config":
+      bargeIn = !!d.barge_in;
+      // Only an upload-mode server takes a photo from this page; with a phone
+      // watching, the box would be an invitation to nowhere.
+      uploadMode = d.input_mode === "upload";
+      $("drop").hidden = !uploadMode;
+      break;
     case "barge_in":    stopSpeaking(); break;
     case "transcript":  addTurn("you", d.text || "(인식 실패)"); break;
     case "tutor_says":  addTurn("tutor", d.text); break;
@@ -786,7 +797,10 @@ function stopSpeaking() {
 // used: choosing a file, dragging it, or pasting a screenshot straight from
 // the clipboard — which is how most photos actually arrive on a laptop.
 async function useWorksheet(file) {
-  if (!file || !file.type.startsWith("image/")) return;
+  // In camera mode the box is hidden, but Ctrl+V still reaches the document:
+  // accepting a paste there would stash a photo nobody can see and nothing
+  // will use (the phone answers first), which is worse than ignoring it.
+  if (!uploadMode || !file || !file.type.startsWith("image/")) return;
   worksheet = new Uint8Array(await file.arrayBuffer());
   $("sheetname").textContent =
     `${file.name || "붙여넣은 이미지"} · ${Math.round(worksheet.length / 1024)} KB`;
@@ -824,10 +838,11 @@ document.addEventListener("paste", (e) => {
 
 function sendWorksheet(captureId) {
   if (!worksheet) {
-    // Nothing to read. The server turns this into "사진을 다시 올려 줄래요?",
-    // so say the same thing here where the student is actually looking.
+    // Nothing to read HERE. In camera mode that is the normal answer, not a
+    // problem: the phone is the eye and was already asked first, so say
+    // nothing. In upload mode the student really does need to pick a photo.
     sendEvent("capture_failed", { capture_id: captureId });
-    setStatus("문제 사진이 아직 없어요. 위에 사진을 올려 주세요.");
+    if (uploadMode) setStatus("문제 사진이 아직 없어요. 위에 사진을 올려 주세요.");
     return;
   }
   ws.send(encodeFrame(IMAGE_FRAME, { capture_id: captureId, format: "jpeg" }, worksheet));

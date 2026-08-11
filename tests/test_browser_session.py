@@ -81,6 +81,7 @@ class FakeBrowser:
         self._listening = asyncio.Event()
         # Barge-in bookkeeping, mirroring the page's audio queue.
         self.barge_in = False       # told by the server's `config` event
+        self.input_mode = None      # same event: is this page an eye at all?
         self.hold_playback = False  # True = the clip is still playing
         self.queue: list = []       # clips received but not finished
         self.interruptions = 0
@@ -127,6 +128,7 @@ class FakeBrowser:
                 self.tutor_said.append(ev.data["text"])
             elif ev.event == "config":
                 self.barge_in = bool(ev.data.get("barge_in"))
+                self.input_mode = ev.data.get("input_mode")
             elif ev.event == "barge_in":
                 # stopSpeaking(): drop what is playing and everything queued,
                 # and deliberately send no playback_done.
@@ -324,6 +326,28 @@ async def test_without_a_worksheet_the_tutor_asks_for_one(deps):
     assert deps.store.get_history()[0].action == "ASK_RECAPTURE"
     assert len(browser.audio) == 1  # still spoken, still conversational
     assert browser.states[-1] == "LISTENING"
+
+
+async def test_the_page_is_told_whether_it_is_an_eye(deps):
+    """The page hides its upload box unless this server takes photos from it.
+    With a phone on /camera the box would be an invitation to nowhere, so the
+    mode travels in the same config event as barge-in."""
+    from dataclasses import replace
+
+    vad = ScriptedVAD()
+    deps.settings = replace(SETTINGS, input_mode="camera")
+    async with await browser_server(deps, vad) as server:
+        port = server.sockets[0].getsockname()[1]
+        async with FakeBrowser(f"ws://127.0.0.1:{port}/browser", vad) as browser:
+            await browser.wait_until(lambda: browser.input_mode is not None)
+            assert browser.input_mode == "camera"
+
+    deps.settings = replace(SETTINGS, input_mode="upload")
+    async with await browser_server(deps, vad) as server:
+        port = server.sockets[0].getsockname()[1]
+        async with FakeBrowser(f"ws://127.0.0.1:{port}/browser", vad) as browser:
+            await browser.wait_until(lambda: browser.input_mode is not None)
+            assert browser.input_mode == "upload"
 
 
 async def test_without_barge_in_the_mic_is_ignored_while_the_tutor_answers(deps):
