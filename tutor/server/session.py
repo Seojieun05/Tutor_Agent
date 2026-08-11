@@ -723,6 +723,10 @@ class Session:
         No store writes and no hint record: an explanation is not a hint, so
         it must not move the L1-L4 ladder or resolve the pending question.
         """
+        # "어디가 틀렸어?" is answerable only with the diagnosis the tutor
+        # already made — without it the explanation motivates the step in the
+        # abstract and never says where the student went wrong.
+        state = self.store.get_state()
         text = await asyncio.to_thread(
             self.deps.hint_gen.explain,
             student_question=question,
@@ -731,6 +735,7 @@ class Session:
             reference=ctx.reference,
             rec=ctx.recognition,
             target_step=pending.step,
+            diagnosis=state,
         )
         log.info("explained a student question at step %d", pending.step)
         await self._speak(text)

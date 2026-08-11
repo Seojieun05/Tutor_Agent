@@ -59,6 +59,16 @@ _WORK_WORDS = (
 _CHECK_WORDS = ("맞", "봐", "보", "확인", "틀", "어때")
 
 
+# "어디가 틀렸어?" / "왜 그게 안 돼?" — a question ABOUT a verdict already
+# given, not a request for a new one. It presupposes the error the tutor just
+# reported, so the answer is an explanation, not another photo of the same page.
+_ABOUT_THE_VERDICT = ("어디가", "어디서", "어느 부분", "왜 ", "왜냐", "무엇이 잘못", "뭐가 잘못")
+
+
+def asks_about_the_verdict(text: str) -> bool:
+    return _has(text, _ABOUT_THE_VERDICT)
+
+
 def refers_to_work(text: str) -> bool:
     """Did they explicitly name their written work AND ask for it to be looked
     at? This is the ONLY door to the camera outside a hint request — the LLM
@@ -136,6 +146,14 @@ def rule_intent(text: str, *, has_problem: bool, has_pending: bool) -> Intent | 
     # five, not asking for a photo of their page. The evaluator's own WORK_CHECK
     # verdict is the net for the ones this reads too eagerly.
     if has_pending and _answer_shaped(text):
+        return "ANSWER"
+    if has_pending and asks_about_the_verdict(text):
+        # The tutor has just judged this page and is waiting: "내 풀이 어디가
+        # 틀렸어?" asks about THAT judgement, not for a new one. Routing it to
+        # the camera re-photographs the same page to re-derive the same
+        # verdict, and answers a where-question with another hint. As an
+        # ANSWER it reaches the evaluator, which reads it as a question and
+        # hands it to explain() — the path that answers "where".
         return "ANSWER"
     if refers_to_work(text):
         # Nothing seen yet: "풀이 맞아?" still has to start with a photo.

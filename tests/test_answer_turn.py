@@ -58,8 +58,10 @@ class FakeWS:
         return [json.loads(e)["event"] for e in self.events if isinstance(e, str)]
 
 
-def build_session(db, verdicts: list[dict]) -> tuple[Session, EchoLLMClient, NullSpeaker]:
-    llm = EchoLLMClient({"evaluate": verdicts})
+def build_session(
+    db, verdicts: list[dict], client=EchoLLMClient
+) -> tuple[Session, EchoLLMClient, NullSpeaker]:
+    llm = client({"evaluate": verdicts})
     speaker = NullSpeaker()
     deps = Deps(
         settings=Settings(),
@@ -333,6 +335,34 @@ class TestStudentQuestions:
         await session.handle_answer("왜 나눠요?", session.store.pending_hint("p1"))
         # a question turn speaks the explanation only — no evaluator reaction
         assert not speaker.spoken[0].startswith("네, 궁금하시죠?")
+
+    async def test_where_did_i_go_wrong_is_answered_from_the_diagnosis(self, db):
+        """The live gap: "어디가 틀렸어?" reached explain(), but explain had
+        only the problem and the step — so it motivated the step in the
+        abstract and never said WHERE. The diagnosis the tutor already made
+        travels with the question now."""
+        prompts: list[str] = []
+
+        class Recording(EchoLLMClient):
+            def run_with_tools(self, *, purpose, system, user, images=(), schema,
+                               max_rounds=6):
+                if purpose == "explain":
+                    prompts.append(user)
+                return super().run_with_tools(
+                    purpose=purpose, system=system, user=user, images=images,
+                    schema=schema, max_rounds=max_rounds,
+                )
+
+        session, llm, _ = build_session(db, [self._asking()], client=Recording)
+        ask_l1(session, step=1)
+        session.store.set_state(StudentState(
+            status="CONCEPT_ERROR", last_correct_step=0,
+            misconception="sign_flip_on_move",
+        ))
+
+        await session.handle_answer("어디가 틀렸어요?", session.store.pending_hint("p1"))
+
+        assert prompts and "sign_flip_on_move" in prompts[0]
 
     async def test_answering_after_the_explanation_still_lands(self, db):
         session, llm, _ = build_session(

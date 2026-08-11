@@ -160,8 +160,13 @@ async def test_a_work_check_takes_a_fresh_photo_and_reads_it(db):
 
 
 async def test_a_work_check_survives_a_pending_question(db):
-    """A hint is pending — the old code graded this as an answer instead."""
-    session, llm, speaker, ws = build(db, "내 풀이 어디가 틀렸어?")
+    """A hint is pending — the old code graded this as an answer instead.
+
+    The utterance is a JUDGE-THIS ("풀이 봐줘"), not a WHERE-question: asking
+    where a just-given verdict went wrong is a question about that verdict and
+    belongs to explain(), which is a different test in test_answer_turn.
+    """
+    session, llm, speaker, ws = build(db, "내 풀이 좀 봐줘.")
     ask_l1(session)
     assert session.store.pending_hint("p1") is not None
 

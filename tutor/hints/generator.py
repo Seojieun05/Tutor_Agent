@@ -308,6 +308,7 @@ class HintGenerator:
         reference: ReferenceSolution | None,
         rec: Recognition | None,
         target_step: int,
+        diagnosis=None,
     ) -> str:
         """Answer a student's "왜 그렇게 해요?" instead of grading it.
 
@@ -328,6 +329,16 @@ class HintGenerator:
             # of them, so nothing here can leak; the guard re-checks anyway.
             parts.append(
                 "학생이 지금까지 쓴 풀이 (줄 순서대로): " + " / ".join(rec.student_work)
+            )
+        if diagnosis is not None and getattr(diagnosis, "misconception", None):
+            # What the tutor already concluded about this page. "어디가
+            # 틀렸어?" is answerable ONLY from this: without it the model
+            # explains the step in the abstract and never says where.
+            parts.append(
+                f"이미 진단한 학생의 오류: {diagnosis.misconception}\n"
+                f"맞게 끝낸 마지막 단계: {getattr(diagnosis, 'last_correct_step', 0)}단계\n"
+                "학생이 어디서 틀렸는지 물으면 이 진단을 근거로 그 줄을 짚어 주세요. "
+                "고쳐 쓴 식은 알려주지 말고, 무엇을 다시 볼지까지만 말하세요."
             )
         if reference is not None:
             step = next((s for s in reference.steps if s.idx == target_step), None)

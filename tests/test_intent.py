@@ -112,6 +112,37 @@ def test_a_work_check_with_nothing_seen_yet_takes_a_photo_first(text):
     assert rule_intent(text, has_problem=False, has_pending=False) == "HINT_REQUEST"
 
 
+ABOUT_THE_VERDICT = [
+    "어디가 틀린 거야?",
+    "내 풀이 어디가 틀렸어?",
+    "네 프리에서 어디가 틀린 거야?",   # the live one
+    "어느 부분이 잘못됐어요?",
+    "왜 그렇게 하면 안 돼요?",
+]
+
+
+@pytest.mark.parametrize("text", ABOUT_THE_VERDICT)
+def test_asking_about_a_verdict_explains_instead_of_re_shooting(text):
+    """The tutor has just judged this page and is waiting: "어디가 틀렸어?"
+    asks about THAT judgement. As an ANSWER it reaches the evaluator, which
+    reads it as a question and hands it to explain() — the path that answers
+    "where". Routing it to the camera re-shoots the same page to re-derive the
+    same verdict, and answers a where-question with another hint."""
+    assert rule_intent(text, has_problem=True, has_pending=True) == "ANSWER"
+
+
+@pytest.mark.parametrize("text", ["내 풀이 어디가 틀렸어?", "네 프리에서 어디가 틀린 거야?"])
+def test_the_same_question_with_no_verdict_pending_takes_a_photo(text):
+    """Nothing has been judged yet, so there is nothing to explain: the only
+    way to answer is to look at the page."""
+    assert rule_intent(text, has_problem=True, has_pending=False) == "WORK_CHECK"
+
+
+def test_judge_this_still_outranks_the_where_shape():
+    """"풀이 맞아?" asks for a verdict even mid-question: photo, then verdict."""
+    assert rule_intent("풀이 맞아?", has_problem=True, has_pending=True) == "WORK_CHECK"
+
+
 @pytest.mark.parametrize("text", MISHEARD_WORK_CHECK)
 def test_a_mangled_풀이_still_reaches_the_camera(text):
     """STT hears "풀이" as 프리/네플이 often enough that a student loses the
