@@ -48,6 +48,13 @@ Intent = Literal["HINT_REQUEST", "WORK_CHECK", "ANSWER", "NONE"]
 _WORK_WORDS = (
     "풀이",                                    # 풀이 맞아? · 풀이 봐줘 · 내 풀이 어때?
     "내가 쓴", "제가 쓴", "내가 푼", "제가 푼", "내가 한", "제가 한",
+    # STT mangles the same short word the same few ways, and a student whose
+    # "풀이 맞아?" came back as "프리 맞아?" gets no camera and no idea why.
+    # These spellings are not Korean words, so widening here costs nothing:
+    # the check-word half of the rule still has to agree.
+    "프리",                                    # 풀이 → 프리
+    "플이",                                    # 내 풀이 → 네플이 / 내플이
+    "푸리", "풀리",
 )
 _CHECK_WORDS = ("맞", "봐", "보", "확인", "틀", "어때")
 

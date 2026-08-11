@@ -20,6 +20,17 @@ WORK_CHECK = [
     "제 풀이 좀 봐 주세요.",
     "내가 쓴 거 봐줘.",
 ]
+# What the STT actually returns when it mangles "풀이" — reported live, and
+# a student cannot know their word came back spelled differently.
+MISHEARD_WORK_CHECK = [
+    "프리 맞아?",
+    "프리 네플이 맞아?",
+    "네플이 봐줘.",
+    "내플이 확인해줘.",
+    "푸리 맞나요?",
+    "풀리 봐 주세요.",
+]
+
 SPOKEN_ANSWERS = ["5예요.", "마이너스 3이요.", "x는 2요."]
 
 # The bug this narrowing fixes: these are a student agreeing with the tutor, and
@@ -99,6 +110,14 @@ def test_a_work_check_outranks_a_pending_question(text):
 def test_a_work_check_with_nothing_seen_yet_takes_a_photo_first(text):
     """"풀이 맞아?" before any problem exists still has to start with the page."""
     assert rule_intent(text, has_problem=False, has_pending=False) == "HINT_REQUEST"
+
+
+@pytest.mark.parametrize("text", MISHEARD_WORK_CHECK)
+def test_a_mangled_풀이_still_reaches_the_camera(text):
+    """STT hears "풀이" as 프리/네플이 often enough that a student loses the
+    turn to a spelling they never chose. These forms are not Korean words, so
+    accepting them costs nothing — the check-word half still has to agree."""
+    assert rule_intent(text, has_problem=True, has_pending=False) == "WORK_CHECK"
 
 
 @pytest.mark.parametrize("text", NOT_A_WORK_CHECK)
