@@ -23,7 +23,8 @@ _DIGIT_HAS_FINAL = {"0": True, "1": True, "2": False, "3": True, "4": False,
 
 # If none of these appear, the text has no math notation worth touching.
 # The backslash is LaTeX: the VLM and the hint model both write \frac{1}{5}.
-_MATH_SIGNAL = re.compile(r"[*^=/×÷'′²³√\\]|\blog|\bsqrt|\bDerivative")
+# a_4 (수열 항) counts too: a letter directly joined to an underscore.
+_MATH_SIGNAL = re.compile(r"[*^=/×÷'′²³√\\]|[A-Za-z]_\w|\blog|\bsqrt|\bDerivative")
 
 # \frac{1}{5}, \dfrac{x+1}{2} — the args stay brace-free on a K-12 worksheet
 _FRAC = re.compile(r"\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}")
@@ -141,11 +142,15 @@ def _parens(s: str) -> str:
     return s
 
 
-# log bases as print sets them: dropped, small, under the line. Unicode has
-# subscripts for all digits but only some letters — a base that cannot be
-# lowered (log_b, log_c) stays as written rather than coming out half-sunk.
+# Indices and exponents as print sets them: dropped below or raised above the
+# line, as actual unicode characters — no HTML needed, so they survive any
+# text surface. Unicode has subscripts for all digits but only some letters,
+# and superscripts for all digits and most letters (no q): anything that
+# cannot be moved cleanly stays as written rather than coming out half-set.
 _SUB_SRC = "0123456789aehklmnopstx"
 _SUBSCRIPT = str.maketrans(_SUB_SRC, "₀₁₂₃₄₅₆₇₈₉ₐₑₕₖₗₘₙₒₚₛₜₓ")
+_SUP_SRC = "0123456789abcdefghijklmnoprstuvwxyz"
+_SUPERSCRIPT = str.maketrans(_SUP_SRC, "⁰¹²³⁴⁵⁶⁷⁸⁹ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻ")
 
 
 def _display_logs(s: str) -> str:
@@ -156,6 +161,32 @@ def _display_logs(s: str) -> str:
         return "log" + base.translate(_SUBSCRIPT)
 
     return re.sub(r"\blog_\{?(\w+)\}?", lowered, s)
+
+
+def _display_indices(s: str) -> str:
+    """a_4 → a₄, x_n → xₙ — the sequence-term notation a worksheet lives on.
+
+    Single-letter bases only, anchored on a word boundary: log_3 and friends
+    have a letter before theirs, so function names never lose their tails.
+    """
+    def lowered(m: re.Match) -> str:
+        sub = m.group(2)
+        if not all(ch in _SUB_SRC for ch in sub):
+            return m.group(0)
+        return m.group(1) + sub.translate(_SUBSCRIPT)
+
+    return re.sub(r"\b([A-Za-z])_\{?([0-9]+|[A-Za-z])\}?", lowered, s)
+
+
+def _display_powers(s: str) -> str:
+    """x**2 → x², x^10 → x¹⁰, x^n → xⁿ — raised, not careted."""
+    def raised(m: re.Match) -> str:
+        exp = m.group(1)
+        if not all(ch in _SUP_SRC for ch in exp):
+            return "^" + exp
+        return exp.translate(_SUPERSCRIPT)
+
+    return re.sub(r"(?:\*\*|\^)\{?([0-9]+|[A-Za-z])\}?", raised, s)
 
 
 def displayable(text: str) -> str:
@@ -170,13 +201,11 @@ def displayable(text: str) -> str:
     if not text or not _MATH_SIGNAL.search(text):
         return text
     s = _latex(text, spoken=False)
-    # x**2 AND x^2 → x²; the (?!\d) keeps x**23 from becoming x²3
-    s = re.sub(r"(?:\*\*|\^)2(?!\d)", "²", s)
-    s = re.sub(r"(?:\*\*|\^)3(?!\d)", "³", s)
-    s = re.sub(r"\*\*(\d+)", r"^\1", s)
+    s = _display_powers(s)     # x**2 → x², x^10 → x¹⁰, x^n → xⁿ
     s = re.sub(r"\s*\*\s*", "·", s)
     s = s.replace("sqrt(", "√(")
-    return _display_logs(s)
+    s = _display_logs(s)       # before the generic pass: log_3 keeps its name
+    return _display_indices(s)
 
 
 def speakable(text: str) -> str:
@@ -186,6 +215,9 @@ def speakable(text: str) -> str:
     s = _latex(text, spoken=True)
     s = _primes(s)      # before parens: they consume the argument's ()
     s = _logs(s)        # before fractions: log_3 b/a keeps its argument whole
+    # a_4 → "a 4": a teacher says the index, not the underscore. After _logs,
+    # whose own underscores are already spoken as "밑이 …인 로그".
+    s = re.sub(r"\b([A-Za-z])_\{?(\w+)\}?", r"\1 \2", s)
     s = _powers(s)
     s = _fractions(s)
     s = _operators(s)   # before equals: "= -1" wants 마이너스 first

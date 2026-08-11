@@ -65,6 +65,11 @@ class TestLatexReadsAloud:
     def test_a_variable_exponent_is_spoken(self):
         assert "x의 n제곱" in speakable("x^n = 8")
 
+    def test_a_sequence_index_is_spoken_without_the_underscore(self):
+        said = speakable("a_4 = a_1 + 3")
+        assert "_" not in said
+        assert "a 4" in said and "a 1" in said
+
 
 class TestTheScreenGetsNotation:
     """displayable(): the same boundary as speakable(), split by destination —
@@ -74,8 +79,17 @@ class TestTheScreenGetsNotation:
         from tutor.speech.mathspeak import displayable
 
         assert displayable("f(x) = (x+2)(2*x**2-x-2)") == "f(x) = (x+2)(2·x²-x-2)"
-        assert displayable("x**3 - x**10") == "x³ - x^10"
+        assert displayable("x**3 - x**10") == "x³ - x¹⁰"   # raised, not careted
+        assert displayable("x^n = 8") == "xⁿ = 8"
         assert displayable("sqrt(2)") == "√(2)"
+
+    def test_sequence_indices_sink(self):
+        from tutor.speech.mathspeak import displayable
+
+        assert displayable("a_4 + a_5 = 7") == "a₄ + a₅ = 7"
+        assert displayable("x_n = 2*x_1") == "xₙ = 2·x₁"
+        # an index unicode cannot sink stays whole, not half-set
+        assert displayable("a_b = 1") == "a_b = 1"
 
     def test_primes_and_equals_stay_as_written(self):
         from tutor.speech.mathspeak import displayable
@@ -101,7 +115,7 @@ class TestTheScreenGetsNotation:
         assert displayable("y = -\\frac{1}{5}x^2 + 3") == "y = -(1/5)x² + 3"
         assert displayable("\\frac{1}{2}") == "1/2"
         assert displayable("\\frac{x+1}{2} = 3") == "(x+1)/2 = 3"
-        assert displayable("$\\sqrt{2} \\cdot x^{10}$") == "√(2)·x^10"
+        assert displayable("$\\sqrt{2} \\cdot x^{10}$") == "√(2)·x¹⁰"
 
     def test_plain_korean_is_untouched(self):
         from tutor.speech.mathspeak import displayable
