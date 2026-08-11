@@ -163,6 +163,15 @@ def _residuals_equivalent(
     return False
 
 
+def compact(s: str) -> str:
+    """Whitespace and multiplication signs removed — enough to tell "the same
+    line, rewritten" from "a different claim", at none of the cost or reach of
+    symbolic equivalence. The VLM writes 2(a+b) where the model writes
+    2*(a+b), and that difference is all this has to survive.
+    """
+    return re.sub(r"[\s·*]", "", s)
+
+
 def parseable_claims(s: str) -> bool:
     """Can this line be compared mechanically at all? The session uses this to
     tell "the equations DISAGREE" (positive evidence of a different problem)

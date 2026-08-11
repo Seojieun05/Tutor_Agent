@@ -14,6 +14,7 @@ import re
 from pydantic import BaseModel
 
 from tutor.hints.guard import leaks_answer
+from tutor.knowledge import mathnorm
 from tutor.knowledge.db import KnowledgeDB
 from tutor.knowledge.models import MatchResult, ReferenceSolution
 from tutor.llm.client import LLMClient
@@ -78,10 +79,14 @@ BOARD
 Besides the spoken hint you may WRITE 0-2 short expressions on the student's
 screen (`board`) — what a tutor would jot on the whiteboard while saying the
 hint. Only mathematics that is already in front of the student: the problem's
-own equation, a line they wrote themselves, the expression your question is
-pointing at. ASCII notation (3*x + 5 = 20, x**2, sqrt(2), log_3 b), one
+own equation, a known formula the hint is about, the expression your question
+is pointing at. ASCII notation (3*x + 5 = 20, x**2, sqrt(2), log_3 b), one
 expression per entry, no Korean words. A bare term ("a_1") is NOT a board
 line — write a complete equation or expression with an operation in it.
+NEVER copy a line the STUDENT wrote. The board is the tutor's own hand, and
+a wrong line rewritten in the tutor's hand reads as the tutor endorsing it.
+Their line is already on their page: point at it with WORDS instead
+("두 번째 줄을 다시 볼까요?").
 NEVER write anything the student has not reached: no next-step result, no
 simplified form, no final answer — the board must not show what the voice is
 forbidden to say. Most hints need an empty board; write only when pointing
@@ -354,6 +359,17 @@ class HintGenerator:
         # dropping one line of two left fragments like a bare "a₁" on screen,
         # and half a board reads worse than no board.
         board = _clean_board(board)
+        if board and rec is not None and rec.student_work:
+            # The board is the tutor's own hand. A line the student wrote —
+            # verbatim or reformatted — rewritten there reads as the tutor
+            # endorsing it, and live that put a wrong 등비수열 relation under
+            # the "튜터 풀이" heading in the tutor's own emphasis style.
+            theirs = {mathnorm.compact(w) for w in rec.student_work}
+            kept = tuple(b for b in board if mathnorm.compact(b) not in theirs)
+            if kept != board:
+                log.info("dropped %d board line(s) copied from the student's work",
+                         len(board) - len(kept))
+                board = kept
         if board and reference is not None and any(
             leaks_answer(b, reference, decision.target_step, seen) for b in board
         ):

@@ -290,6 +290,8 @@ class TestTheBoard:
         problem_text="다음 일차방정식을 푸시오: 3x + 5 = 20",
         equations=["3*x + 5 = 20"],
     )
+    # the same page with a line of their own on it
+    WORKED = SEEN.model_copy(update={"student_work": ["3*x = 20 + 5"]})
 
     def _llm_match(self):
         # concepts with no seeded templates → the LLM phrasing path
@@ -315,6 +317,29 @@ class TestTheBoard:
         text = gen.generate(decision(1), self._llm_match(), LIN_REF, self.SEEN, [])
         assert text == "다음에는 무엇을 하면 좋을까요?"
         assert text.board == ()                        # all or nothing
+
+    def test_the_students_own_line_never_reaches_the_board(self, db):
+        """Live: the student wrote a wrong 등비수열 relation, the model put it
+        on the board, and it appeared under "튜터 풀이" in the tutor's own
+        emphasis style — a wrong line in the tutor's hand reads as the tutor
+        endorsing it. Their page already has it; words point at it."""
+        llm = EchoLLMClient({"phrase": [
+            {"hint": "두 번째 줄을 다시 볼까요?",
+             "board": ["3*x = 20 + 5", "3*x + 5 = 20"]},   # theirs, then the problem's
+        ]})
+        gen = HintGenerator(llm, db)
+        text = gen.generate(decision(1), self._llm_match(), LIN_REF, self.WORKED, [])
+        assert text.board == ("3*x + 5 = 20",)
+
+    def test_a_reformatted_copy_is_still_a_copy(self, db):
+        """Spacing and the multiplication sign are the only things that differ
+        between how the VLM reads a line and how the model writes it."""
+        llm = EchoLLMClient({"phrase": [
+            {"hint": "여기를 보세요", "board": ["3x=20+5"]},   # they wrote "3*x = 20 + 5"
+        ]})
+        gen = HintGenerator(llm, db)
+        text = gen.generate(decision(1), self._llm_match(), LIN_REF, self.WORKED, [])
+        assert text.board == ()
 
     def test_fragments_and_korean_never_reach_the_board(self, db):
         """The live 등비수열 board: bare terms ("a_1") and Korean sentences

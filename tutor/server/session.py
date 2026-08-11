@@ -161,17 +161,6 @@ def answer_core(transcript: str) -> str | None:
 _RELATES = re.compile(r"[=<>≤≥]")
 
 
-def _compact_math(s: str) -> str:
-    """Enough normalization to tell "the sentence already says this" from "it
-    does not". The VLM writes the statement as printed (2(a+b)) and the
-    equation list in ASCII (2*(a+b)), so a raw substring test always missed
-    and the card printed the same equation twice. Whitespace and the
-    multiplication signs are exactly the difference; nothing else is touched,
-    because a comparison that normalizes hard starts hiding real differences.
-    """
-    return re.sub(r"[\s·*]", "", s)
-
-
 def preflight_fallback(concept_name: str) -> str:
     """Said the first time a concept is met, while its own line is written.
 
@@ -482,11 +471,11 @@ class Session:
         equation the sentence already contains is printed twice for nothing.
         """
         text = mathspeak.displayable(rec.problem_text)
-        seen = _compact_math(text)
+        seen = mathnorm.compact(text)
         equations = []
         for raw in rec.equations:
             eq = mathspeak.displayable(raw)
-            compact = _compact_math(eq)
+            compact = mathnorm.compact(eq)
             # a bare term ("a_10") states nothing; a repeat of the sentence
             # states it twice. The VLM emits both often enough to matter.
             if not compact or not _RELATES.search(compact) or compact in seen:
