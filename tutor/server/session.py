@@ -156,6 +156,21 @@ def answer_core(transcript: str) -> str | None:
     return None
 
 
+# Does this string claim anything, or is it a lone term?
+_RELATES = re.compile(r"[=<>≤≥]")
+
+
+def _compact_math(s: str) -> str:
+    """Enough normalization to tell "the sentence already says this" from "it
+    does not". The VLM writes the statement as printed (2(a+b)) and the
+    equation list in ASCII (2*(a+b)), so a raw substring test always missed
+    and the card printed the same equation twice. Whitespace and the
+    multiplication signs are exactly the difference; nothing else is touched,
+    because a comparison that normalizes hard starts hiding real differences.
+    """
+    return re.sub(r"[\s·*]", "", s)
+
+
 def readout_of(rec: Recognition) -> list[str]:
     """The problem, read back while the tagger and phraser think.
 
@@ -432,13 +447,25 @@ class Session:
         Notation for the eye (displayable), never the photo — and never the
         student's work or anything downstream of the solver, so nothing that
         could leak an answer travels on this event.
+
+        The equations line exists for what the STATEMENT does not spell out (a
+        formula from a figure, a condition the VLM had to lift out). An
+        equation the sentence already contains is printed twice for nothing.
         """
+        text = mathspeak.displayable(rec.problem_text)
+        seen = _compact_math(text)
+        equations = []
+        for raw in rec.equations:
+            eq = mathspeak.displayable(raw)
+            compact = _compact_math(eq)
+            # a bare term ("a_10") states nothing; a repeat of the sentence
+            # states it twice. The VLM emits both often enough to matter.
+            if not compact or not _RELATES.search(compact) or compact in seen:
+                continue
+            equations.append(eq)
         try:
             await self.ws.send(
-                make_event("problem", {
-                    "text": mathspeak.displayable(rec.problem_text),
-                    "equations": [mathspeak.displayable(e) for e in rec.equations],
-                })
+                make_event("problem", {"text": text, "equations": equations})
             )
         except Exception:
             log.debug("could not send problem event (connection gone)")

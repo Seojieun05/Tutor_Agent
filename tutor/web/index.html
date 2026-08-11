@@ -582,9 +582,8 @@ function showProblem(d) {
   pt.append(mathify(text).frag);
   const box = $("problemEqs");
   box.textContent = "";
+  // the server sends only equations the statement does NOT already spell out
   for (const eq of eqs) {
-    // skip equations the problem statement already spells out
-    if (text.includes(eq)) continue;
     const line = document.createElement("div");
     line.append(mathify(eq).frag);
     box.appendChild(line);

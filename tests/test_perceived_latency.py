@@ -306,6 +306,31 @@ async def test_a_new_problem_does_not_get_the_work_narration(db):
 # --- the readout (new problems) ---------------------------------------------
 
 
+async def test_the_problem_card_does_not_print_the_same_equation_twice(db):
+    """Live: the card showed the chain equality inside the sentence AND again
+    below it. The VLM writes the statement as printed (2(a+b)) and the
+    equation list in ASCII (2*(a+b)), so the raw substring test never matched.
+    A bare term ("a_10") is dropped too — it states nothing."""
+    session, llm, speaker, ws = build(
+        db, "이 문제 힌트 줄래?",
+        llm_responses={"recognize": [dict(
+            problem_text="12. 등비수열 {a_n}이 2(a_1 + a_4 + a_7) = a_4 + a_7 + a_10 = 6 을 만족시킬 때, a_10의 값은?",
+            equations=[
+                "2*(a_1 + a_4 + a_7) = a_4 + a_7 + a_10 = 6",   # the sentence says it
+                "a_10",                                          # states nothing
+                "S_n = a_1*(r**n - 1)/(r - 1)",                  # genuinely extra
+            ],
+            student_work=[], choices=[], diagram_conditions=[],
+            uncertain_regions=[], confidence=0.95,
+        )]},
+    )
+
+    await session._handle_utterance(PCM, 16000)
+
+    card = next(e for e in ws.events if e["event"] == "problem")
+    assert card["data"]["equations"] == ["Sₙ = a₁·(rⁿ - 1)/(r - 1)"]
+
+
 def test_readout_strips_exam_numbering_and_point_tags():
     rec = Recognition(problem_text="6.  1보다 큰 두 실수 a, b가\n주어질 때 값은? [3점]")
     # just the problem: the opener moved to the turn's delay-gated filler slot
