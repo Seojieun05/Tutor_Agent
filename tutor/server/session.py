@@ -444,34 +444,41 @@ class Session:
     # --- capture --------------------------------------------------------------
 
     async def _request_capture(self) -> bytes | None:
-        """The student's worksheet, from whichever eye can see it.
+        """The student's worksheet, from whichever eye can see it NOW.
 
-        The session's own device first (a simulator image, the browser's
-        attached photo). If it has no camera it answers capture_failed, and a
-        phone connected on /camera — a different socket entirely — is asked
-        instead. Voice and vision can therefore live on different machines.
+        In camera mode a connected phone is asked FIRST: it photographs the
+        page as it is at this moment. The browser's attached photo is frozen
+        at paste time — and serving it while a phone was watching meant a
+        student who changed their work was diagnosed on the picture from
+        minutes ago, forever. The attached photo stays as the fallback when
+        no phone answers; in upload mode it is the only eye by design.
         """
         timeout = self.deps.settings.capture_timeout_s
+        cameras = self.deps.cameras
+        phone_first = self.deps.settings.input_mode == "camera" and bool(cameras)
         started = time.monotonic()
-        jpeg = await self._capture_from_device()
-        eye = "session device"
-        if not jpeg:
-            cameras = self.deps.cameras
-            if self.deps.settings.input_mode != "camera":
-                # INPUT_MODE=upload: the picture comes from the browser's file
-                # picker and nowhere else. Falling through to a camera device
-                # here would silently hand the tutor a different photo from the
-                # one the student just chose.
-                log.warning("no worksheet photo attached (INPUT_MODE=upload)")
-                return None
-            if not cameras:
+        if phone_first:
+            jpeg = await cameras.capture(timeout)
+            eye = "camera device"
+            if not jpeg:
+                log.info("no frame from the camera device; trying the session device")
+                started = time.monotonic()
+                jpeg = await self._capture_from_device()
+                eye = "session device"
+        else:
+            jpeg = await self._capture_from_device()
+            eye = "session device"
+            if not jpeg:
+                if self.deps.settings.input_mode != "camera":
+                    # INPUT_MODE=upload: the picture comes from the browser's
+                    # file picker and nowhere else. Falling through to a camera
+                    # device here would silently hand the tutor a different
+                    # photo from the one the student just chose.
+                    log.warning("no worksheet photo attached (INPUT_MODE=upload)")
+                    return None
                 log.warning("no eye at all: the session device has no camera and none "
                             "is connected on /camera")
                 return None
-            log.info("no local camera; asking a connected camera device")
-            started = time.monotonic()  # the local device's answer was not the wait
-            jpeg = await cameras.capture(timeout)
-            eye = "camera device"
         elapsed = (time.monotonic() - started) * 1000
         timing.record("capture", elapsed / 1000, eye)
 

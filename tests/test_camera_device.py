@@ -185,15 +185,29 @@ async def test_upload_mode_never_borrows_a_connected_board(deps):
     assert "사진" in deps.speaker.spoken[0], deps.speaker.spoken
 
 
-async def test_the_sessions_own_camera_wins(deps):
-    """An attached worksheet is a deliberate choice: do not override it."""
+async def test_the_phone_outranks_an_attached_photo_in_camera_mode(deps):
+    """The stale-work regression: a photo pasted on the laptop once used to
+    shadow the phone forever, so a student who CHANGED their work was
+    diagnosed on the paste from minutes ago. The phone sees the page as it
+    is NOW; the paste is a moment. In camera mode the phone is asked first."""
     async with await tutor_server(deps) as server:
         url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"
         async with FakeCamera(url) as camera, VoiceClient(url, LOCAL_JPEG) as laptop:
             await laptop.ask_for_a_hint()
 
-    assert camera.requests == 0              # never bothered
+    assert camera.requests == 1              # the fresh eye was asked
     assert laptop.hints[0]["level"] == 1
+
+
+async def test_an_attached_photo_is_the_fallback_when_the_phone_cannot_shoot(deps):
+    """A dead phone must not cost the lesson: the paste still works."""
+    async with await tutor_server(deps) as server:
+        url = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+        async with FakeCamera(url, jpeg=None) as camera, VoiceClient(url, LOCAL_JPEG) as laptop:
+            await laptop.ask_for_a_hint()
+
+    assert camera.requests == 1              # asked, could not deliver
+    assert laptop.hints[0]["level"] == 1     # the paste carried the turn
 
 
 async def test_a_camera_that_cannot_shoot_does_not_hang_the_hint(deps):
