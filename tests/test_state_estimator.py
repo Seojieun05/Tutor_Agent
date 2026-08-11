@@ -97,6 +97,43 @@ class TestUncertainEcho:
         assert llm.calls.count("estimate") == 1
         assert state.status == "UNCERTAIN"
 
+    def test_a_stubborn_uncertain_gets_the_standby_models_opinion(self, db):
+        """Live: the routed small model answered UNCERTAIN even with fresh
+        eyes, and the turn looped into "다시 보여 줄래요?" forever. One
+        expensive look beats an endless recapture."""
+        uncertain = {"current_step": "?", "last_correct_step": 0, "status": "UNCERTAIN",
+                     "misconception": None, "attempt_count": 2,
+                     "previous_hint_effective": None}
+        small = EchoLLMClient({"estimate": [uncertain, uncertain]})
+        strong = EchoLLMClient({"estimate": [
+            {"current_step": "이항", "last_correct_step": 0, "status": "CONCEPT_ERROR",
+             "misconception": "sign_flip_on_move", "attempt_count": 2,
+             "previous_hint_effective": False},
+        ]})
+        est = StudentStateEstimator(small, db, second_opinion=strong)
+        state = est.estimate(
+            rec=self.WORK, reference=REFERENCE,
+            prev_state=StudentState(status="UNCERTAIN"),
+            prev_work=None, history=[],
+        )
+        assert small.calls.count("estimate") == 2      # first look + fresh eyes
+        assert strong.calls.count("estimate") == 1     # then the standby
+        assert state.status == "CONCEPT_ERROR"
+
+    def test_when_the_standby_agrees_uncertain_is_honest(self, db):
+        uncertain = {"current_step": "?", "last_correct_step": 0, "status": "UNCERTAIN",
+                     "misconception": None, "attempt_count": 1,
+                     "previous_hint_effective": None}
+        small = EchoLLMClient({"estimate": [uncertain]})
+        strong = EchoLLMClient({"estimate": [dict(uncertain)]})
+        est = StudentStateEstimator(small, db, second_opinion=strong)
+        state = est.estimate(
+            rec=self.WORK, reference=REFERENCE,
+            prev_state=None, prev_work=None, history=[],
+        )
+        assert strong.calls.count("estimate") == 1
+        assert state.status == "UNCERTAIN"             # a real recapture case
+
 
 class TestPreChecks:
     def test_low_confidence_uncertain_no_llm(self, db):

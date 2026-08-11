@@ -44,10 +44,20 @@ def hint_was_effective(prev: StudentState, new: StudentState) -> bool:
 
 
 class StudentStateEstimator:
-    def __init__(self, llm: LLMClient, db: KnowledgeDB, conf_threshold: float = 0.6):
+    def __init__(
+        self,
+        llm: LLMClient,
+        db: KnowledgeDB,
+        conf_threshold: float = 0.6,
+        second_opinion: LLMClient | None = None,
+    ):
         self.llm = llm
         self.db = db
         self.conf_threshold = conf_threshold
+        # The stronger model, consulted only when the routed one cannot reach
+        # a verdict on a legible page (ESTIMATE_PROVIDER moved diagnosis to a
+        # small model; this is the escape hatch that keeps the move honest).
+        self.second_opinion = second_opinion
 
     def estimate(
         self,
@@ -92,6 +102,23 @@ class StudentStateEstimator:
             # history) before giving up on a verdict.
             log.info("estimate UNCERTAIN on a legible page; retrying without bias")
             state = self.llm.run_with_tools(
+                purpose="estimate",
+                system=_SYSTEM,
+                user=self._build_context(rec, reference, None, [], transcript),
+                schema=StudentState,
+            )
+        if (
+            state.status == "UNCERTAIN"
+            and self.second_opinion is not None
+            and rec.student_work
+            and rec.confidence >= self.conf_threshold
+        ):
+            # The routed model cannot reach a verdict on a page the VLM read
+            # cleanly — live, that looped into "다시 보여 줄래요?" forever.
+            # One expensive look beats an endless recapture: the standby model
+            # gets the same fresh-eyes context, and only in this corner.
+            log.info("estimate still UNCERTAIN; second opinion from the standby model")
+            state = self.second_opinion.run_with_tools(
                 purpose="estimate",
                 system=_SYSTEM,
                 user=self._build_context(rec, reference, None, [], transcript),

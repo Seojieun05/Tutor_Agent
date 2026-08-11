@@ -246,7 +246,12 @@ def make_deps(
         recognizer=Recognizer(vision_llm or llm, settings),
         matcher=Matcher(db, semantic=semantic),
         solver=GrokSolver(llm, db),
-        estimator=StudentStateEstimator(estimate_llm or llm, db, settings.recog_conf_threshold),
+        estimator=StudentStateEstimator(
+            estimate_llm or llm, db, settings.recog_conf_threshold,
+            # the escape hatch for the routed small model: a page the VLM read
+            # cleanly deserves one expensive look before a recapture loop
+            second_opinion=llm if settings.estimate_provider == "gemini" else None,
+        ),
         hint_gen=HintGenerator(hint_llm or llm, db, settings.input_mode),
         transcriber=transcriber,
         speaker=speaker,

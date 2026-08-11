@@ -87,7 +87,10 @@ def build(settings):
         "recognizer": Recognizer(vision_llm, settings),
         "matcher": Matcher(db, semantic=semantic),
         "solver": GrokSolver(llm, db),
-        "estimator": StudentStateEstimator(estimate_llm, db, settings.recog_conf_threshold),
+        "estimator": StudentStateEstimator(
+            estimate_llm, db, settings.recog_conf_threshold,
+            second_opinion=llm if settings.estimate_provider == "gemini" else None,
+        ),
         "hint_gen": HintGenerator(hint_llm, db, settings.input_mode),
         "evaluator": AnswerEvaluator(eval_llm, db),
         "speaker": speaker,
