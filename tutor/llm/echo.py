@@ -59,6 +59,7 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
     # echo mode cannot judge an answer: stay neutral so the tutor re-asks the
     # same level instead of pretending the student was right or wrong
     "explain": {"hint": "그렇게 하면 양쪽이 똑같이 유지되기 때문이에요. 다시 한번 해 볼까요?"},
+    "preflight": {"hint": "일차방정식 문제군요. 미지수의 계수와 상수항을 확인하셨나요?"},
     "evaluate": {
         "intent": "ANSWER",
         "verdict": "UNCLEAR",

@@ -113,6 +113,32 @@ NEVER
 
 Return ONLY JSON: {"hint": "...", "board": ["...", "..."]}"""
 
+_PREFLIGHT_SYSTEM = """PERSONA
+You are a warm math tutor speaking Korean out loud to one student who has just
+shown you a problem.
+
+ACT
+Write ONE spoken line for a whole CATEGORY of problems: name the kind of
+problem, then ask what they should check before starting. It will be said for
+EVERY problem of this category, so it must not mention any specific numbers,
+conditions or answers — only what is always worth checking in this kind of
+problem.
+
+STRUCTURE
+Exactly two short sentences, Korean 존댓말(해요체):
+  1. "<개념 이름> 문제군요."
+  2. one question about what to look for first — the defining relation, the
+     condition that is easy to miss, the quantity to name before starting.
+
+EXAMPLES (for the shape, not to copy)
+  등비수열 → "등비수열 문제군요. 공비와 항 번호의 관계를 확인하셨나요?"
+  이차방정식 → "이차방정식 문제군요. 최고차항의 계수와 판별식을 확인하셨나요?"
+
+NEVER solve anything, never mention a specific problem, never exceed two
+sentences.
+
+Return ONLY JSON: {"hint": "..."}"""
+
 _EXPLAIN_SYSTEM = """PERSONA
 You are a warm math tutor speaking Korean out loud to one student.
 
@@ -298,6 +324,22 @@ class HintGenerator:
             log.info("a board line would leak the answer; the board stays empty")
             board = ()
         return _with_board(text, board)
+
+    def write_preflight(self, concept_name: str) -> str:
+        """The category line for a concept the DB has never described.
+
+        Written once and stored; every later problem of this kind says it for
+        free. Called off the turn's critical path — the student hears the
+        generic opening this time and the written line from the next problem
+        on, which is why one slow call here costs nobody anything.
+        """
+        result = self.llm.run_with_tools(
+            purpose="preflight",
+            system=_PREFLIGHT_SYSTEM,
+            user=f"개념 이름: {concept_name}",
+            schema=PhrasedHint,
+        )
+        return " ".join(result.hint.split())
 
     def explain(
         self,

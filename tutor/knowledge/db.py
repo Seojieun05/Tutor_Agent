@@ -41,6 +41,14 @@ CREATE TABLE IF NOT EXISTS hint_templates (
     id TEXT PRIMARY KEY, concept_id TEXT, misconception_id TEXT,
     level INTEGER NOT NULL, template_text TEXT NOT NULL
 );
+-- One line per concept, said BEFORE the student starts: what kind of problem
+-- this is and what to check first. Deliberately not a hint_template with
+-- level 0 — level 0 already means WAIT/PROBE to the policy, and this is not a
+-- rung on that ladder. Written once per concept and reused for every problem
+-- of that kind, which is what keeps it free at speak time.
+CREATE TABLE IF NOT EXISTS concept_preflight (
+    concept_id TEXT PRIMARY KEY, line TEXT NOT NULL
+);
 """
 
 
@@ -148,6 +156,26 @@ class KnowledgeDB:
 
     def concepts(self) -> dict[str, str]:
         return dict(self._conn.execute("SELECT id, name FROM concepts"))
+
+    def concept_name(self, concept_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT name FROM concepts WHERE id = ?", (concept_id,)
+        ).fetchone()
+        return row[0] if row else None
+
+    def preflight_line(self, concept_id: str) -> str | None:
+        """The "이런 문제군요, 이것부터 보셨나요?" line for this concept."""
+        row = self._conn.execute(
+            "SELECT line FROM concept_preflight WHERE concept_id = ?", (concept_id,)
+        ).fetchone()
+        return row[0] if row else None
+
+    def save_preflight_line(self, concept_id: str, line: str) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO concept_preflight VALUES (?, ?)",
+            (concept_id, line.strip()),
+        )
+        self._conn.commit()
 
     def find_by_text_hash(self, text_hash: str) -> Problem | None:
         row = self._conn.execute(

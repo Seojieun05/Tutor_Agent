@@ -171,27 +171,14 @@ def _compact_math(s: str) -> str:
     return re.sub(r"[\s·*]", "", s)
 
 
-def readout_of(rec: Recognition) -> list[str]:
-    """The problem, read back while the tagger and phraser think.
+def preflight_fallback(concept_name: str) -> str:
+    """Said the first time a concept is met, while its own line is written.
 
-    Just the problem line now: READOUT_OPENER moved to the turn's delay-gated
-    opener slot, so "좋아요, 문제 확인해 볼게요" plays ~1s in (while the camera
-    works) instead of stacking on a generic filler at recognition's end — one
-    filler per turn, every turn type.
-
-    Also the moment a misread photo gets caught: the student hears what the
-    tutor believes the problem says, seconds before any hint depends on it.
+    Generic on purpose: it names the kind of problem (which the tagger already
+    knows) and asks the one question that fits every subject. From the next
+    problem of this kind on, the DB has something better to say.
     """
-    text = " ".join(rec.problem_text.split())
-    text = re.sub(r"^\s*\d+\s*[.)]\s*", "", text)  # exam numbering: "6. "
-    text = re.sub(r"\[\s*\d+\s*점\s*\]", "", text).strip()  # point tags: "[3점]"
-    if not text:
-        return []
-    # kept as NOTATION: _say speaks it through speakable(), the browser shows
-    # it through displayable() — one narration, two renderings
-    if len(text) > 130:
-        text = text[:130] + "…"
-    return [text]
+    return f"{concept_name} 문제군요. 어떤 조건이 주어졌는지 먼저 정리해 볼까요?"
 
 
 def _solve_dead(task: asyncio.Task | None) -> bool:
@@ -427,6 +414,47 @@ class Session:
             )
         except Exception:
             log.debug("could not send transcript event (connection gone)")
+
+    def _preflight_line(self, rec: Recognition) -> str:
+        """"등비수열 문제군요. 공비와 항 번호의 관계를 확인하셨나요?"
+
+        Looked up by concept, never generated on the clock. The first problem
+        of a kind says the generic opening and starts a background write; from
+        the second on, the line is in the DB and its audio is in the TTS
+        cache, so the whole thing costs nothing at speak time.
+        """
+        db = self.deps.hint_gen.db
+        for concept in rec.concepts:
+            name = db.concept_name(concept)
+            if not name:
+                continue  # a tag the KB does not carry a Korean name for
+            line = db.preflight_line(concept)
+            if line:
+                self._remember_phrase(line)
+                return line
+            self._spawn(self._write_preflight(concept, name))
+            return preflight_fallback(name)
+        return ""
+
+    async def _write_preflight(self, concept: str, name: str) -> None:
+        """Write this concept's line for NEXT time. Never awaited by a turn."""
+        try:
+            line = await asyncio.to_thread(self.deps.hint_gen.write_preflight, name)
+        except Exception:
+            log.exception("could not write the preflight line for %s", concept)
+            return
+        if not line:
+            return
+        self.deps.hint_gen.db.save_preflight_line(concept, line)
+        self._remember_phrase(line)
+        log.info("preflight line written for %s: %s", concept, line)
+
+    def _remember_phrase(self, text: str) -> None:
+        """Register a fixed line with the TTS cache, so it is rendered once and
+        replayed forever after (the same treatment the fillers get)."""
+        register = getattr(self.deps.speaker, "register", None)
+        if callable(register):
+            register(text)
 
     async def _stage(self, text: str) -> None:
         """What the pipeline is doing right now, for the SCREEN, not the voice.
@@ -877,14 +905,12 @@ class Session:
                 # differences every turn, and a card that rewrites itself
                 # mid-problem reads as the tutor changing its mind.
                 await self._send_problem(rec)
-                # First sight of a NEW problem: read it back while the tagger,
-                # the matcher and the phraser think (~15s of otherwise dead
-                # air). The student hears that the tutor actually saw their
-                # problem — and a misread photo gets caught out loud, before
-                # any hint depends on it. Three lines, queued in order: only
-                # the middle one costs TTS.
-                for line in readout_of(rec):
-                    self._narrate(line)
+                # First sight of a NEW problem: say what KIND of problem it is
+                # and what to check, while the matcher and the phraser think.
+                # Not the problem read back verbatim — that ran ten seconds on
+                # a long statement and the finished hint had to wait it out;
+                # the card on screen carries the wording instead.
+                self._narrate(self._preflight_line(rec))
         # A work check holds onto its problem: the student is asking about the
         # work in front of them, and a re-read wobble must not reset the very
         # context that can grade it (the 등비수열 sessions did exactly that).

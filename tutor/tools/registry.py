@@ -38,6 +38,9 @@ KB_KINDS_BY_PURPOSE: dict[str, frozenset[str]] = {
     # answering a student's "why?": same reach as phrasing a hint — concepts and
     # misconceptions, never solutions
     "explain": frozenset({"hint_templates", "misconceptions"}),
+    # one line per CONCEPT, written from the concept's name alone: no problem
+    # in front of it, so nothing to look up
+    "preflight": frozenset(),
 }
 
 MATH_TOOLS_BY_PURPOSE: dict[str, frozenset[str]] = {

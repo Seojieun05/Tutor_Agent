@@ -31,7 +31,7 @@ from tutor.server.session import (
     ProblemContext,
     Session,
     answer_core,
-    readout_of,
+    preflight_fallback,
 )
 from tutor.solver.grok_solver import GrokSolver
 from tutor.speech.filler import FillerBank
@@ -331,59 +331,55 @@ async def test_the_problem_card_does_not_print_the_same_equation_twice(db):
     assert card["data"]["equations"] == ["Sₙ = a₁·(rⁿ - 1)/(r - 1)"]
 
 
-def test_readout_strips_exam_numbering_and_point_tags():
-    rec = Recognition(problem_text="6.  1보다 큰 두 실수 a, b가\n주어질 때 값은? [3점]")
-    # just the problem: the opener moved to the turn's delay-gated filler slot
-    assert readout_of(rec) == ["1보다 큰 두 실수 a, b가 주어질 때 값은?"]
+def test_the_first_problem_of_a_kind_gets_a_generic_opening():
+    assert preflight_fallback("등비수열").startswith("등비수열 문제군요.")
 
 
-def test_the_readout_closer_stays_retired():
-    """The closer was the turn's longest line (~6s) queued exactly where the
-    hint comes ready, so it bought the least wait-cover at the highest delay.
-    It stays out until the recognition step itself gets faster."""
-    rec = Recognition(problem_text="x의 값을 구하시오.")
-    assert not any(line in READOUT_CLOSERS.values() for line in readout_of(rec))
-    assert readout_of(Recognition(problem_text="")) == []    # nothing to read
-
-
-async def test_a_new_problem_is_read_back_while_the_tutor_thinks(db):
-    """Opener, the problem, the check-question closer — in that order, and the
-    frame lines are cache keys so only the problem line pays for TTS."""
+async def test_a_new_problem_is_told_what_kind_it_is(db):
+    """The tutor no longer reads the statement back — that ran ten seconds on
+    a long problem and the finished hint had to wait it out. It names the KIND
+    of problem and what to check, and the card carries the wording."""
     session, llm, speaker, ws = build(db, "이 문제 힌트 줄래?")
 
     await session._handle_utterance(PCM, 16000)
-    # the narration is queued after recognize; give the filler task one beat
     await asyncio.sleep(0)
 
     from tutor.speech.filler import FILLER_PHRASES
 
     opener_at = speaker.spoken.index(READOUT_OPENER)
-    problem_at = next(i for i, s in enumerate(speaker.spoken) if "일차방정식" in s)
-    assert opener_at < problem_at
-    # ONE filler, and it is the readout opener doing double duty — the old
-    # generic "음, 살펴보고 있어요" no longer stacks in front of it
+    line_at = next(i for i, s in enumerate(speaker.spoken) if "문제군요" in s)
+    assert opener_at < line_at
+    # the statement itself is never spoken now
+    assert not any("일차방정식을 푸시오" in s for s in speaker.spoken)
+    # ONE filler, and it is the opener doing double duty
     assert speaker.spoken.count(READOUT_OPENER) == 1
     assert not any(s in FILLER_PHRASES for s in speaker.spoken)
-    # the retired closer stays retired, and the readout never outlives the
-    # answer: the hint is the LAST thing said
     assert not any(s in READOUT_CLOSERS.values() for s in speaker.spoken)
-    assert speaker.spoken[-1] != READOUT_OPENER
-    # a NEW problem also fills the page's problem card, in display notation
+    assert speaker.spoken[-1] != READOUT_OPENER      # the hint is the last word
+    # the card still carries the statement, in display notation
     card = next(e for e in ws.events if e["event"] == "problem")
     assert "일차방정식" in card["data"]["text"]
 
 
-async def test_the_same_problem_is_not_read_back_twice(db):
+async def test_the_concept_line_is_written_once_and_reused(db):
+    """The point of the whole mechanism: the first problem of a kind pays a
+    background call and says the generic opening; every later problem of that
+    kind reads the stored line, with no call and cached audio."""
     session, llm, speaker, ws = build(db, "이 문제 힌트 줄래?")
 
-    await session._handle_utterance(PCM, 16000)      # first sight: readout queued
-    readouts = lambda: sum("일차방정식" in s for s in speaker.spoken)  # noqa: E731
-    assert readouts() == 1
+    await session._handle_utterance(PCM, 16000)
+    assert any(s.startswith("일차방정식 문제군요. 어떤 조건이") for s in speaker.spoken)
+    # the background write is a task, not part of the turn
+    await asyncio.gather(*[t for t in session._tasks if not t.done()])
+    stored = db.preflight_line("linear_equation")
+    assert stored and stored != preflight_fallback("일차방정식")
 
-    await session.handle_hint_request()              # same worksheet, second turn
+    speaker.spoken.clear()
+    session.ctx = None                               # meet the same kind again
+    await session.handle_hint_request()
 
-    # the OPENER may repeat (it is the turn's filler now); the PROBLEM may not
-    assert readouts() == 1
+    assert stored in speaker.spoken
+    assert llm.calls.count("preflight") == 1         # written once, reused after
 
 
 # --- the race the filler must always lose ------------------------------------
