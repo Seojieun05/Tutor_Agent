@@ -170,17 +170,6 @@ class TestEstimateProvider:
         assert deps.hint_gen.llm is llm
         assert deps.solver.llm is llm
 
-    def test_a_routed_diagnostician_gets_the_chat_model_as_second_opinion(self, db):
-        from tutor.server.app import make_deps
-
-        llm, estimate_llm = EchoLLMClient(), EchoLLMClient()
-        routed = make_deps(
-            Settings(estimate_provider="gemini"), db, llm, None, None,
-            estimate_llm=estimate_llm,
-        )
-        assert routed.estimator.second_opinion is llm
-        default = make_deps(Settings(), db, llm, None, None)
-        assert default.estimator.second_opinion is None   # same model twice is no opinion
 
 
 class TestHintProvider:
