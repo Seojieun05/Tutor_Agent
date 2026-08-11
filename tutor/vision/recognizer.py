@@ -13,6 +13,7 @@ remains the standalone version of the same job.
 from __future__ import annotations
 
 import logging
+import re
 
 from pydantic import BaseModel, Field
 
@@ -26,6 +27,10 @@ from tutor.knowledge.taxonomy import (
 from tutor.llm.client import LLMClient
 
 log = logging.getLogger(__name__)
+
+# Something is being related or operated on — as opposed to "a_10", which is
+# the quantity the question asks for, not a claim about it.
+_OPERATOR = re.compile(r"[=<>≤≥+\-*/^√]")
 
 
 class Recognition(BaseModel):
@@ -94,6 +99,20 @@ class Recognizer:
             images=[jpeg],
             schema=Recognition,
         )
+        # A lone term is not an equation. The model lists the thing being
+        # asked about ("a_10") beside the real ones, and downstream that term
+        # is a third equation that never matches anything: EXACT compares
+        # lists pairwise and by LENGTH, so one stray entry pushes a known
+        # problem down to CONCEPT and starts a solver run for nothing.
+        # Operator-free is the test, not relation-free — "x**2 - 4" from a
+        # factorization problem is an equation list entry worth keeping.
+        kept = [e for e in rec.equations if _OPERATOR.search(e)]
+        if kept != rec.equations:
+            log.info("dropped %d bare term(s) from equations: %s",
+                     len(rec.equations) - len(kept),
+                     [e for e in rec.equations if e not in kept])
+            rec.equations = kept
+
         # Whitelist enforcement in Python — never trust the model's ids.
         said_type, said_concepts = rec.problem_type, rec.concepts
         rec.problem_type = normalize_problem_type(rec.problem_type)

@@ -124,6 +124,33 @@ class TestMergedRecognitionTags:
         assert rec.concepts == ["linear_equation"]        # invented concept dropped
         assert llm.calls == ["recognize"]                 # and no second call
 
+    def test_a_bare_term_is_not_an_equation(self):
+        """The model lists the quantity asked for ("a_10") beside the real
+        equations. Downstream that stray entry is a third equation matching
+        nothing: EXACT compares lists by length, so it pushed a KNOWN problem
+        down to CONCEPT and started a solver run for nothing."""
+        from tutor.vision.recognizer import Recognizer
+
+        llm = EchoLLMClient({"recognize": [{
+            "problem_text": "등비수열 문제",
+            "equations": ["2*(a_1 + a_4) = a_7 = 6", "a_10", "   "],
+            "confidence": 0.95,
+        }]})
+        rec = Recognizer(llm).recognize(b"\xff\xd8jpeg")
+        assert rec.equations == ["2*(a_1 + a_4) = a_7 = 6"]
+
+    def test_an_expression_without_a_relation_survives(self):
+        """"x**2 - 4" from a factorization problem states no relation and is
+        still the thing the problem is about — operator-free is the test."""
+        from tutor.vision.recognizer import Recognizer
+
+        llm = EchoLLMClient({"recognize": [{
+            "problem_text": "다음을 인수분해하시오",
+            "equations": ["x**2 - 4"],
+            "confidence": 0.95,
+        }]})
+        assert Recognizer(llm).recognize(b"\xff\xd8jpeg").equations == ["x**2 - 4"]
+
 
 class TestTagsInTheSession:
     """Once per problem: tags arrive with the recognition and stay stable."""
