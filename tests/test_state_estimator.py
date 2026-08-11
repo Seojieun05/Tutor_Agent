@@ -54,6 +54,50 @@ class TestHintWasEffective:
         assert not hint_was_effective(self.prev, new)
 
 
+class TestUncertainEcho:
+    """A model shown a previous UNCERTAIN tends to answer UNCERTAIN. Live,
+    one blurry photo early in a problem turned every later work check into
+    UNCERTAIN → probe, forever — with a legible page and real work on it."""
+
+    WORK = Recognition(
+        problem_text="다음 일차방정식을 푸시오: 3x + 5 = 20",
+        equations=["3*x + 5 = 20"],
+        student_work=["3*x = 20 + 5"],       # wrong sign: a diagnosable page
+        confidence=0.95,
+    )
+
+    def test_an_uncertain_echo_gets_a_second_unbiased_look(self, db):
+        llm = EchoLLMClient({"estimate": [
+            {"current_step": "?", "last_correct_step": 0, "status": "UNCERTAIN",
+             "misconception": None, "attempt_count": 2, "previous_hint_effective": None},
+            {"current_step": "이항", "last_correct_step": 0, "status": "CONCEPT_ERROR",
+             "misconception": "sign_flip_on_move", "attempt_count": 2,
+             "previous_hint_effective": False},
+        ]})
+        est = StudentStateEstimator(llm, db)
+        state = est.estimate(
+            rec=self.WORK, reference=REFERENCE,
+            prev_state=StudentState(status="UNCERTAIN"),   # the bias source
+            prev_work=None, history=[],
+        )
+        assert llm.calls.count("estimate") == 2            # the fresh-eyes retry
+        assert state.status == "CONCEPT_ERROR"             # and it saw the page
+
+    def test_uncertain_without_a_previous_state_stands(self, db):
+        """No bias to shed → nothing to retry: a first-look UNCERTAIN is real."""
+        llm = EchoLLMClient({"estimate": [
+            {"current_step": "?", "last_correct_step": 0, "status": "UNCERTAIN",
+             "misconception": None, "attempt_count": 1, "previous_hint_effective": None},
+        ]})
+        est = StudentStateEstimator(llm, db)
+        state = est.estimate(
+            rec=self.WORK, reference=REFERENCE,
+            prev_state=None, prev_work=None, history=[],
+        )
+        assert llm.calls.count("estimate") == 1
+        assert state.status == "UNCERTAIN"
+
+
 class TestPreChecks:
     def test_low_confidence_uncertain_no_llm(self, db):
         llm = EchoLLMClient()

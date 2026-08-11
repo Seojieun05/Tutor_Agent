@@ -79,6 +79,24 @@ class StudentStateEstimator:
             user=self._build_context(rec, reference, prev_state, history, transcript),
             schema=StudentState,
         )
+        if (
+            state.status == "UNCERTAIN"
+            and prev_state is not None
+            and rec.student_work
+            and rec.confidence >= self.conf_threshold
+        ):
+            # A model shown a previous UNCERTAIN tends to echo it — live, one
+            # blurry photo early in a problem turned every later work check
+            # into UNCERTAIN → probe, forever. The page is legible and there
+            # IS work on it: look again with fresh eyes (no previous state, no
+            # history) before giving up on a verdict.
+            log.info("estimate UNCERTAIN on a legible page; retrying without bias")
+            state = self.llm.run_with_tools(
+                purpose="estimate",
+                system=_SYSTEM,
+                user=self._build_context(rec, reference, None, [], transcript),
+                schema=StudentState,
+            )
         return self._post_rules(state, reference, prev_state, rec)
 
     # --- deterministic pre-checks: no LLM call -------------------------------
