@@ -308,10 +308,8 @@ async def test_a_new_problem_does_not_get_the_work_narration(db):
 
 def test_readout_strips_exam_numbering_and_point_tags():
     rec = Recognition(problem_text="6.  1보다 큰 두 실수 a, b가\n주어질 때 값은? [3점]")
-    assert readout_of(rec) == [
-        READOUT_OPENER,
-        "1보다 큰 두 실수 a, b가 주어질 때 값은?",
-    ]
+    # just the problem: the opener moved to the turn's delay-gated filler slot
+    assert readout_of(rec) == ["1보다 큰 두 실수 a, b가 주어질 때 값은?"]
 
 
 def test_the_readout_closer_stays_retired():
@@ -332,9 +330,15 @@ async def test_a_new_problem_is_read_back_while_the_tutor_thinks(db):
     # the narration is queued after recognize; give the filler task one beat
     await asyncio.sleep(0)
 
+    from tutor.speech.filler import FILLER_PHRASES
+
     opener_at = speaker.spoken.index(READOUT_OPENER)
     problem_at = next(i for i, s in enumerate(speaker.spoken) if "일차방정식" in s)
     assert opener_at < problem_at
+    # ONE filler, and it is the readout opener doing double duty — the old
+    # generic "음, 살펴보고 있어요" no longer stacks in front of it
+    assert speaker.spoken.count(READOUT_OPENER) == 1
+    assert not any(s in FILLER_PHRASES for s in speaker.spoken)
     # the retired closer stays retired, and the readout never outlives the
     # answer: the hint is the LAST thing said
     assert not any(s in READOUT_CLOSERS.values() for s in speaker.spoken)
@@ -348,13 +352,13 @@ async def test_the_same_problem_is_not_read_back_twice(db):
     session, llm, speaker, ws = build(db, "이 문제 힌트 줄래?")
 
     await session._handle_utterance(PCM, 16000)      # first sight: readout queued
-    first = speaker.spoken.count(READOUT_OPENER)
-    assert first == 1
+    readouts = lambda: sum("일차방정식" in s for s in speaker.spoken)  # noqa: E731
+    assert readouts() == 1
 
     await session.handle_hint_request()              # same worksheet, second turn
 
-    again = speaker.spoken.count(READOUT_OPENER)
-    assert again == first                            # no second readout
+    # the OPENER may repeat (it is the turn's filler now); the PROBLEM may not
+    assert readouts() == 1
 
 
 # --- the race the filler must always lose ------------------------------------

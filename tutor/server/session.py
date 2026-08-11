@@ -157,10 +157,12 @@ def answer_core(transcript: str) -> str | None:
 
 
 def readout_of(rec: Recognition) -> list[str]:
-    """The problem, read back while the tagger and phraser think — as two
-    LINES, because the split is what the latency comes down to: the opener
-    never changes, so its audio is already rendered (CachedSpeech), and the
-    problem itself is the only line that pays for TTS.
+    """The problem, read back while the tagger and phraser think.
+
+    Just the problem line now: READOUT_OPENER moved to the turn's delay-gated
+    opener slot, so "좋아요, 문제 확인해 볼게요" plays ~1s in (while the camera
+    works) instead of stacking on a generic filler at recognition's end — one
+    filler per turn, every turn type.
 
     Also the moment a misread photo gets caught: the student hears what the
     tutor believes the problem says, seconds before any hint depends on it.
@@ -174,7 +176,7 @@ def readout_of(rec: Recognition) -> list[str]:
     # it through displayable() — one narration, two renderings
     if len(text) > 130:
         text = text[:130] + "…"
-    return [READOUT_OPENER, text]
+    return [text]
 
 
 def _solve_dead(task: asyncio.Task | None) -> bool:
@@ -536,7 +538,15 @@ class Session:
         # moved. Rotated, because the fifth identical opener sounds like a machine.
         bank = self.deps.fillers
         # no bank → _start_filler is a no-op anyway, so the opener is moot
-        opener = bank.rotate(WORK_CHECK_OPENERS, "opener") if question and bank else None
+        opener = None
+        if bank:
+            # ONE filler per turn, and it announces the turn's actual job. The
+            # hint turn used to spend two ("음, 살펴보고 있어요" then "좋아요,
+            # 문제 확인해 볼게요" when the readout began) — the readout opener
+            # is now THE opener, spoken at delay-time while the camera works,
+            # and the readout itself is just the problem line.
+            opener = (bank.rotate(WORK_CHECK_OPENERS, "opener") if question
+                      else READOUT_OPENER)
         self._start_filler(opener)
         try:
             with timing.turn("WORK_CHECK" if question else "HINT_REQUEST"):
