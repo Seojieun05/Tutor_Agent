@@ -9,6 +9,7 @@ The camera here answers on the session's own socket, which is what a phone
 running tutor/web/phone.html does: capture_request in, one JPEG back.
 """
 
+import asyncio
 import json
 
 import pytest
@@ -396,6 +397,94 @@ async def test_thinking_out_loud_is_left_alone(db):
     # the device is told a transcript arrived, but that no reply is coming
     transcript = next(e for e in ws.events if e["event"] == "transcript")
     assert transcript["data"]["wants_hint"] is False
+
+
+async def test_a_work_check_sticks_to_its_problem_on_an_inconclusive_reread(db):
+    """The live failure: mid-string re-read drift (a comma, a dropped 보기)
+    beat both the hash and the text prefix, so the work check "changed
+    problem", reset state, and answered a yes/no question with an L1 hint.
+    Without POSITIVE evidence of a different problem, a work check stays."""
+    session, llm, speaker, ws = build(
+        db,
+        "풀이 맞아?",
+        llm_responses={
+            "recognize": [dict(
+                problem_text="일차방정식 3x + 5 = 20 을, 참고하여 푸시오",  # drifted read
+                equations=["방정식의 해 = 미지수"],                        # unparseable junk
+                student_work=["3*x = 15"], choices=[],
+                diagram_conditions=[], uncertain_regions=[], confidence=0.9,
+            )],
+            "estimate": [{"current_step": "이항", "last_correct_step": 1,
+                          "status": "CORRECT", "misconception": None,
+                          "attempt_count": 1, "previous_hint_effective": True}],
+        },
+    )
+    ask_l1(session)
+    before = session.ctx
+
+    await session._handle_utterance(PCM, 16000)
+
+    assert session.ctx is before                 # no reset on a wobbly read
+    assert llm.calls.count("solve") == 0
+    # the verdict actually ran — "3*x = 15" matches the reference step
+    # mechanically, so it needs no LLM, just the kept context
+    assert any(s.startswith("맞아요! 이대로") for s in speaker.spoken)
+
+
+async def test_a_work_check_still_switches_on_clear_evidence(db):
+    """Stickiness is not blindness: equations that parse and DISAGREE are a
+    different problem, work check or not."""
+    session, llm, speaker, ws = build(
+        db,
+        "풀이 맞아?",
+        llm_responses={"recognize": [dict(
+            problem_text="이차방정식을 푸시오: x**2 = 4",
+            equations=["x**2 = 4"], student_work=[], choices=[],
+            diagram_conditions=[], uncertain_regions=[], confidence=0.95,
+        )]},
+    )
+    ask_l1(session)
+    before = session.ctx
+
+    await session._handle_utterance(PCM, 16000)
+
+    assert session.ctx is not before             # genuinely new problem
+
+
+async def test_a_work_check_waits_for_the_reference_instead_of_hinting(db):
+    """The other half of the live failure: the solver was still writing the
+    reference, and the work check shrugged into a first hint from concepts.
+    A yes/no question waits for its measuring stick and answers."""
+    import threading
+
+    gate = threading.Event()
+
+    async def slow_solve():
+        await asyncio.to_thread(gate.wait, 5)
+        return REFERENCE
+
+    session, llm, speaker, ws = build(
+        db,
+        "풀이 맞아?",
+        llm_responses={
+            "recognize": [seen(["3*x = 15", "x = 5"])],
+            "estimate": [{"current_step": "완료", "last_correct_step": 2,
+                          "status": "CORRECT", "misconception": None,
+                          "attempt_count": 1, "previous_hint_effective": True}],
+        },
+    )
+    ask_l1(session)
+    session.ctx.reference = None                          # solver still writing
+    session.ctx.solving = asyncio.create_task(slow_solve())
+
+    turn = asyncio.create_task(session._handle_utterance(PCM, 16000))
+    await asyncio.sleep(0.05)
+    assert not turn.done()                                # waiting, not hinting
+    gate.set()
+    await turn
+
+    spoken = " ".join(speaker.spoken)
+    assert "맞아요" in spoken                              # the verdict, not an L1 question
 
 
 # --- the evaluator's safety net ---------------------------------------------

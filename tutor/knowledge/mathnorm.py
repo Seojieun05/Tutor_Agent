@@ -163,6 +163,17 @@ def _residuals_equivalent(
     return False
 
 
+def parseable_claims(s: str) -> bool:
+    """Can this line be compared mechanically at all? The session uses this to
+    tell "the equations DISAGREE" (positive evidence of a different problem)
+    from "the comparison never happened" (a re-read hiccup)."""
+    try:
+        _residual_pairs(s)
+        return True
+    except Exception:  # noqa: BLE001 — sympy throws many things on junk input
+        return False
+
+
 def equations_equivalent(a: str, b: str, allow_scale: bool = True) -> bool:
     """allow_scale=True treats scalar multiples (6x+10=40 vs 3x+5=20) as
     equivalent. allow_scale=False accepts only the same equation (side swap

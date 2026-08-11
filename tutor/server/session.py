@@ -853,7 +853,11 @@ class Session:
                 # the middle one costs TTS.
                 for line in readout_of(rec):
                     self._narrate(line)
-        ctx = await self._problem_context(rec)
+        # A work check holds onto its problem: the student is asking about the
+        # work in front of them, and a re-read wobble must not reset the very
+        # context that can grade it (the 등비수열 sessions did exactly that).
+        keep = bool(question) and not self._clearly_different_problem(rec)
+        ctx = await self._problem_context(rec, keep_current=keep)
 
         # Diagnose before helping (spec rule 4). State/history are prefetched
         # here by the orchestrator — never fetched by the model itself.
@@ -862,6 +866,18 @@ class Session:
         prev_state = self.store.get_state()
         history = self.store.get_history(problem_hash=ctx.hash)
         reference = ctx.reference_if_ready()
+        if reference is None and question and not _solve_dead(ctx.solving):
+            # "풀이 맞아?" is a yes/no question and the reference is its
+            # measuring stick. The hint path shrugs and opens from concepts —
+            # a work check WAITS: answering a verdict question with another
+            # question was this turn's live failure mode. The stage line and
+            # the opener cover the wait on screen and in the ear.
+            await self._stage("기준 풀이를 계산하고 있어요")
+            try:
+                reference = await ctx.reference_ready()
+            except Exception:
+                log.exception("solver died during a work check; diagnosing from concepts")
+                reference = None
         if reference is None:
             # The solver is still writing the reference solution. The full
             # diagnosis compares work against that solution, so it cannot run
@@ -991,9 +1007,38 @@ class Session:
         shorter, longer = sorted((a, b), key=len)
         return len(shorter) >= 20 and longer.startswith(shorter)
 
-    async def _problem_context(self, rec: Recognition) -> ProblemContext:
+    def _clearly_different_problem(self, rec: Recognition) -> bool:
+        """POSITIVE evidence that this is another problem: equations that
+        parse on both sides, compare pair by pair, and disagree. Anything
+        less — a chain the parser choked on, a count that shifted, a text
+        that drifted mid-string — is a re-read hiccup as easily as a new
+        page. A work check stays on the problem whose work it is checking
+        unless the evidence clears this bar.
+        """
+        if self.ctx is None:
+            return False
+        cached = self.ctx.recognition
+        if not rec.equations or len(rec.equations) != len(cached.equations):
+            return False
+        both = (*rec.equations, *cached.equations)
+        if any(re.search(r"[가-힣]", eq) for eq in both):
+            # sympy happily parses Korean words as symbols, which would let a
+            # junk read count as "clear evidence" — words are not equations
+            return False
+        if not all(mathnorm.parseable_claims(eq) for eq in both):
+            return False
+        return not all(
+            mathnorm.equations_equivalent(a, b, allow_scale=False)
+            for a, b in zip(rec.equations, cached.equations)
+        )
+
+    async def _problem_context(
+        self, rec: Recognition, keep_current: bool = False
+    ) -> ProblemContext:
         h = problem_hash(rec)
-        if self.ctx is not None and (self.ctx.hash == h or self._same_problem(rec)):
+        if self.ctx is not None and (
+            keep_current or self.ctx.hash == h or self._same_problem(rec)
+        ):
             # Cached problem: reuse match/reference and the tags (the problem
             # did not change, only the student's work). Re-tagging here would
             # pay for an LLM call per hint and let the tags drift mid-problem.
