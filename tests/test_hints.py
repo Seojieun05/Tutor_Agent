@@ -275,6 +275,26 @@ class TestTheBoard:
         text = gen.generate(decision(1), self._llm_match(), LIN_REF, self.SEEN, [])
         assert text.board == ("a_4 = a_1 * r**3",)
 
+    def test_a_graph_rides_along_and_is_gated_the_same_way(self, db):
+        """A curve is another way of saying something: an EXPRESSION answer
+        plotted is that answer given, so the guard screens it too."""
+        llm = EchoLLMClient({"phrase": [
+            {"hint": "그래프의 개형을 떠올려 볼까요?", "board": [],
+             "graph": ["y = x**2 - 4*x + 3"]},
+        ]})
+        gen = HintGenerator(llm, db)
+        text = gen.generate(decision(1), self._llm_match(), LIN_REF, self.SEEN, [])
+        assert text.graph == ("x**2 - 4*x + 3",)      # "y =" stripped, ready to plot
+
+        leaky = EchoLLMClient({"phrase": [
+            {"hint": "이 함수를 그려 볼까요?", "board": [],
+             "graph": ["3*x**2 + 2*x"]},               # DERIV_REF's answer itself
+        ]})
+        drawn = HintGenerator(leaky, db).generate(
+            decision(1, target=0), self._llm_match(), DERIV_REF, self.SEEN, []
+        )
+        assert drawn.graph == ()                       # nothing is drawn
+
     def test_paths_without_a_board_read_as_an_empty_one(self, db):
         gen = HintGenerator(EchoLLMClient(), db)
         text = gen.generate(

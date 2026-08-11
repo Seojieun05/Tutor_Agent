@@ -43,6 +43,7 @@ from tutor.hints.generator import (
     strip_leading_acknowledgement,
     visible_to_student,
 )
+from tutor.hints import plot
 from tutor.hints.guard import leaks_answer
 from tutor.knowledge import mathnorm
 from tutor.knowledge.matching import Matcher, problem_hash
@@ -764,11 +765,12 @@ class Session:
         except Exception:
             hint_task.cancel()
             raise
-        board = getattr(text, "board", ())  # before any strip loses the subclass
+        # read before any strip loses the subclass that carries them
+        board, graph = getattr(text, "board", ()), getattr(text, "graph", ())
         if spoke_feedback:
             # one acknowledgement per turn: the reaction already was it
             text = strip_leading_acknowledgement(text)
-        await self._deliver(decision, text, ctx.hash, board)
+        await self._deliver(decision, text, ctx.hash, board, graph)
 
     async def _answer_question(
         self, ctx: ProblemContext, pending: HintRecord, question: str
@@ -1024,10 +1026,11 @@ class Session:
         except Exception:
             hint_task.cancel()
             raise
-        board = getattr(text, "board", ())  # before any strip loses the subclass
+        # read before any strip loses the subclass that carries them
+        board, graph = getattr(text, "board", ()), getattr(text, "graph", ())
         if spoke_reaction:
             text = strip_leading_acknowledgement(text)
-        await self._deliver(decision, text, ctx.hash, board)
+        await self._deliver(decision, text, ctx.hash, board, graph)
 
     @staticmethod
     def _work_reaction(state: StudentState) -> str:
@@ -1256,7 +1259,7 @@ class Session:
 
     async def _deliver(
         self, decision: Decision, text: str, problem_hash: str = "",
-        board: tuple[str, ...] = (),
+        board: tuple[str, ...] = (), graph: tuple[str, ...] = (),
     ) -> None:
         if board:
             # written as the voice starts, like a tutor's hand reaching the
@@ -1267,6 +1270,18 @@ class Session:
                 ))
             except Exception:
                 log.debug("could not send board event (connection gone)")
+        if graph:
+            # sympy samples the curve here and ships markup, so the page needs
+            # no plotting library and the drawing is one more thing the leak
+            # guard has already seen
+            svg = await asyncio.to_thread(plot.function_svg, list(graph))
+            if svg:
+                try:
+                    await self.ws.send(make_event(
+                        "figure", {"svg": svg, "of": ", ".join(graph)}
+                    ))
+                except Exception:
+                    log.debug("could not send figure event (connection gone)")
         if text:
             await self._speak(text)
         self.store.append_hint(

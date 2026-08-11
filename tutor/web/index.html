@@ -144,6 +144,14 @@
   }
   .boardline:last-child { border-bottom:none; }
   .boardline .katex { font-size:1.15em; }
+  /* a function sketched on the board: axes, a light grid, the curve */
+  .boardfigure { padding:.5rem 0; }
+  .boardfigure svg { display:block; width:100%; height:auto; }
+  .boardfigure .grid line { stroke:var(--line); stroke-width:1; }
+  .boardfigure .axes line { stroke:var(--dim); stroke-width:1.4; }
+  .boardfigure .ticks text { fill:var(--dim); font-size:10px; font-family:var(--font); }
+  .boardfigure .legend { font-size:12px; font-family:var(--math); }
+
   /* what the tutor deliberately WROTE, as opposed to math inside a sentence */
   .boardline.key {
     border-left:3px solid var(--accent); padding-left:.8rem;
@@ -528,6 +536,7 @@ function onEvent(msg) {
     case "transcript":  addTurn("you", d.text || "(인식 실패)"); break;
     case "tutor_says":  addTurn("tutor", d.text); break;
     case "board":       for (const line of d.lines || []) boardWrite(line); break;
+    case "figure":      boardDraw(d.svg, d.of); break;
     case "stage":       setStage(d.text); break;
     case "solved":      addSolved(d.text); break;
     case "problem":     showProblem(d); break;
@@ -634,6 +643,23 @@ function boardClear() {
   empty.id = "boardEmpty";
   empty.textContent = "튜터가 짚어 주는 수식이 여기에 나타나요.";
   lines.appendChild(empty);
+}
+
+/** A function sketched on the board. The markup is built by the server (sympy
+    samples the curve there), so this only has to place it — and the same leak
+    guard that screens the spoken hint has already seen it. */
+function boardDraw(svg, of) {
+  const key = `figure:${of || svg.length}`;
+  if (!svg || boardSeen.has(key)) return;
+  boardSeen.add(key);
+  const empty = document.getElementById("boardEmpty");
+  if (empty) empty.remove();
+  const box = document.createElement("div");
+  box.className = "boardfigure";
+  box.innerHTML = svg;
+  const lines = $("boardLines");
+  lines.appendChild(box);
+  lines.scrollTop = lines.scrollHeight;
 }
 
 /** The board shows ONLY what the tutor deliberately wrote (the `board`
