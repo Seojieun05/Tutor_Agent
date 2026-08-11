@@ -97,6 +97,47 @@ class TestUncertainEcho:
         assert llm.calls.count("estimate") == 1
         assert state.status == "UNCERTAIN"
 
+    def test_an_old_misconception_repeated_on_changed_work_gets_fresh_eyes(self, db):
+        """The other parrot, live: work corrected from r to r**3, and the
+        model repeated the r-relation misconception word for word. A changed
+        page with an unchanged diagnosis is suspect — look again unbiased."""
+        stale_misc = "등비수열의 관계를 r로 잘못 설정함"
+        llm = EchoLLMClient({"estimate": [
+            {"current_step": "비 세우기", "last_correct_step": 0,
+             "status": "CONCEPT_ERROR", "misconception": stale_misc,
+             "attempt_count": 3, "previous_hint_effective": False},
+            {"current_step": "비 세우기", "last_correct_step": 1, "status": "CORRECT",
+             "misconception": None, "attempt_count": 3, "previous_hint_effective": True},
+        ]})
+        est = StudentStateEstimator(llm, db)
+        state = est.estimate(
+            rec=self.WORK, reference=REFERENCE,
+            prev_state=StudentState(status="CONCEPT_ERROR", misconception=stale_misc),
+            prev_work=["다른 줄"],                      # the page CHANGED
+            history=[],
+        )
+        assert llm.calls.count("estimate") == 2
+        assert state.status == "CORRECT"
+
+    def test_the_same_diagnosis_on_the_same_page_is_not_an_echo(self, db):
+        """Unchanged work showing the same mistake SHOULD keep its diagnosis —
+        no retry, no second-guessing."""
+        stale_misc = "등비수열의 관계를 r로 잘못 설정함"
+        llm = EchoLLMClient({"estimate": [
+            {"current_step": "비 세우기", "last_correct_step": 0,
+             "status": "CONCEPT_ERROR", "misconception": stale_misc,
+             "attempt_count": 3, "previous_hint_effective": False},
+        ]})
+        est = StudentStateEstimator(llm, db)
+        state = est.estimate(
+            rec=self.WORK, reference=REFERENCE,
+            prev_state=StudentState(status="CONCEPT_ERROR", misconception=stale_misc),
+            prev_work=list(self.WORK.student_work),     # identical page
+            history=[],
+        )
+        assert llm.calls.count("estimate") == 1
+        assert state.status == "CONCEPT_ERROR"
+
     def test_a_stubborn_uncertain_gets_the_standby_models_opinion(self, db):
         """Live: the routed small model answered UNCERTAIN even with fresh
         eyes, and the turn looped into "다시 보여 줄래요?" forever. One

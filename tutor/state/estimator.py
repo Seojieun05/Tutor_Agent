@@ -23,6 +23,13 @@ _SYSTEM = """You diagnose where a student is stuck by comparing their handwritte
 to a reference solution. Be conservative: use "UNCERTAIN" when unsure, never guess.
 
 Rules:
+- The reference is ONE valid path, not the only one. Work that is mathematically
+  sound and consistent with the problem is correct progress even when no
+  reference step resembles it — judge the mathematics on the page, not the
+  resemblance to the reference.
+- A previous diagnosis is context, not evidence. When the written work has
+  changed, re-derive the diagnosis from what is on the page NOW; repeating an
+  earlier misconception requires the CURRENT work to still show it.
 - Treat the student's latest spoken response as valid evidence of understanding,
   even when the handwritten work is empty or unchanged.
 - last_correct_step: highest reference step index the student has completed correctly (0 = none).
@@ -101,6 +108,25 @@ class StudentStateEstimator:
             # IS work on it: look again with fresh eyes (no previous state, no
             # history) before giving up on a verdict.
             log.info("estimate UNCERTAIN on a legible page; retrying without bias")
+            state = self.llm.run_with_tools(
+                purpose="estimate",
+                system=_SYSTEM,
+                user=self._build_context(rec, reference, None, [], transcript),
+                schema=StudentState,
+            )
+        if (
+            state.status != "CORRECT"
+            and prev_state is not None
+            and prev_state.misconception
+            and state.misconception == prev_state.misconception
+            and prev_work is not None
+            and rec.student_work != prev_work
+        ):
+            # The page CHANGED but the diagnosis repeats the old misconception
+            # word for word — the other parrot (live: work corrected from r to
+            # r**3, still "diagnosed" with the r-relation misconception). Same
+            # medicine as the UNCERTAIN echo: one look with fresh eyes.
+            log.info("old misconception repeated on changed work; retrying without bias")
             state = self.llm.run_with_tools(
                 purpose="estimate",
                 system=_SYSTEM,
