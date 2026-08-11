@@ -96,6 +96,11 @@ number. Leave it empty unless seeing the curve is the point; a problem that is
 solved by algebra needs no picture.
 
 HOW TO TEACH (this is the part that matters)
+- Aim at the diagnosed mistake first. When a misconception is given, THAT is
+  what this hint is for: point at the line where it shows and let them look
+  again. Praising work they already did right and then nudging them toward the
+  next step leaves the actual error untouched, and they will hand it back to
+  you unchanged.
 - Active learning: leave the thinking to them. The best hint is the weakest one
   that still unblocks — productive struggle is the lesson, not an obstacle.
 - Cognitive load: one idea per turn. One question, not two. Never a checklist.
@@ -511,9 +516,20 @@ class HintGenerator:
             )
 
         if decision.misconception:
+            # A named mistake outranks the target step. Live: a student wrote
+            # the product rule correctly but differentiated -2x as -2x, the
+            # estimator named exactly that, and the hint still aimed at the
+            # target step — praising the structure they had already built and
+            # pointing at a term they had already written right, while the
+            # slip went unmentioned. The step is where they are GOING; the
+            # misconception is what is stopping them.
             m = self.db.get_misconception(decision.misconception)
             parts.append(
-                f"진단된 오개념: {m.description if m else decision.misconception}"
+                f"진단된 오개념 (이번 힌트가 다뤄야 할 바로 그것): "
+                f"{m.description if m else decision.misconception}\n"
+                "이 오개념이 드러난 줄을 짚어 학생이 스스로 다시 보게 하세요. "
+                "이미 제대로 쓴 부분을 다시 시키거나, 이 오류와 무관한 다음 단계로 "
+                "넘어가지 마세요. 고쳐 쓴 식은 알려주지 말고, 어디를 다시 볼지까지만."
             )
         if "step" in slots:
             # Every level is aimed at the SAME target step; only L4 may say it
@@ -522,8 +538,14 @@ class HintGenerator:
             if decision.level >= 4:
                 parts.append(f"알려줘도 되는 다음 단계: {slots['step']}")
             else:
+                aim = (
+                    "참고로 학생이 향하는 단계 (오개념을 먼저 다루고, 그 다음에만 "
+                    "쓸 것, 절대 그대로 말하지 말 것)"
+                    if decision.misconception
+                    else "학생이 지금 해내야 하는 단계 (절대 그대로 말하지 말 것)"
+                )
                 parts.append(
-                    f"학생이 지금 해내야 하는 단계 (절대 그대로 말하지 말 것): {slots['step']}\n"
+                    f"{aim}: {slots['step']}\n"
                     "이 단계를 학생이 스스로 떠올리도록 이끄는 내용만 말하세요."
                 )
         if history:

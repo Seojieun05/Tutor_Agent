@@ -230,6 +230,58 @@ class TestTheirWorkReachesThePrompt:
         assert "쓴 풀이" not in llm.prompts["phrase"]
 
 
+class TestTheHintAimsAtTheMistake:
+    """Live: a student wrote the product rule correctly but differentiated
+    -2x as -2x. The estimator named exactly that, and the hint still aimed at
+    the target step — praising the structure they had already built and
+    pointing at a term they had already written right, while the slip went
+    unmentioned. A named mistake outranks the step."""
+
+    class Recording(EchoLLMClient):
+        def __init__(self, responses=None):
+            super().__init__(responses)
+            self.prompt = ""
+
+        def run_with_tools(self, *, purpose, system, user, images=(), schema, max_rounds=6):
+            if purpose == "phrase":
+                self.prompt = user
+            return super().run_with_tools(
+                purpose=purpose, system=system, user=user, images=images,
+                schema=schema, max_rounds=max_rounds,
+            )
+
+    def _match(self):
+        return MatchResult(tier=Tier.NEW, concepts=["unknown_concept"], reference=LIN_REF)
+
+    def test_the_misconception_is_named_as_the_hints_job(self, db):
+        llm = self.Recording()
+        HintGenerator(llm, db).generate(
+            decision(2, misconception="2x의 미분을 2가 아닌 2x로 계산함"),
+            self._match(), LIN_REF, Recognition(problem_text="p"), [],
+        )
+        assert "2x의 미분을 2가 아닌 2x로 계산함" in llm.prompt
+        assert "이번 힌트가 다뤄야 할 바로 그것" in llm.prompt
+        # and the step is demoted to context, not the target
+        assert "참고로 학생이 향하는 단계" in llm.prompt
+
+    def test_without_a_misconception_the_step_is_still_the_target(self, db):
+        llm = self.Recording()
+        HintGenerator(llm, db).generate(
+            decision(2), self._match(), LIN_REF, Recognition(problem_text="p"), [],
+        )
+        assert "학생이 지금 해내야 하는 단계" in llm.prompt
+        assert "참고로 학생이 향하는 단계" not in llm.prompt
+
+    def test_l4_still_gets_to_say_the_step(self, db):
+        """The escape hatch is unchanged: at L4 the step may be spoken."""
+        llm = self.Recording()
+        HintGenerator(llm, db).generate(
+            decision(4, misconception="부호를 반대로 옮김"),
+            self._match(), LIN_REF, Recognition(problem_text="p"), [],
+        )
+        assert "알려줘도 되는 다음 단계" in llm.prompt
+
+
 class TestTheBoard:
     """What the tutor WRITES travels with what it says, through the same gate:
     writing "x = 5" while carefully not saying it is still giving the answer."""
