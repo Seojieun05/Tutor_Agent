@@ -45,6 +45,15 @@ class TestEquivalence:
         assert not equations_equivalent("3*x + 5 = 20", "3*x + 5 = 21")
         assert not equations_equivalent("3*x + 5 = 20", "x**2 = 4")
 
+    def test_chain_equalities_compare_claim_by_claim(self):
+        """a = b = c is two claims, not a parse error — the 등비수열 shape
+        that used to reset the student's problem on every re-read."""
+        chain = "2*(a_1 + a_4 + a_7) = a_4 + a_7 + a_10 = 6"
+        assert equations_equivalent(chain, "2*(a_1+a_4+a_7) = a_4+a_7+a_10 = 6")
+        assert not equations_equivalent(chain, "2*(a_1 + a_4 + a_7) = a_4 + a_7 + a_10 = 7")
+        # a chain and a single equation are different claim counts
+        assert not equations_equivalent(chain, "a_4 + a_7 + a_10 = 6")
+
     def test_derivative_forms(self):
         assert equations_equivalent("d/dx(x**3 + 2*x)", "Derivative(2*x + x**3, x)")
         assert not equations_equivalent("Derivative(x**3, x)", "Derivative(x**2, x)")

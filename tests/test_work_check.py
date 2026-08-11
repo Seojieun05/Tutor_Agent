@@ -183,6 +183,52 @@ async def test_a_work_check_reuses_the_problem_it_is_already_on(db):
     assert llm.calls.count("tag") == 0
 
 
+async def test_a_chain_equality_reread_stays_the_same_problem(db):
+    """The 등비수열 regression: a = b = c cannot be sympy-parsed, and an
+    unparseable comparison used to mean "different problem" — resetting the
+    student's state and re-solving MID work check. Inconclusive now falls
+    through to the (truncation-tolerant) problem text."""
+    chain = "2*(a_1 + a_4 + a_7) = a_4 + a_7 + a_10 = 6"
+    known = Recognition(
+        problem_text="12. 등비수열 {a_n}이 2(a_1+a_4+a_7) = a_4+a_7+a_10 = 6 을 만족시킬 때, 공비를 구하시오.",
+        equations=[chain],
+        student_work=[],
+        confidence=0.95,
+    )
+    session, llm, speaker, ws = build(
+        db,
+        "풀이 맞아?",
+        llm_responses={
+            "recognize": [dict(
+                # the re-read: same problem, spacing shifted, text cut short
+                problem_text="12. 등비수열 {a_n}이\n2(a_1 + a_4 + a_7) = a_4 + a_7 + a_10 = 6\n을 ",
+                equations=["2*(a_1 + a_4 + a_7) = a_4 + a_7 + a_10 = 6"],
+                student_work=["2*(a_1+a_4+a_7) = r**3 * (a_1+a_4+a_7)"],
+                choices=[], diagram_conditions=[], uncertain_regions=[],
+                confidence=0.98,
+            )],
+            "estimate": [{"current_step": "비 세우기", "last_correct_step": 1,
+                          "status": "CORRECT", "misconception": None,
+                          "attempt_count": 1, "previous_hint_effective": True}],
+        },
+    )
+    session.ctx = ProblemContext(
+        hash=problem_hash(known),
+        recognition=known,
+        match=MatchResult(tier=Tier.NEW, concepts=["geometric_sequence"],
+                          reference=REFERENCE),
+        reference=REFERENCE,
+    )
+    before = session.ctx
+
+    await session._handle_utterance(PCM, 16000)
+
+    assert session.ctx is before                     # SAME problem, kept
+    assert llm.calls.count("solve") == 0             # no re-solve
+    assert llm.calls.count("estimate") == 1          # the verdict actually ran
+    assert session.store.get_state() is not None     # state survived, not reset
+
+
 async def test_correct_work_is_confirmed_and_not_hinted_at(db):
     """'풀이 맞아?' is a yes/no question. When the answer is yes, say yes.
 

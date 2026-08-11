@@ -955,13 +955,24 @@ class Session:
             return False
         cached = self.ctx.recognition
         if rec.equations and len(rec.equations) == len(cached.equations):
-            return all(
+            if all(
                 mathnorm.equations_equivalent(a, b, allow_scale=False)
                 for a, b in zip(rec.equations, cached.equations)
-            )
-        return bool(rec.problem_text) and mathnorm.normalize_text(
-            rec.problem_text
-        ) == mathnorm.normalize_text(cached.problem_text)
+            ):
+                return True
+            # Inconclusive is not "different": unparseable or shifted reads
+            # fall through to the text. Declaring a new problem here reset the
+            # student's state and orphaned their pending hint MID-PROBLEM —
+            # the 등비수열 chain equality did exactly that on every re-read.
+        a = mathnorm.normalize_text(rec.problem_text)
+        b = mathnorm.normalize_text(cached.problem_text)
+        if not a or not b:
+            return False
+        # The VLM truncates long problem statements at different points on
+        # different reads; a read that is a clean prefix of the other (with
+        # enough of it to mean something) is the same problem, shorter.
+        shorter, longer = sorted((a, b), key=len)
+        return len(shorter) >= 20 and longer.startswith(shorter)
 
     async def _problem_context(self, rec: Recognition) -> ProblemContext:
         h = problem_hash(rec)

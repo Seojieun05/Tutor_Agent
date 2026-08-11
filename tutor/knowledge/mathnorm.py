@@ -128,22 +128,31 @@ def _canonical(expr: sympy.Expr) -> sympy.Expr:
     )
 
 
-def equations_equivalent(a: str, b: str, allow_scale: bool = True) -> bool:
-    """allow_scale=True treats scalar multiples (6x+10=40 vs 3x+5=20) as
-    equivalent. allow_scale=False accepts only the same equation (side swap
-    included) — used by the EXACT matching tier, where reusing a stored
-    solution's parameters for a scaled equation would produce wrong hints."""
-    try:
-        ra, ea = parse_equation(a)
-        rb, eb = parse_equation(b)
-    except ParseError:
-        return False
-    if ea != eb:
-        return False
+def _residual_pairs(s: str) -> list[tuple[sympy.Expr, bool]]:
+    """One (residual, is_equation) per claim in the string.
+
+    A chain equality — 2(a₁+a₄+a₇) = a₄+a₇+a₁₀ = 6, the bread and butter of
+    수열 problems — is N-1 adjacent claims, not a parse error. parse_equation
+    stays two-sided (its callers substitute answers into ONE equation); the
+    chain unrolling lives here, where comparing claims is the whole job.
+    """
+    s = _preprocess(s)
+    parts = [p.strip() for p in s.split("=")]
+    if any(not p for p in parts):
+        raise ParseError(f"malformed equation {s!r}")
+    if len(parts) == 1:
+        return [(parse_expression(parts[0]), False)]
+    exprs = [parse_expression(p) for p in parts]
+    return [(x - y, True) for x, y in zip(exprs, exprs[1:])]
+
+
+def _residuals_equivalent(
+    ra: sympy.Expr, rb: sympy.Expr, is_eq: bool, allow_scale: bool
+) -> bool:
     ra, rb = _canonical(ra), _canonical(rb)
     if sympy.simplify(ra - rb) == 0:
         return True
-    if ea and rb != 0:  # scalar multiples only make sense for equations
+    if is_eq and rb != 0:  # scalar multiples only make sense for equations
         try:
             ratio = sympy.simplify(sympy.cancel(ra / rb))
         except Exception:
@@ -152,6 +161,24 @@ def equations_equivalent(a: str, b: str, allow_scale: bool = True) -> bool:
             return False
         return True if allow_scale else ratio == -1
     return False
+
+
+def equations_equivalent(a: str, b: str, allow_scale: bool = True) -> bool:
+    """allow_scale=True treats scalar multiples (6x+10=40 vs 3x+5=20) as
+    equivalent. allow_scale=False accepts only the same equation (side swap
+    included) — used by the EXACT matching tier, where reusing a stored
+    solution's parameters for a scaled equation would produce wrong hints."""
+    try:
+        pa = _residual_pairs(a)
+        pb = _residual_pairs(b)
+    except ParseError:
+        return False
+    if len(pa) != len(pb):
+        return False
+    return all(
+        ea == eb and _residuals_equivalent(ra, rb, ea, allow_scale)
+        for (ra, ea), (rb, eb) in zip(pa, pb)
+    )
 
 
 _NUMBER_TOKEN_RE = re.compile(r"\d+(?:\.\d+)?")
