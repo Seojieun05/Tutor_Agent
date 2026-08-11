@@ -80,10 +80,12 @@ screen (`board`) — what a tutor would jot on the whiteboard while saying the
 hint. Only mathematics that is already in front of the student: the problem's
 own equation, a line they wrote themselves, the expression your question is
 pointing at. ASCII notation (3*x + 5 = 20, x**2, sqrt(2), log_3 b), one
-expression per entry, no Korean words. NEVER write anything the student has
-not reached: no next-step result, no simplified form, no final answer — the
-board must not show what the voice is forbidden to say. Most hints need an
-empty board; write only when pointing at an expression genuinely helps.
+expression per entry, no Korean words. A bare term ("a_1") is NOT a board
+line — write a complete equation or expression with an operation in it.
+NEVER write anything the student has not reached: no next-step result, no
+simplified form, no final answer — the board must not show what the voice is
+forbidden to say. Most hints need an empty board; write only when pointing
+at an expression genuinely helps.
 
 HOW TO TEACH (this is the part that matters)
 - Active learning: leave the thinking to them. The best hint is the weakest one
@@ -169,6 +171,23 @@ class PhrasedHint(BaseModel):
     # same leak guard as the words — the board may not show what the voice
     # may not say
     board: list[str] = []
+
+
+_HANGUL = re.compile(r"[가-힣]")
+# a board line is a piece of MATHEMATICS: something related or operated on.
+# A bare term ("a_1") says nothing, and Korean belongs in the bubble, not
+# on the board.
+_BOARD_WORTHY = re.compile(r"[=<>+\-*/^]")
+
+
+def _clean_board(board: tuple[str, ...]) -> tuple[str, ...]:
+    lines = []
+    for line in board:
+        line = line.strip()
+        if not line or _HANGUL.search(line) or not _BOARD_WORTHY.search(line):
+            continue
+        lines.append(line)
+    return tuple(lines[:2])
 
 
 class SpokenHint(str):
@@ -268,13 +287,16 @@ class HintGenerator:
             )
             if leaks_answer(text, reference, decision.target_step, seen):
                 return self._generic_fallback(decision, slots)
-        # The board passes the SAME gate as the voice, line by line: writing
-        # "x = 5" while carefully not saying it is still giving the answer.
-        if reference is not None:
-            board = tuple(
-                b for b in board
-                if not leaks_answer(b, reference, decision.target_step, seen)
-            )
+        # The board passes the SAME gate as the voice: writing "x = 5" while
+        # carefully not saying it is still giving the answer. All or nothing —
+        # dropping one line of two left fragments like a bare "a₁" on screen,
+        # and half a board reads worse than no board.
+        board = _clean_board(board)
+        if board and reference is not None and any(
+            leaks_answer(b, reference, decision.target_step, seen) for b in board
+        ):
+            log.info("a board line would leak the answer; the board stays empty")
+            board = ()
         return _with_board(text, board)
 
     def explain(
@@ -424,7 +446,9 @@ class HintGenerator:
         result = self.llm.run_with_tools(
             purpose="phrase", system=_PHRASE_SYSTEM, user="\n".join(parts), schema=PhrasedHint
         )
-        board = tuple(b.strip() for b in result.board[:2] if b and b.strip())
+        # no cap here: _clean_board filters junk FIRST, then keeps the best 2 —
+        # capping raw output let a bare "a_1" crowd out the real equation
+        board = tuple(b.strip() for b in result.board if b and b.strip())
         return result.hint.strip(), board
 
     def _concepts_for(self, match: MatchResult, rec: Recognition | None) -> list[str]:

@@ -252,14 +252,28 @@ class TestTheBoard:
         assert text == "어느 항을 옮기면 x만 남을까요?"   # still a str to everyone else
         assert text.board == ("3*x + 5 = 20",)
 
-    def test_a_leaking_board_line_is_dropped_and_the_hint_kept(self, db):
+    def test_one_leaking_line_cancels_the_whole_board(self, db):
+        """Dropping just the leaking line left fragments on screen ("a₁" alone,
+        half a derivation) — half a board reads worse than none, so a leak
+        anywhere empties it. The hint itself still ships."""
         llm = EchoLLMClient({"phrase": [
             {"hint": "다음에는 무엇을 하면 좋을까요?", "board": ["x = 5", "3*x + 5 = 20"]}
         ]})
         gen = HintGenerator(llm, db)
         text = gen.generate(decision(1), self._llm_match(), LIN_REF, self.SEEN, [])
         assert text == "다음에는 무엇을 하면 좋을까요?"
-        assert text.board == ("3*x + 5 = 20",)         # the answer never reaches the screen
+        assert text.board == ()                        # all or nothing
+
+    def test_fragments_and_korean_never_reach_the_board(self, db):
+        """The live 등비수열 board: bare terms ("a_1") and Korean sentences
+        are not mathematics to write — they are filtered before the guard."""
+        llm = EchoLLMClient({"phrase": [
+            {"hint": "공비가 몇 번 곱해질까요?",
+             "board": ["a_1", "일반항을 써 보세요", "a_4 = a_1 * r**3"]}
+        ]})
+        gen = HintGenerator(llm, db)
+        text = gen.generate(decision(1), self._llm_match(), LIN_REF, self.SEEN, [])
+        assert text.board == ("a_4 = a_1 * r**3",)
 
     def test_paths_without_a_board_read_as_an_empty_one(self, db):
         gen = HintGenerator(EchoLLMClient(), db)

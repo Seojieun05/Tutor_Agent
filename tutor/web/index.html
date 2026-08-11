@@ -286,7 +286,7 @@
       <section id="board">
         <span class="cardlabel">튜터 풀이</span>
         <div id="boardLines">
-          <div id="boardEmpty">튜터가 수식을 말하면 여기에 적어 드릴게요.</div>
+          <div id="boardEmpty">튜터가 짚어 주는 수식이 여기에 나타나요.</div>
         </div>
       </section>
 
@@ -515,8 +515,8 @@ function onEvent(msg) {
     case "config":      bargeIn = !!d.barge_in; break;
     case "barge_in":    stopSpeaking(); break;
     case "transcript":  addTurn("you", d.text || "(인식 실패)"); break;
-    case "tutor_says":  addTurn("tutor", d.text); boardWrite(d.text); break;
-    case "board":       for (const line of d.lines || []) boardWrite(line, true); break;
+    case "tutor_says":  addTurn("tutor", d.text); break;
+    case "board":       for (const line of d.lines || []) boardWrite(line); break;
     case "stage":       setStage(d.text); break;
     case "solved":      addSolved(d.text); break;
     case "problem":     showProblem(d); break;
@@ -622,26 +622,24 @@ function boardClear() {
   lines.textContent = "";
   const empty = document.createElement("div");
   empty.id = "boardEmpty";
-  empty.textContent = "튜터가 수식을 말하면 여기에 적어 드릴게요.";
+  empty.textContent = "튜터가 짚어 주는 수식이 여기에 나타나요.";
   lines.appendChild(empty);
 }
 
-/** Every tutor line that CONTAINS math gets written on the board, typeset.
-    Pure talk (fillers, encouragement) stays in the chat only. `key` lines are
-    the ones the tutor deliberately wrote (the board event): always written,
-    shown emphasized — the whiteboard move behind the spoken hint. */
-function boardWrite(text, key = false) {
+/** The board shows ONLY what the tutor deliberately wrote (the `board`
+    event) — the whiteboard move behind the spoken hint, typeset. Sentence
+    transcription used to land here too and read as a strange half-solution;
+    sentences live in the chat now, full stop. */
+function boardWrite(text) {
   const norm = (text || "").trim();
   if (!norm || boardSeen.has(norm)) return;
-  const { frag, hasMath } = mathify(norm);
-  if (!key && !hasMath) return;
   boardSeen.add(norm);
   const lines = $("boardLines");
   const empty = document.getElementById("boardEmpty");
   if (empty) empty.remove();
   const line = document.createElement("div");
-  line.className = key ? "boardline key" : "boardline";
-  line.append(frag);
+  line.className = "boardline key";
+  line.append(mathify(norm).frag);
   lines.appendChild(line);
   lines.scrollTop = lines.scrollHeight;
 }
