@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import re
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from tutor.hints.guard import leaks_answer
 from tutor.knowledge import mathnorm
@@ -76,17 +76,28 @@ no markdown, no symbols read aloud badly — say "3 x 더하기 5" rather than
 "3x + 5" when it is easier to hear.
 
 BOARD
-Besides the spoken hint you may WRITE 0-2 short expressions on the student's
-screen (`board`) — what a tutor would jot on the whiteboard while saying the
-hint. Only mathematics that is already in front of the student: the problem's
-own equation, a known formula the hint is about, the expression your question
-is pointing at. ASCII notation (3*x + 5 = 20, x**2, sqrt(2), log_3 b), one
-expression per entry, no Korean words. A bare term ("a_1") is NOT a board
-line — write a complete equation or expression with an operation in it.
-NEVER copy a line the STUDENT wrote. The board is the tutor's own hand, and
-a wrong line rewritten in the tutor's hand reads as the tutor endorsing it.
-Their line is already on their page: point at it with WORDS instead
-("두 번째 줄을 다시 볼까요?").
+Besides the spoken hint you may WRITE 0-2 lines on the student's screen
+(`board`) — what a tutor jots on the whiteboard while saying the hint. Each
+line is an expression AND the few words a tutor writes beside it:
+
+  {"expr": "a_4 = a_1 * r**3", "note": "항 번호 3 차이 → r 세 번"}
+  {"expr": "(x**3)' = 3*x**2", "note": "지수를 앞으로, 하나 줄이기"}
+
+`expr` is ASCII mathematics (3*x + 5 = 20, x**2, sqrt(2), log_3 b), one
+expression, no Korean. A bare term ("a_1") is NOT a board line — write a
+complete equation or expression with an operation in it.
+
+`note` is Korean, a LABEL and not a sentence: 2-8 words, the reason or the
+rule, what a tutor scribbles in the margin. Not the hint repeated, not a
+question, and never a value the voice may not say. Leave it empty when the
+expression speaks for itself.
+
+Only mathematics that is already in front of the student: the problem's own
+equation, a known formula the hint is about, the expression your question
+points at. NEVER copy a line the STUDENT wrote — the board is the tutor's own
+hand, and a wrong line rewritten in the tutor's hand reads as the tutor
+endorsing it. Their line is already on their page: point at it with WORDS
+instead ("두 번째 줄을 다시 볼까요?").
 NEVER write anything the student has not reached: no next-step result, no
 simplified form, no final answer — the board must not show what the voice is
 forbidden to say. Most hints need an empty board; write only when pointing
@@ -129,7 +140,8 @@ NEVER
   is written separately and is spoken just before yours; starting with your own
   makes the tutor say it twice.
 
-Return ONLY JSON: {"hint": "...", "board": ["..."], "graph": ["..."]}"""
+Return ONLY JSON:
+{"hint": "...", "board": [{"expr": "...", "note": "..."}], "graph": ["..."]}"""
 
 _PREFLIGHT_SYSTEM = """PERSONA
 You are a warm math tutor speaking Korean out loud to one student who has just
@@ -209,31 +221,55 @@ def strip_leading_acknowledgement(text: str, rounds: int = 2) -> str:
     return out or text
 
 
+class BoardLine(BaseModel):
+    """One thing written on the board: the mathematics, and the few words a
+    tutor writes beside it. The note is what makes a board look like a person
+    wrote it rather than a printer — "항 번호 3 차이 → r 세 번" beside the
+    expression teaches; the expression alone only states."""
+
+    expr: str
+    note: str = ""
+
+
 class PhrasedHint(BaseModel):
     hint: str
-    # what the tutor writes while saying it: 0-2 expressions, screened by the
-    # same leak guard as the words — the board may not show what the voice
-    # may not say
-    board: list[str] = []
+    # what the tutor writes while saying it: 0-2 lines, screened by the same
+    # leak guard as the words — the board may not show what the voice may not
+    # say, and that includes the notes
+    board: list[BoardLine] = []
+
+    @field_validator("board", mode="before")
+    @classmethod
+    def _accept_bare_expressions(cls, value):
+        """A model that answers with plain strings still gets a board."""
+        if isinstance(value, list):
+            return [{"expr": v} if isinstance(v, str) else v for v in value]
+        return value
     # functions of ONE variable to sketch, same screening: a curve is another
     # way of saying something, and the guard does not care which way
     graph: list[str] = []
 
 
 _HANGUL = re.compile(r"[가-힣]")
-# a board line is a piece of MATHEMATICS: something related or operated on.
-# A bare term ("a_1") says nothing, and Korean belongs in the bubble, not
-# on the board.
+# a board EXPRESSION is a piece of MATHEMATICS: something related or operated
+# on. A bare term ("a_1") says nothing, and Korean belongs in the note.
 _BOARD_WORTHY = re.compile(r"[=<>+\-*/^]")
+# A note is a label, not a sentence. Past this it is the hint said twice, and
+# the board turns back into a transcript.
+NOTE_MAX = 28
 
 
-def _clean_board(board: tuple[str, ...]) -> tuple[str, ...]:
+def _clean_board(board: tuple["BoardLine", ...]) -> tuple["BoardLine", ...]:
     lines = []
-    for line in board:
-        line = line.strip()
-        if not line or _HANGUL.search(line) or not _BOARD_WORTHY.search(line):
+    for item in board:
+        expr = (item.expr or "").strip()
+        if not expr or _HANGUL.search(expr) or not _BOARD_WORTHY.search(expr):
             continue
-        lines.append(line)
+        note = " ".join((item.note or "").split())
+        if len(note) > NOTE_MAX:
+            # keep the writing, drop the speech that crept into it
+            note = ""
+        lines.append(BoardLine(expr=expr, note=note))
     return tuple(lines[:2])
 
 
@@ -263,12 +299,12 @@ class SpokenHint(str):
     through getattr.
     """
 
-    board: tuple[str, ...] = ()
+    board: tuple["BoardLine", ...] = ()
     graph: tuple[str, ...] = ()
 
 
 def _with_board(
-    text: str, board: tuple[str, ...], graph: tuple[str, ...] = ()
+    text: str, board: tuple["BoardLine", ...], graph: tuple[str, ...] = ()
 ) -> "SpokenHint":
     out = SpokenHint(text)
     out.board = board
@@ -365,13 +401,14 @@ class HintGenerator:
             # endorsing it, and live that put a wrong 등비수열 relation under
             # the "튜터 풀이" heading in the tutor's own emphasis style.
             theirs = {mathnorm.compact(w) for w in rec.student_work}
-            kept = tuple(b for b in board if mathnorm.compact(b) not in theirs)
+            kept = tuple(b for b in board if mathnorm.compact(b.expr) not in theirs)
             if kept != board:
                 log.info("dropped %d board line(s) copied from the student's work",
                          len(board) - len(kept))
                 board = kept
         if board and reference is not None and any(
-            leaks_answer(b, reference, decision.target_step, seen) for b in board
+            leaks_answer(part, reference, decision.target_step, seen)
+            for b in board for part in (b.expr, b.note) if part
         ):
             log.info("a board line would leak the answer; the board stays empty")
             board = ()
@@ -578,7 +615,7 @@ class HintGenerator:
         )
         # no cap here: _clean_board filters junk FIRST, then keeps the best 2 —
         # capping raw output let a bare "a_1" crowd out the real equation
-        board = tuple(b.strip() for b in result.board if b and b.strip())
+        board = tuple(b for b in result.board if b.expr and b.expr.strip())
         graph = tuple(g.strip() for g in result.graph if g and g.strip())
         return result.hint.strip(), board, graph
 

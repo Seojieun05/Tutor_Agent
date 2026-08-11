@@ -299,12 +299,47 @@ class TestTheBoard:
 
     def test_the_board_rides_on_the_hint(self, db):
         llm = EchoLLMClient({"phrase": [
-            {"hint": "어느 항을 옮기면 x만 남을까요?", "board": ["3*x + 5 = 20"]}
+            {"hint": "어느 항을 옮기면 x만 남을까요?",
+             "board": [{"expr": "3*x + 5 = 20", "note": "이 식에서 출발"}]}
         ]})
         gen = HintGenerator(llm, db)
         text = gen.generate(decision(1), self._llm_match(), LIN_REF, self.SEEN, [])
         assert text == "어느 항을 옮기면 x만 남을까요?"   # still a str to everyone else
-        assert text.board == ("3*x + 5 = 20",)
+        assert [(b.expr, b.note) for b in text.board] == [("3*x + 5 = 20", "이 식에서 출발")]
+
+    def test_a_bare_expression_still_makes_a_board_line(self, db):
+        """A model that answers with plain strings does not lose its board."""
+        llm = EchoLLMClient({"phrase": [
+            {"hint": "여기를 보세요", "board": ["3*x + 5 = 20"]}
+        ]})
+        text = HintGenerator(llm, db).generate(
+            decision(1), self._llm_match(), LIN_REF, self.SEEN, []
+        )
+        assert [(b.expr, b.note) for b in text.board] == [("3*x + 5 = 20", "")]
+
+    def test_a_note_that_is_a_sentence_is_dropped_but_the_line_stays(self, db):
+        """The note is a margin scribble. Past a label's length it is the hint
+        said twice, and the board turns back into a transcript."""
+        llm = EchoLLMClient({"phrase": [
+            {"hint": "생각해 볼까요?", "board": [{
+                "expr": "3*x + 5 = 20",
+                "note": "이 식에서 상수항 5를 양변에서 빼면 x만 남게 되는데 그 과정을 떠올려 보세요",
+            }]}
+        ]})
+        text = HintGenerator(llm, db).generate(
+            decision(1), self._llm_match(), LIN_REF, self.SEEN, []
+        )
+        assert [(b.expr, b.note) for b in text.board] == [("3*x + 5 = 20", "")]
+
+    def test_a_leaking_note_cancels_the_board_like_a_leaking_expression(self, db):
+        """The note is words on the screen, so it answers to the same guard."""
+        llm = EchoLLMClient({"phrase": [
+            {"hint": "다음은요?", "board": [{"expr": "3*x + 5 = 20", "note": "답은 5"}]}
+        ]})
+        text = HintGenerator(llm, db).generate(
+            decision(1), self._llm_match(), LIN_REF, self.SEEN, []
+        )
+        assert text.board == ()
 
     def test_one_leaking_line_cancels_the_whole_board(self, db):
         """Dropping just the leaking line left fragments on screen ("a₁" alone,
@@ -329,7 +364,7 @@ class TestTheBoard:
         ]})
         gen = HintGenerator(llm, db)
         text = gen.generate(decision(1), self._llm_match(), LIN_REF, self.WORKED, [])
-        assert text.board == ("3*x + 5 = 20",)
+        assert [b.expr for b in text.board] == ["3*x + 5 = 20"]
 
     def test_a_reformatted_copy_is_still_a_copy(self, db):
         """Spacing and the multiplication sign are the only things that differ
@@ -350,7 +385,7 @@ class TestTheBoard:
         ]})
         gen = HintGenerator(llm, db)
         text = gen.generate(decision(1), self._llm_match(), LIN_REF, self.SEEN, [])
-        assert text.board == ("a_4 = a_1 * r**3",)
+        assert [b.expr for b in text.board] == ["a_4 = a_1 * r**3"]
 
     def test_a_graph_rides_along_and_is_gated_the_same_way(self, db):
         """A curve is another way of saying something: an EXPRESSION answer

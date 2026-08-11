@@ -276,7 +276,8 @@ async def test_the_hints_board_reaches_the_page(db):
     session, llm, speaker, ws = build(
         db, "이 문제 힌트 줄래?",
         llm_responses={"phrase": [
-            {"hint": "어느 항을 옮기면 x만 남을까요?", "board": ["3*x + 5 = 20"]}
+            {"hint": "어느 항을 옮기면 x만 남을까요?",
+             "board": [{"expr": "3*x + 5 = 20", "note": "이 식에서 출발"}]}
         ]},
     )
 
@@ -284,7 +285,10 @@ async def test_the_hints_board_reaches_the_page(db):
 
     assert "phrase" in llm.calls                        # the board-writing path ran
     board = next(e for e in ws.events if e["event"] == "board")
-    assert board["data"]["lines"] == ["3·x + 5 = 20"]   # eye notation, not ASCII
+    # eye notation for the expression, the margin note travelling beside it
+    assert board["data"]["lines"] == [
+        {"expr": "3·x + 5 = 20", "note": "이 식에서 출발"}
+    ]
     # written as the voice starts: the board precedes the hint's bookkeeping
     names = [e["event"] for e in ws.events]
     assert names.index("board") < names.index("hint_issued")

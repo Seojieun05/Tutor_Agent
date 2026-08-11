@@ -1254,9 +1254,10 @@ class Session:
             # written as the voice starts, like a tutor's hand reaching the
             # whiteboard mid-sentence — display notation for the eye
             try:
-                await self.ws.send(make_event(
-                    "board", {"lines": [mathspeak.displayable(b) for b in board]}
-                ))
+                await self.ws.send(make_event("board", {"lines": [
+                    {"expr": mathspeak.displayable(b.expr), "note": b.note}
+                    for b in board
+                ]}))
             except Exception:
                 log.debug("could not send board event (connection gone)")
         if graph:

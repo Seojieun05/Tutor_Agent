@@ -46,6 +46,17 @@ def _latex(s: str, *, spoken: bool) -> str:
     s = s.replace("\\cdot", "*").replace("\\times", "×").replace("\\div", "÷")
     s = s.replace("\\pi", "파이" if spoken else "π")
     s = re.sub(r"\\sqrt\s*\{([^{}]*)\}", r"sqrt(\1)", s)
+    if not spoken:
+        # a_{n+1} must sink WHOLE, before the brace strip below turns it into
+        # "a_n + 1" — the general term of a sequence is written this way and
+        # means something quite different from a sum
+        def sunk(m: re.Match) -> str:
+            inner = m.group(1).strip()
+            if not inner or not all(ch in _SUB_SRC for ch in inner):
+                return m.group(0)
+            return inner.translate(_SUBSCRIPT)
+
+        s = re.sub(r"_\{([^{}]*)\}", sunk, s)
     if spoken:
         s = _FRAC.sub(lambda m: f" {m.group(2).strip()}분의 {m.group(1).strip()} ", s)
     else:
@@ -147,8 +158,10 @@ def _parens(s: str) -> str:
 # text surface. Unicode has subscripts for all digits but only some letters,
 # and superscripts for all digits and most letters (no q): anything that
 # cannot be moved cleanly stays as written rather than coming out half-set.
-_SUB_SRC = "0123456789aehklmnopstx"
-_SUBSCRIPT = str.maketrans(_SUB_SRC, "₀₁₂₃₄₅₆₇₈₉ₐₑₕₖₗₘₙₒₚₛₜₓ")
+# the operators too, because a general term is written a_{n+1}: without them
+# the brace strip turns that into "a_n + 1" — a different claim entirely
+_SUB_SRC = "0123456789aehklmnopstx+-=()"
+_SUBSCRIPT = str.maketrans(_SUB_SRC, "₀₁₂₃₄₅₆₇₈₉ₐₑₕₖₗₘₙₒₚₛₜₓ₊₋₌₍₎")
 _SUP_SRC = "0123456789abcdefghijklmnoprstuvwxyz"
 _SUPERSCRIPT = str.maketrans(_SUP_SRC, "⁰¹²³⁴⁵⁶⁷⁸⁹ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻ")
 
@@ -175,7 +188,9 @@ def _display_indices(s: str) -> str:
             return m.group(0)
         return m.group(1) + sub.translate(_SUBSCRIPT)
 
-    return re.sub(r"\b([A-Za-z])_\{?([0-9]+|[A-Za-z])\}?", lowered, s)
+    # the lookahead keeps a_2i whole: sinking only the 2 would read as "a sub
+    # two, times i", which is not what was written
+    return re.sub(r"\b([A-Za-z])_\{?([0-9]+|[A-Za-z])\}?(?![A-Za-z0-9])", lowered, s)
 
 
 def _display_powers(s: str) -> str:

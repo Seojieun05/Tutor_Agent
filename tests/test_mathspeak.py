@@ -91,6 +91,16 @@ class TestTheScreenGetsNotation:
         # an index unicode cannot sink stays whole, not half-set
         assert displayable("a_b = 1") == "a_b = 1"
 
+    def test_a_general_term_sinks_whole(self):
+        """a_{n+1} is the general term of a sequence. Sinking only the "n"
+        leaves "aₙ + 1", which is a sum — a different claim entirely."""
+        from tutor.speech.mathspeak import displayable
+
+        assert displayable("a_{n+1} = a_n * r") == "aₙ₊₁ = aₙ·r"
+        assert displayable("a_{n+k} = a_n * r**k") == "aₙ₊ₖ = aₙ·rᵏ"
+        # a subscript unicode cannot carry stays braced rather than half-sunk
+        assert displayable("a_{2i} = 0") == "a_2i = 0"
+
     def test_primes_and_equals_stay_as_written(self):
         from tutor.speech.mathspeak import displayable
 

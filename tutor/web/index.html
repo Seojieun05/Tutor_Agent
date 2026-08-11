@@ -159,6 +159,10 @@
     font-size:1.2rem; text-align:center;
   }
   .boardline.key .katex { font-size:1.25em; }
+  .boardline.key .note {
+    margin-top:.3rem; font-size:.78rem; font-weight:600; color:var(--accent-deep);
+    letter-spacing:-.01em; word-break:keep-all;
+  }
   #boardEmpty { color:var(--dim); font-size:.85rem; padding-top:.6rem; }
 
   /* ---- solved problems (left) ---- */
@@ -387,16 +391,22 @@ const sendEvent = (event, data = {}) => {
 // down, offline) → the unicode text stands as-is, which is yesterday's page.
 const SUBS = { "₀":"0","₁":"1","₂":"2","₃":"3","₄":"4","₅":"5","₆":"6","₇":"7",
                "₈":"8","₉":"9","ₐ":"a","ₑ":"e","ₕ":"h","ₖ":"k","ₗ":"l","ₘ":"m",
-               "ₙ":"n","ₒ":"o","ₚ":"p","ₛ":"s","ₜ":"t","ₓ":"x" };
+               "ₙ":"n","ₒ":"o","ₚ":"p","ₛ":"s","ₜ":"t","ₓ":"x",
+               // a_{n+1}: the operators sink with the rest of the subscript
+               "₊":"+","₋":"-","₌":"=","₍":"(","₎":")" };
 // the server's unicode superscripts (x², x¹⁰, xⁿ), back to TeX for KaTeX
 const SUP_CHARS = "⁰¹²³⁴⁵⁶⁷⁸⁹ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻ";
 const SUP_ASCII = "0123456789abcdefghijklmnoprstuvwxyz";
 const SUPS = Object.fromEntries([...SUP_CHARS].map((c, i) => [c, SUP_ASCII[i]]));
 const SUP_RE = new RegExp("[" + SUP_CHARS + "]+", "g");
+// derived from the tables above, so a character added there is understood
+// everywhere: a run that breaks mid-subscript renders as half an expression
+const SUB_CHARS = Object.keys(SUBS).join("");
+const SUB_RE = new RegExp("[" + SUB_CHARS + "]+", "g");
 const MATH_RUN = new RegExp(
-  "[0-9A-Za-z+\\-=^*/().,'′²³√·_{} ₀-₉ₐₑₕₖₗₘₙₒₚₛₜₓ" + SUP_CHARS + "]+", "g");
+  "[0-9A-Za-z+\\-=^*/().,'′²³√·_{} " + SUB_CHARS + SUP_CHARS + "]+", "g");
 const MATH_SIGNAL = new RegExp(
-  "[=^²³√·′]|[₀-₉ₐₑₕₖₗₘₙₒₚₛₜₓ]|[" + SUP_CHARS + "]|\\w\\/\\w|[A-Za-z]['_]|"
+  "[=^²³√·′]|[" + SUB_CHARS + SUP_CHARS + "]|\\w\\/\\w|[A-Za-z]['_]|"
   + "\\b(?:log|sqrt|sin|cos|tan)\\b");
 
 function toTex(s) {
@@ -404,9 +414,11 @@ function toTex(s) {
   s = s.replace(/\b(log|sin|cos|tan)(?![A-Za-z])/g, "\\$1");
   s = s.replace(/√\(([^()]*)\)/g, "\\sqrt{$1}");
   s = s.replace(SUP_RE, (m) => "^{" + [...m].map(c => SUPS[c]).join("") + "}");
-  s = s.replace(/\^\{?([A-Za-z0-9]+)\}?/g, "^{$1}");
-  s = s.replace(/[₀-₉ₐₑₕₖₗₘₙₒₚₛₜₓ]+/g, (m) => "_{" + [...m].map(c => SUBS[c]).join("") + "}");
-  s = s.replace(/_\{?([A-Za-z0-9]+)\}?/g, "_{$1}");   // raw a_4 that slipped through
+  // the (?!\{) keeps these off the braced groups the lines above just built:
+  // re-matching "_{n+k}" would take "_{n" and leave "+k}" dangling
+  s = s.replace(/\^(?!\{)([A-Za-z0-9]+)/g, "^{$1}");
+  s = s.replace(SUB_RE, (m) => "_{" + [...m].map(c => SUBS[c]).join("") + "}");
+  s = s.replace(/_(?!\{)([A-Za-z0-9]+)/g, "_{$1}");   // raw a_4 that slipped through
   s = s.replace(/·/g, "\\cdot ");
   s = s.replace(/(?<![}\w])(\w+)\s*\/\s*(\w+)(?![\w{])/g, "\\frac{$1}{$2}");
   return s;
@@ -666,16 +678,27 @@ function boardDraw(svg, of) {
     event) — the whiteboard move behind the spoken hint, typeset. Sentence
     transcription used to land here too and read as a strange half-solution;
     sentences live in the chat now, full stop. */
-function boardWrite(text) {
-  const norm = (text || "").trim();
-  if (!norm || boardSeen.has(norm)) return;
-  boardSeen.add(norm);
+function boardWrite(item) {
+  // {expr, note} from the server; a bare string still works
+  const expr = ((typeof item === "string" ? item : item && item.expr) || "").trim();
+  const note = ((typeof item === "string" ? "" : item && item.note) || "").trim();
+  if (!expr || boardSeen.has(expr)) return;
+  boardSeen.add(expr);
   const lines = $("boardLines");
   const empty = document.getElementById("boardEmpty");
   if (empty) empty.remove();
   const line = document.createElement("div");
   line.className = "boardline key";
-  line.append(mathify(norm).frag);
+  const math = document.createElement("div");
+  math.append(mathify(expr).frag);
+  line.appendChild(math);
+  if (note) {
+    // the margin scribble: why this line is here, in the tutor's shorthand
+    const label = document.createElement("div");
+    label.className = "note";
+    label.textContent = note;
+    line.appendChild(label);
+  }
   lines.appendChild(line);
   lines.scrollTop = lines.scrollHeight;
 }
