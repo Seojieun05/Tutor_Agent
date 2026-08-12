@@ -41,6 +41,9 @@ KB_KINDS_BY_PURPOSE: dict[str, frozenset[str]] = {
     # one line per CONCEPT, written from the concept's name alone: no problem
     # in front of it, so nothing to look up
     "preflight": frozenset(),
+    # the drawing hand reads the hint it is illustrating and nothing else —
+    # deliberately not the solution, so it cannot sketch the answer by accident
+    "illustrate": frozenset(),
 }
 
 MATH_TOOLS_BY_PURPOSE: dict[str, frozenset[str]] = {

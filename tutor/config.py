@@ -53,6 +53,13 @@ class Settings:
     # way, and a FallbackLLM keeps Grok on standby exactly as with eval.
     estimate_provider: str = "grok"
     gemini_estimate_model: str = "gemini-3.6-flash"
+    # The drawing hand runs while the tutor speaks, so its only deadline is
+    # the end of the sentence: it has to land inside ~8s of speech, and a
+    # short hint gives it half that. Measured on the same sketch, flash-lite
+    # returns the same function, window and caption in 1.3s where flash takes
+    # 4.0s — a narrow structured job the small model does just as well.
+    illustrate_provider: str = "grok"
+    gemini_illustrate_model: str = "gemini-3.5-flash-lite"
     tts_voice: str = "eve"
     # "ws" holds one bidirectional TTS socket open and reuses it per utterance
     # (~0.3s to first audio instead of ~1.3s per-request HTTP). Any websocket
@@ -166,6 +173,14 @@ def load_settings(env_file: Path | None = None) -> Settings:
     s.gemini_estimate_model = (
         os.getenv("GEMINI_ESTIMATE_MODEL", s.gemini_estimate_model).strip()
         or s.gemini_estimate_model
+    )
+    s.illustrate_provider = (
+        os.getenv("ILLUSTRATE_PROVIDER", s.illustrate_provider).strip().lower()
+        or s.illustrate_provider
+    )
+    s.gemini_illustrate_model = (
+        os.getenv("GEMINI_ILLUSTRATE_MODEL", s.gemini_illustrate_model).strip()
+        or s.gemini_illustrate_model
     )
     s.tts_transport = (
         os.getenv("TTS_TRANSPORT", s.tts_transport).strip().lower() or s.tts_transport

@@ -103,14 +103,6 @@ simplified form, no final answer — the board must not show what the voice is
 forbidden to say. Most hints need an empty board; write only when pointing
 at an expression genuinely helps.
 
-GRAPH
-When the SHAPE of a function is what the student needs to see — 개형, 증가와
-감소, 두 그래프의 교점, 넓이를 이루는 영역 — you may also sketch 1-2 functions
-of ONE variable (`graph`), written in x with ASCII notation ("x**2 - 4*x + 3").
-The sketch shows axes and the curve only, so it hints at shape and never at a
-number. Leave it empty unless seeing the curve is the point; a problem that is
-solved by algebra needs no picture.
-
 HOW TO TEACH (this is the part that matters)
 - Aim at the diagnosed mistake first. When a misconception is given, THAT is
   what this hint is for: point at the line where it shows and let them look
@@ -140,8 +132,7 @@ NEVER
   is written separately and is spoken just before yours; starting with your own
   makes the tutor say it twice.
 
-Return ONLY JSON:
-{"hint": "...", "board": [{"expr": "...", "note": "..."}], "graph": ["..."]}"""
+Return ONLY JSON: {"hint": "...", "board": [{"expr": "...", "note": "..."}]}"""
 
 _PREFLIGHT_SYSTEM = """PERSONA
 You are a warm math tutor speaking Korean out loud to one student who has just
@@ -237,6 +228,9 @@ class PhrasedHint(BaseModel):
     # leak guard as the words — the board may not show what the voice may not
     # say, and that includes the notes
     board: list[BoardLine] = []
+    # Drawing is decided by tutor/hints/illustrator.py, which runs while this
+    # hint is being SPOKEN and can therefore read it. Two deciders would draw
+    # two different pictures for one sentence.
 
     @field_validator("board", mode="before")
     @classmethod
@@ -273,22 +267,6 @@ def _clean_board(board: tuple["BoardLine", ...]) -> tuple["BoardLine", ...]:
     return tuple(lines[:2])
 
 
-def _clean_graph(graph: tuple[str, ...]) -> tuple[str, ...]:
-    """Plottable functions only: one variable, written in x, no Korean."""
-    out = []
-    for raw in graph:
-        line = raw.strip()
-        if not line or _HANGUL.search(line):
-            continue
-        # "y = x**2 - 1" and "f(x) = ..." both mean the right-hand side
-        if "=" in line:
-            line = line.split("=", 1)[1].strip()
-        if not line or not _BOARD_WORTHY.search(line):
-            continue
-        out.append(line)
-    return tuple(out[:2])
-
-
 class SpokenHint(str):
     """The hint text, carrying the board it was phrased with.
 
@@ -300,15 +278,11 @@ class SpokenHint(str):
     """
 
     board: tuple["BoardLine", ...] = ()
-    graph: tuple[str, ...] = ()
 
 
-def _with_board(
-    text: str, board: tuple["BoardLine", ...], graph: tuple[str, ...] = ()
-) -> "SpokenHint":
+def _with_board(text: str, board: tuple["BoardLine", ...]) -> "SpokenHint":
     out = SpokenHint(text)
     out.board = board
-    out.graph = graph
     return out
 
 
@@ -376,7 +350,7 @@ class HintGenerator:
             return text
 
         # 2) LLM phrasing fallback with minimal context.
-        text, board, graph = self._phrase(
+        text, board = self._phrase(
             decision, match, slots, history, rec, reference, student_answer=student_answer
         )
         seen = visible_to_student(rec)
@@ -384,7 +358,7 @@ class HintGenerator:
             text, reference, decision.target_step, seen
         ):
             log.warning("hint leaked answer; regenerating once")
-            text, board, graph = self._phrase(
+            text, board = self._phrase(
                 decision, match, slots, history, rec, reference,
                 stronger=True, student_answer=student_answer,
             )
@@ -412,15 +386,7 @@ class HintGenerator:
         ):
             log.info("a board line would leak the answer; the board stays empty")
             board = ()
-        # A curve is another way of saying something, and the guard does not
-        # care which way: an EXPRESSION answer plotted is that answer given.
-        graph = _clean_graph(graph)
-        if graph and reference is not None and any(
-            leaks_answer(g, reference, decision.target_step, seen) for g in graph
-        ):
-            log.info("a graph would leak the answer; nothing is drawn")
-            graph = ()
-        return _with_board(text, board, graph)
+        return _with_board(text, board)
 
     def write_preflight(self, concept_name: str) -> str:
         """The category line for a concept the DB has never described.
@@ -616,8 +582,7 @@ class HintGenerator:
         # no cap here: _clean_board filters junk FIRST, then keeps the best 2 —
         # capping raw output let a bare "a_1" crowd out the real equation
         board = tuple(b for b in result.board if b.expr and b.expr.strip())
-        graph = tuple(g.strip() for g in result.graph if g and g.strip())
-        return result.hint.strip(), board, graph
+        return result.hint.strip(), board
 
     def _concepts_for(self, match: MatchResult, rec: Recognition | None) -> list[str]:
         """Whitelisted concepts of the problem, tagger first, matcher second."""

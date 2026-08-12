@@ -80,8 +80,8 @@ def build(settings):
     from tutor.server.app import build_shared
     from tutor.vision.recognizer import Recognizer
 
-    (db, llm, _transcriber, speaker, semantic,
-     vision_llm, hint_llm, eval_llm, estimate_llm) = build_shared(settings)
+    (db, llm, _transcriber, speaker, semantic, vision_llm, hint_llm,
+     eval_llm, estimate_llm, _illustrate_llm) = build_shared(settings)
     return {
         "db": db,
         "recognizer": Recognizer(vision_llm, settings),

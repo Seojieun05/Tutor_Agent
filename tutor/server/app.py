@@ -27,6 +27,7 @@ from websockets.http11 import Response
 from tutor.config import Settings
 from tutor.console import say, soften_stdout
 from tutor.hints.generator import HintGenerator
+from tutor.hints.illustrator import Illustrator
 from tutor.knowledge.db import KnowledgeDB
 from tutor.knowledge.matching import Matcher
 from tutor.server.camera import CameraConnection, CameraHub
@@ -115,12 +116,13 @@ def build_shared(settings: Settings):
     hint_llm = build_hint_llm(settings, llm)
     eval_llm = build_eval_llm(settings, llm, registry)
     estimate_llm = build_estimate_llm(settings, llm, registry)
+    illustrate_llm = build_illustrate_llm(settings, llm)
     # One log line per model call, always on. The tutor's latency is almost
     # entirely other people's servers, so the only useful question is which
     # call — and that is not answerable after the fact without this.
     return (db, timed(llm, settings.chat_model), transcriber, speaker, semantic,
             timed(vision_llm), timed(hint_llm), timed(eval_llm),
-            timed(estimate_llm))
+            timed(estimate_llm), timed(illustrate_llm))
 
 
 def wrap_with_cache(settings: Settings, speaker):
@@ -199,6 +201,17 @@ def build_eval_llm(settings: Settings, llm, registry=None):
                       settings.gemini_eval_model, "EVAL_PROVIDER", registry=registry)
 
 
+def build_illustrate_llm(settings: Settings, llm):
+    """Whichever model decides what to draw. Only the Illustrator sees it.
+
+    Toolless by design: it is shown the hint it illustrates and the page in
+    front of the student, never the reference solution, so there is nothing
+    for it to look up and nothing for it to sketch the answer from.
+    """
+    return _gemini_or(settings, llm, settings.illustrate_provider,
+                      settings.gemini_illustrate_model, "ILLUSTRATE_PROVIDER")
+
+
 def build_estimate_llm(settings: Settings, llm, registry=None):
     """Whichever model diagnoses the written work. Only the estimator sees it.
 
@@ -239,6 +252,7 @@ def _gemini_or(settings: Settings, llm, provider: str, model: str, knob: str,
 def make_deps(
     settings: Settings, db, llm, transcriber, speaker, semantic=None, cameras=None,
     vision_llm=None, hint_llm=None, eval_llm=None, estimate_llm=None,
+    illustrate_llm=None,
 ) -> Deps:
     """Per-connection dependencies (fresh SessionStore each time)."""
     return Deps(
@@ -248,6 +262,9 @@ def make_deps(
         solver=GrokSolver(llm, db),
         estimator=StudentStateEstimator(estimate_llm or llm, db, settings.recog_conf_threshold),
         hint_gen=HintGenerator(hint_llm or llm, db, settings.input_mode),
+        # the drawing hand: it runs while the tutor speaks, so its seconds
+        # come out of the silence rather than out of the student's wait
+        illustrator=Illustrator(illustrate_llm or hint_llm or llm),
         transcriber=transcriber,
         speaker=speaker,
         evaluator=AnswerEvaluator(eval_llm or llm, db),
@@ -300,8 +317,8 @@ async def amain(settings: Settings) -> None:
     for port in ports:
         if not port_is_free(settings.ws_host, port):
             raise PortInUse(port)
-    (db, llm, transcriber, speaker, semantic,
-     vision_llm, hint_llm, eval_llm, estimate_llm) = build_shared(settings)
+    (db, llm, transcriber, speaker, semantic, vision_llm, hint_llm,
+     eval_llm, estimate_llm, illustrate_llm) = build_shared(settings)
 
     cameras = CameraHub()
 
@@ -328,7 +345,7 @@ async def amain(settings: Settings) -> None:
             return
         deps = make_deps(
             settings, db, llm, transcriber, speaker, semantic, cameras,
-            vision_llm, hint_llm, eval_llm, estimate_llm,
+            vision_llm, hint_llm, eval_llm, estimate_llm, illustrate_llm,
         )
         if path.rstrip("/") == "/browser":
             from tutor.server.browser import BrowserSession

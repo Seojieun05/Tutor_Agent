@@ -129,6 +129,27 @@ class TestEvalProvider:
         assert deps.evaluator.llm is eval_llm
 
 
+class TestIllustrateProvider:
+    """The drawing hand has one deadline: land before the sentence ends. On
+    the same sketch flash-lite returns the same function, window and caption
+    in 1.3s where flash takes 4.0s, so the knob exists and defaults small."""
+
+    def test_the_knob_reads_from_the_environment(self, env, monkeypatch):
+        monkeypatch.setenv("ILLUSTRATE_PROVIDER", "gemini")
+        s = load_settings(env)
+        assert s.illustrate_provider == "gemini"
+        assert s.gemini_illustrate_model == "gemini-3.5-flash-lite"
+
+    def test_only_the_illustrator_changes_hand(self, db):
+        from tutor.server.app import make_deps
+
+        llm, draw_llm = EchoLLMClient(), EchoLLMClient()
+        deps = make_deps(Settings(), db, llm, None, None, illustrate_llm=draw_llm)
+        assert deps.illustrator.llm is draw_llm
+        assert deps.hint_gen.llm is llm
+        assert deps.estimator.llm is llm
+
+
 class TestEstimateProvider:
     """Diagnosing written work sits on the WORK_CHECK critical path: the
     student asked a yes/no question and waits on this one call for the

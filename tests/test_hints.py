@@ -387,25 +387,18 @@ class TestTheBoard:
         text = gen.generate(decision(1), self._llm_match(), LIN_REF, self.SEEN, [])
         assert [b.expr for b in text.board] == ["a_4 = a_1 * r**3"]
 
-    def test_a_graph_rides_along_and_is_gated_the_same_way(self, db):
-        """A curve is another way of saying something: an EXPRESSION answer
-        plotted is that answer given, so the guard screens it too."""
+    def test_the_hint_no_longer_decides_the_drawing(self, db):
+        """Drawing moved to the illustrator, which runs while this hint is
+        SPOKEN and can read it. Two deciders drew two pictures for one
+        sentence, so the phrasing model stopped being one of them."""
         llm = EchoLLMClient({"phrase": [
             {"hint": "그래프의 개형을 떠올려 볼까요?", "board": [],
-             "graph": ["y = x**2 - 4*x + 3"]},
+             "graph": ["x**2 - 4*x + 3"]},             # ignored now
         ]})
-        gen = HintGenerator(llm, db)
-        text = gen.generate(decision(1), self._llm_match(), LIN_REF, self.SEEN, [])
-        assert text.graph == ("x**2 - 4*x + 3",)      # "y =" stripped, ready to plot
-
-        leaky = EchoLLMClient({"phrase": [
-            {"hint": "이 함수를 그려 볼까요?", "board": [],
-             "graph": ["3*x**2 + 2*x"]},               # DERIV_REF's answer itself
-        ]})
-        drawn = HintGenerator(leaky, db).generate(
-            decision(1, target=0), self._llm_match(), DERIV_REF, self.SEEN, []
+        text = HintGenerator(llm, db).generate(
+            decision(1), self._llm_match(), LIN_REF, self.SEEN, []
         )
-        assert drawn.graph == ()                       # nothing is drawn
+        assert not hasattr(text, "graph") or not getattr(text, "graph", ())
 
     def test_paths_without_a_board_read_as_an_empty_one(self, db):
         gen = HintGenerator(EchoLLMClient(), db)

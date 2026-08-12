@@ -43,7 +43,7 @@ from tutor.hints.generator import (
     strip_leading_acknowledgement,
     visible_to_student,
 )
-from tutor.hints import plot
+from tutor.hints import illustrator, plot
 from tutor.hints.guard import leaks_answer
 from tutor.knowledge import mathnorm
 from tutor.knowledge.matching import Matcher, problem_hash
@@ -229,6 +229,9 @@ class Deps:
     evaluator: AnswerEvaluator | None = None  # None → answers fall back to a hint request
     cameras: object | None = None  # CameraHub: eyes on another socket (the phone)
     fillers: object | None = None  # FillerBank: what to say while thinking
+    # Illustrator: draws beside a hint while it is being spoken. None → the
+    # tutor teaches in words only, which is a supported configuration.
+    illustrator: object | None = None
     # what each utterance is FOR; without an LLM it still routes by rule
     classifier: IntentClassifier = field(default_factory=IntentClassifier)
     store: SessionStore = field(default_factory=SessionStore)
@@ -755,11 +758,11 @@ class Session:
             hint_task.cancel()
             raise
         # read before any strip loses the subclass that carries them
-        board, graph = getattr(text, "board", ()), getattr(text, "graph", ())
+        board = getattr(text, "board", ())  # before any strip loses the subclass
         if spoke_feedback:
             # one acknowledgement per turn: the reaction already was it
             text = strip_leading_acknowledgement(text)
-        await self._deliver(decision, text, ctx.hash, board, graph)
+        await self._deliver(decision, text, ctx.hash, board)
 
     async def _answer_question(
         self, ctx: ProblemContext, pending: HintRecord, question: str
@@ -1016,10 +1019,10 @@ class Session:
             hint_task.cancel()
             raise
         # read before any strip loses the subclass that carries them
-        board, graph = getattr(text, "board", ()), getattr(text, "graph", ())
+        board = getattr(text, "board", ())  # before any strip loses the subclass
         if spoke_reaction:
             text = strip_leading_acknowledgement(text)
-        await self._deliver(decision, text, ctx.hash, board, graph)
+        await self._deliver(decision, text, ctx.hash, board)
 
     @staticmethod
     def _work_reaction(state: StudentState) -> str:
@@ -1246,9 +1249,63 @@ class Session:
             except Exception:
                 pass
 
+    async def _illustrate(
+        self, decision: Decision, hint: str, board: tuple, problem_hash: str
+    ) -> None:
+        """Draw beside a hint that is already being spoken. Never awaited by
+        the turn: a picture is optional, and a slow or broken drawing hand
+        must cost the lesson nothing."""
+        ctx = self.ctx
+        if self.deps.illustrator is None or ctx is None:
+            return
+        if not illustrator.wants_a_picture(hint):
+            # the sentence never mentions a shape, so no curve supports it
+            return
+        spec = await asyncio.to_thread(
+            self.deps.illustrator.draw,
+            hint=hint,
+            problem_text=ctx.recognition.problem_text,
+            equations=list(ctx.recognition.equations),
+            student_work=list(ctx.recognition.student_work),
+            board=[b.expr for b in board],
+            misconception=decision.misconception,
+            level=decision.level,
+        )
+        if spec is None or not spec.functions:
+            return
+        # The same gate as the words: a curve of the answer IS the answer.
+        seen = visible_to_student(ctx.recognition)
+        if ctx.reference is not None and any(
+            leaks_answer(part, ctx.reference, decision.target_step, seen)
+            for part in (*spec.functions, spec.caption) if part
+        ):
+            log.info("the sketch would leak the answer; nothing is drawn")
+            return
+        span = plot.DEFAULT_SPAN
+        if spec.x_min is not None and spec.x_max is not None and spec.x_min < spec.x_max:
+            span = (spec.x_min, spec.x_max)
+        svg = await asyncio.to_thread(plot.function_svg, spec.functions, span)
+        if not svg:
+            return
+        # The turn moved on while we drew: a picture of the last hint landing
+        # on the next problem is worse than no picture at all.
+        if self.ctx is not ctx or ctx.hash != problem_hash:
+            log.info("dropping a sketch whose problem is over")
+            return
+        if getattr(self, "_interrupted", False):
+            log.info("dropping a sketch the student talked over")
+            return
+        try:
+            await self.ws.send(make_event("figure", {
+                "svg": svg, "of": ", ".join(spec.functions), "note": spec.caption,
+            }))
+        except Exception:
+            log.debug("could not send figure event (connection gone)")
+        log.info("sketched %s over %s — %s", spec.functions, span, spec.why[:60])
+
     async def _deliver(
         self, decision: Decision, text: str, problem_hash: str = "",
-        board: tuple[str, ...] = (), graph: tuple[str, ...] = (),
+        board: tuple[str, ...] = (),
     ) -> None:
         if board:
             # written as the voice starts, like a tutor's hand reaching the
@@ -1260,19 +1317,12 @@ class Session:
                 ]}))
             except Exception:
                 log.debug("could not send board event (connection gone)")
-        if graph:
-            # sympy samples the curve here and ships markup, so the page needs
-            # no plotting library and the drawing is one more thing the leak
-            # guard has already seen
-            svg = await asyncio.to_thread(plot.function_svg, list(graph))
-            if svg:
-                try:
-                    await self.ws.send(make_event(
-                        "figure", {"svg": svg, "of": ", ".join(graph)}
-                    ))
-                except Exception:
-                    log.debug("could not send figure event (connection gone)")
         if text:
+            # The picture is drawn WHILE this is spoken. A hint takes ~8s to
+            # say, which is time the drawing hand can use — and by starting
+            # here it gets what no parallel design could: the finished
+            # sentence, so it draws what was said instead of guessing.
+            self._spawn(self._illustrate(decision, text, board, problem_hash))
             await self._speak(text)
         self.store.append_hint(
             problem_hash=problem_hash,

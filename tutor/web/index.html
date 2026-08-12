@@ -151,6 +151,10 @@
   .boardfigure .axes line { stroke:var(--dim); stroke-width:1.4; }
   .boardfigure .ticks text { fill:var(--dim); font-size:10px; font-family:var(--font); }
   .boardfigure .legend { font-size:12px; font-family:var(--math); }
+  .boardfigure .note {
+    margin-top:.15rem; text-align:center; font-size:.78rem; font-weight:600;
+    color:var(--accent-deep); word-break:keep-all;
+  }
 
   /* what the tutor deliberately WROTE, as opposed to math inside a sentence */
   .boardline.key {
@@ -548,7 +552,7 @@ function onEvent(msg) {
     case "transcript":  addTurn("you", d.text || "(인식 실패)"); break;
     case "tutor_says":  addTurn("tutor", d.text); break;
     case "board":       for (const line of d.lines || []) boardWrite(line); break;
-    case "figure":      boardDraw(d.svg, d.of); break;
+    case "figure":      boardDraw(d.svg, d.of, d.note); break;
     case "stage":       setStage(d.text); break;
     case "solved":      addSolved(d.text); break;
     case "problem":     showProblem(d); break;
@@ -660,8 +664,8 @@ function boardClear() {
 /** A function sketched on the board. The markup is built by the server (sympy
     samples the curve there), so this only has to place it — and the same leak
     guard that screens the spoken hint has already seen it. */
-function boardDraw(svg, of) {
-  const key = `figure:${of || svg.length}`;
+function boardDraw(svg, of, note) {
+  const key = `figure:${of || (svg || "").length}`;
   if (!svg || boardSeen.has(key)) return;
   boardSeen.add(key);
   const empty = document.getElementById("boardEmpty");
@@ -669,6 +673,13 @@ function boardDraw(svg, of) {
   const box = document.createElement("div");
   box.className = "boardfigure";
   box.innerHTML = svg;
+  if (note) {
+    // what to look at, in the same margin voice the written lines use
+    const label = document.createElement("div");
+    label.className = "note";
+    label.textContent = note;
+    box.appendChild(label);
+  }
   const lines = $("boardLines");
   lines.appendChild(box);
   lines.scrollTop = lines.scrollHeight;
