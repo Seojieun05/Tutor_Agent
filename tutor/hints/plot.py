@@ -22,15 +22,18 @@ from tutor.speech import mathspeak
 
 log = logging.getLogger(__name__)
 
-WIDTH, HEIGHT = 520, 300
-PAD = 28                      # room for the axis numbers
+# Drawn at the size it is actually shown at. The board is the width of the
+# page's centre column, and a 520-wide sketch stretched to fill it scaled its
+# own tick labels and legend up with it until they crowded the curve.
+WIDTH, HEIGHT = 900, 400
+PAD = 34                      # room for the axis numbers
 SAMPLES = 241                 # odd, so x = 0 is sampled exactly
 DEFAULT_SPAN = (-6.0, 6.0)
 # Past this the curve is a vertical wall, not a shape: clip and break the line
 # so an asymptote reads as an asymptote instead of a spike across the frame.
 MAX_ABS_Y = 1e4
 # How much taller than wide the picture may be in UNITS before the x-axis is
-# given more room. The frame itself is about 1.9:1, so this is already a tall
+# given more room. The drawing area is about 2.5:1, so this is already a tall
 # picture; past it the two axes stop being comparable and the grid reads as a
 # mistake — which is how a live sketch ended up counting by 1 across and 50 up.
 ASPECT_CAP = 3.0
@@ -116,6 +119,49 @@ def _fmt(v: float) -> str:
     return f"{v:g}" if abs(v) >= 1e-4 or v == 0 else f"{v:.1e}"
 
 
+# Roughly what a legend row occupies. Only used to pick a corner, so it is a
+# generous guess rather than a measurement.
+LEGEND_W, LEGEND_ROW = 300.0, 14.0
+
+
+def _legend_svg(rows, series, px, py) -> str:
+    """The legend, in whichever corner the curves leave emptiest.
+
+    A fixed corner is wrong for a sketch whose shape changes every problem:
+    at the top it is the first thing lost when a full-height figure scrolls,
+    and at the bottom two descending tangents ran straight through it. So
+    count how many sampled points fall in each corner and take the quietest,
+    preferring the bottom, which is where the board scrolls to.
+    """
+    if not rows:
+        return ""
+    height = len(rows) * LEGEND_ROW + 10
+    corners = [                                   # bottom first: see above
+        ("start", PAD, HEIGHT - PAD - height),
+        ("end", WIDTH - PAD - LEGEND_W, HEIGHT - PAD - height),
+        ("start", PAD, PAD),
+        ("end", WIDTH - PAD - LEGEND_W, PAD),
+    ]
+
+    def crowding(left: float, top: float) -> int:
+        return sum(
+            1
+            for _, points in series
+            for x, y in points
+            if y is not None
+            and left <= px(x) <= left + LEGEND_W
+            and top <= py(y) <= top + height
+        )
+
+    anchor, left, top = min(corners, key=lambda c: crowding(c[1], c[2]))
+    x = left if anchor == "start" else left + LEGEND_W
+    return "".join(
+        f'<text x="{x:.0f}" y="{top + 12 + i * LEGEND_ROW:.0f}" text-anchor="{anchor}" '
+        f'class="legend" fill="{colour}">{text}</text>'
+        for i, (text, colour) in enumerate(rows)
+    )
+
+
 def function_svg(
     curves, span: tuple[float, float] = DEFAULT_SPAN
 ) -> str | None:
@@ -192,6 +238,7 @@ def function_svg(
     parts.append(f'<g class="ticks">{"".join(labels)}</g>')
 
     targets = scaffolds = 0
+    legend: list[tuple[str, str]] = []
     for i, (curve, points) in enumerate(series):
         text = curve if isinstance(curve, str) else curve.expr
         label = "" if isinstance(curve, str) else (curve.label or "")
@@ -220,12 +267,11 @@ def function_svg(
                 f'<polyline points="{" ".join(run)}" fill="none" '
                 f'stroke="{colour}" stroke-width="{width}"{dash} stroke-linecap="round"/>'
             )
-        # the legend is read, so it gets the eye's notation like everything
-        # else on screen: x², ·, √ rather than programmer ASCII
+        # The legend is read, so it gets the eye's notation like everything
+        # else on screen: x², ·, √ rather than programmer ASCII.
         name = f"{escape(label)}: y = " if label else "y = "
-        parts.append(
-            f'<text x="{WIDTH - PAD}" y="{PAD - 10 + i * 15:.0f}" text-anchor="end" '
-            f'class="legend" fill="{colour}">{name}{escape(mathspeak.displayable(text))}</text>'
-        )
+        legend.append((f"{name}{escape(mathspeak.displayable(text))}", colour))
+
+    parts.append(_legend_svg(legend, series, px, py))
     parts.append("</svg>")
     return "".join(parts)

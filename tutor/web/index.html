@@ -217,7 +217,7 @@
   main {
     flex:1 1 auto; min-height:0; width:100%;
     display:flex; justify-content:center;
-    padding:.4rem 1.5rem 7rem;
+    padding:1.5rem 1.5rem 7rem;
   }
   .grid {
     width:100%; max-width:1400px; min-height:0;
@@ -307,10 +307,10 @@
     .boardfigure { transition:opacity .18s ease; }
     .boardfigure.fading { opacity:.15; }
   }
-  /* The server draws the sketch at 520x300 and sizes the tick labels for it.
-     Stretched across a wide board it scales the type with it and swallows the
-     written lines above; capped, it stays a sketch beside them. */
-  .boardfigure svg { display:block; width:100%; max-width:520px; margin:0 auto; height:auto; }
+  /* The server now draws the sketch at 900x470, which is about the width of
+     the board, so it fills it at roughly 1:1 and the tick labels stay the
+     size they were drawn. */
+  .boardfigure svg { display:block; width:100%; height:auto; }
   .boardfigure .grid line { stroke:var(--line); stroke-width:1; }
   .boardfigure .axes line { stroke:var(--dim); stroke-width:1.4; }
   .boardfigure .ticks text { fill:var(--dim); font-size:10px; font-family:var(--font); }
@@ -1014,8 +1014,12 @@ function boardDraw(d) {
       box.appendChild(label);
     }
     box.classList.remove("fading");
+    // Show the picture from ITS top, not the board's bottom. The sketch now
+    // fills the board, so scrolling to the foot as a written line does would
+    // put the legend (which says which curve is l) above the visible edge.
     const lines = $("boardLines");
-    lines.scrollTop = lines.scrollHeight;
+    lines.scrollTop +=
+      box.getBoundingClientRect().top - lines.getBoundingClientRect().top - 6;
   };
   if (fresh) return paint();
   // redrawing an existing grid: fade out the old scene so a curve leaving is
