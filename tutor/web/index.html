@@ -91,13 +91,20 @@
     --aqua-fill:#237789; --aqua-fill-lit:#2a7d93;   /* both ends ≥4.7:1 under white */
     --err:#b34a43;                 /* 4.6:1 on its own tint, 5.2:1 on a panel */
     --err-soft:#fdeceb;
+    /* the peach, at a weight you can actually see: the state dot is a
+       meaningful indicator, and --peach on the disabled fill is 1.3:1 */
+    --amber-ink:#a86a18;           /* 4.1:1 on the board, over the 3:1 graphics bar */
     --squid-lit:#ffe6cf; --squid-mid:#f8c49d; --squid-deep:#e79b6d;
     /* Radius is a hierarchy, not a habit: the further in you go, the tighter
        the corner, so a bubble never reads as a panel. */
     --r-panel:24px; --r-card:16px; --r-bubble:14px; --r-btn:12px; --r-chip:999px;
     /* Shadows are the sea's own blue, never black. */
-    --shadow-soft:0 2px 6px rgba(49,91,125,.07), 0 14px 30px rgba(49,91,125,.10);
-    --shadow-lift:0 4px 10px rgba(49,91,125,.09), 0 26px 52px rgba(49,91,125,.16);
+    /* Shadows are the sea's own blue, never black — and the colour is a token
+       too, so the one-off shadows on bubbles and buttons darken with the
+       scheme instead of staying a pale blue smudge on deep water. */
+    --sink:49 91 125;
+    --shadow-soft:0 2px 6px rgb(var(--sink) / .07), 0 14px 30px rgb(var(--sink) / .10);
+    --shadow-lift:0 4px 10px rgb(var(--sink) / .09), 0 26px 52px rgb(var(--sink) / .16);
     --lip:inset 0 1px 0 rgba(255,255,255,.95);
     --font:"Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
            "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
@@ -116,15 +123,27 @@
       --text:#e4f3fb; --text-mid:#bcd9ea; --dim:#8fb4c9;
       --accent:#4fb8d4; --accent-deep:#8fd9ee;
       --accent-soft:rgba(79,184,212,.16); --accent-line:rgba(79,184,212,.40);
-      --aqua-fill:#1e6d80; --aqua-fill-lit:#2a879d;
-      --err:#f0938a; --err-soft:rgba(240,147,138,.14);
-      --shadow-soft:0 2px 6px rgba(0,0,0,.30), 0 14px 30px rgba(0,0,0,.34);
-      --shadow-lift:0 4px 10px rgba(0,0,0,.34), 0 26px 52px rgba(0,0,0,.42);
+      /* the lit end has to be darkened here too: #2a879d is 4.16:1 under the
+         white it carries, which is under AA. #237e93 is 4.69:1. */
+      --aqua-fill:#1e6d80; --aqua-fill-lit:#237e93;
+      /* opaque, unlike its light twin's tint: #hangup sits on the water rather
+         than on a panel, so a translucent hover fill composited onto the
+         gradient and left --err at 4.3:1 on 11.8px text */
+      --err:#f0938a; --err-soft:#33404f;
+      --amber-ink:#e9b567;           /* the same dot, lit for the deep water */
+      --sink:0 0 0;
+      --shadow-soft:0 2px 6px rgb(var(--sink) / .30), 0 14px 30px rgb(var(--sink) / .34);
+      --shadow-lift:0 4px 10px rgb(var(--sink) / .34), 0 26px 52px rgb(var(--sink) / .42);
       --lip:inset 0 1px 0 rgba(190,225,240,.16);
     }
   }
   * { box-sizing:border-box; }
   html, body { height:100%; }
+  /* Typeset maths does not wrap: KaTeX lays a formula out as one inline-block,
+     so a long one paints straight out of whatever holds it — a chat bubble, a
+     board line, the problem heading. Let the formula itself scroll instead of
+     letting it escape. */
+  .katex { max-width:100%; overflow-x:auto; overflow-y:hidden; }
   body {
     margin:0; min-height:100dvh; display:flex; flex-direction:column;
     color:var(--text); font:15px/1.6 var(--font);
@@ -167,10 +186,17 @@
     position:absolute; bottom:-8vh; border-radius:50%;
     background:radial-gradient(circle at 32% 28%, rgba(255,255,255,.95),
                rgba(255,255,255,.22) 58%, rgba(255,255,255,.06));
-    border:1px solid rgba(255,255,255,.55); opacity:0;
+    border:1px solid rgba(255,255,255,.55);
+  }
+  /* Still, not gone. The rising is the animation; the bubble itself is part of
+     the middle distance, and hiding it under reduced motion emptied that whole
+     plane of the scene. They hang where they were placed instead. */
+  @media (prefers-reduced-motion: reduce) {
+    .bubbles i { bottom:auto; top:22%; opacity:.5; }
+    .bubbles i:nth-child(even) { top:58%; }
   }
   @media (prefers-reduced-motion: no-preference) {
-    .bubbles i { animation:rise linear infinite; }
+    .bubbles i { opacity:0; animation:rise linear infinite; }
     @keyframes rise {
       0%   { transform:translateY(0) scale(.7); opacity:0; }
       14%  { opacity:.75; }
@@ -184,7 +210,7 @@
   #reef {
     position:absolute; left:0; bottom:0; width:100%; height:auto;
     /* one soft ground shadow, not a blur on the objects themselves */
-    filter:drop-shadow(0 10px 16px rgba(49,91,125,.16));
+    filter:drop-shadow(0 10px 16px rgb(var(--sink) / .16));
   }
   @media (prefers-color-scheme: dark) { #reef { opacity:.55; } }
 
@@ -315,7 +341,10 @@
   #drop b { font-weight:800; color:var(--text-mid); }
   #thumb { max-height:2.6rem; border-radius:8px; display:none; }
   #thumb.has { display:block; }
-  .meta { font-size:.72rem; color:var(--dim); }
+  /* a filename has no spaces to break at, and this one is whatever the
+     student's camera named it */
+  .meta { font-size:.72rem; color:var(--dim); overflow-wrap:anywhere; }
+  #drop > div { min-width:0; }
 
   /* ===================================================================
      THE BOARD. A cool near-white slate with a whisper of a dot grid, the
@@ -342,7 +371,9 @@
     position:absolute; inset:0; display:grid; place-items:start center;
     will-change:transform;
   }
-  #tutorStage .squid { width:100px; height:auto; }
+  /* overflow:visible because the drawn arms curve a hair past the viewBox:
+     the tips are clipped without it, and an SVG clips to its viewBox by default */
+  #tutorStage .squid { width:100px; height:auto; overflow:visible; }
   /* The clip IS the tutor: paused on its first frame when idle, playing while
      the pipeline works, so the character never changes identity and moving is
      what "thinking" looks like. The drawn one is the fallback underneath. */
@@ -351,7 +382,7 @@
   #tutorStage.hasclip video { display:block; }
   /* the ink it writes with, and the arithmetic it mutters */
   #tutorStage .ink {
-    position:absolute; left:52px; top:86px; width:9px; height:11px;
+    position:absolute; left:50%; top:74%; width:9px; height:11px;
     border-radius:50% 50% 46% 46%; background:var(--accent-deep);
     opacity:0; pointer-events:none;
   }
@@ -359,12 +390,15 @@
     position:absolute; font:700 .82rem var(--math); color:var(--accent-deep);
     opacity:0; pointer-events:none; user-select:none;
   }
-  /* kept inside the stage's own box: a symbol at left:-6px hangs over the
-     board's padding and reads as a stray glyph on the panel edge */
-  #tutorStage .sym:nth-of-type(1) { left:4px;  top:46px; }
-  #tutorStage .sym:nth-of-type(2) { left:84px; top:30px; }
-  #tutorStage .sym:nth-of-type(3) { left:20px; top:10px; }
-  #tutorStage .sym:nth-of-type(4) { left:76px; top:72px; }
+  /* Placed as PERCENTAGES of the stage, not pixels. Kept inside its box (a
+     symbol at left:-6px hung over the board's padding and read as a stray
+     glyph on the panel edge) — and the phone shrinks the stage to 76px, which
+     pixel coordinates would not have followed, leaving two of them outside it
+     and over the problem text. */
+  #tutorStage .sym:nth-of-type(1) { left:4%;  top:40%; }
+  #tutorStage .sym:nth-of-type(2) { left:79%; top:26%; }
+  #tutorStage .sym:nth-of-type(3) { left:19%; top:9%; }
+  #tutorStage .sym:nth-of-type(4) { left:71%; top:62%; }
 
   @media (prefers-reduced-motion: no-preference) {
     /* waiting: it floats, the way anything neutrally buoyant does */
@@ -380,10 +414,13 @@
       35%      { transform:translate(7px, -10px) rotate(5deg); }
       70%      { transform:translate(-5px, -4px) rotate(-2deg); }
     }
-    #tutorStage.thinking .sym { animation:mutter 3.6s ease-in-out infinite; }
-    #tutorStage.thinking .sym:nth-of-type(2) { animation-delay:.9s; }
-    #tutorStage.thinking .sym:nth-of-type(3) { animation-delay:1.8s; }
-    #tutorStage.thinking .sym:nth-of-type(4) { animation-delay:2.5s; }
+    /* :not(.writing) because the two states overlap: a line is usually
+       written while the pipeline is still PROCESSING, and symbols drifting
+       out of a squid that has run off to write reads as two tutors */
+    #tutorStage.thinking:not(.writing) .sym { animation:mutter 3.6s ease-in-out infinite; }
+    #tutorStage.thinking:not(.writing) .sym:nth-of-type(2) { animation-delay:.9s; }
+    #tutorStage.thinking:not(.writing) .sym:nth-of-type(3) { animation-delay:1.8s; }
+    #tutorStage.thinking:not(.writing) .sym:nth-of-type(4) { animation-delay:2.5s; }
     @keyframes mutter {
       0%       { transform:translateY(6px) scale(.7); opacity:0; }
       22%      { opacity:.85; }
@@ -418,25 +455,26 @@
             mask-image:linear-gradient(180deg, transparent 0, #000 16px,
                        #000 calc(100% - 8px), transparent 100%);
   }
-  .boardline {
-    padding:.45rem .2rem; font-size:1.04rem; line-height:1.7; color:var(--text-mid);
-    word-break:keep-all; overflow-wrap:anywhere;
-  }
-  .boardline .katex { font-size:1.15em; }
   /* What the tutor deliberately WROTE, one step of the argument: the biggest
      type on the board, with the reason scribbled under it in the margin
-     voice. Written, not framed. */
-  .boardline.key {
+     voice. Written, not framed.
+
+     One rule, not two: boardWrite has written `boardline key` unconditionally
+     since sentence transcription left the board, so a plain `.boardline` rule
+     could only ever be shadowed by this one. Its typography sat there looking
+     editable and changed nothing. */
+  .boardline {
     padding:.5rem .2rem .8rem; margin:.15rem 0;
     font-size:1.36rem; line-height:1.5; color:var(--text);
+    word-break:keep-all; overflow-wrap:anywhere;
   }
-  .boardline.key .katex { font-size:1.3em; }
-  .boardline.key .note {
+  .boardline .katex { font-size:1.3em; }
+  .boardline .note {
     margin-top:.28rem; font-size:.78rem; font-weight:700; color:var(--accent-deep);
     letter-spacing:-.01em; word-break:keep-all;
   }
   @media (prefers-reduced-motion: no-preference) {
-    .boardline.key { animation:inked .5s ease-out 1; }
+    .boardline { animation:inked .5s ease-out 1; }
     @keyframes inked {
       0%   { opacity:0; transform:translateY(-4px); filter:blur(2px); }
       100% { opacity:1; transform:none; filter:none; }
@@ -493,7 +531,7 @@
     flex:none; width:34px; height:34px; border-radius:50%;
     background:radial-gradient(circle at 34% 28%, var(--squid-lit), var(--squid-mid) 62%,
                var(--squid-deep));
-    box-shadow:var(--lip), 0 2px 6px rgba(49,91,125,.18);
+    box-shadow:var(--lip), 0 2px 6px rgb(var(--sink) / .18);
   }
   .chathead .who { min-width:0; }
   .chathead .who b { display:block; font-size:.92rem; font-weight:800; color:var(--text); }
@@ -515,13 +553,13 @@
   .msg.tutor { align-self:flex-start; }
   .msg.tutor .bubble {
     background:var(--panel-solid); border:1px solid var(--line); color:var(--text);
-    border-top-left-radius:5px; box-shadow:0 1px 2px rgba(49,91,125,.05);
+    border-top-left-radius:5px; box-shadow:0 1px 2px rgb(var(--sink) / .05);
   }
   .msg.you { align-self:flex-end; align-items:flex-end; }
   .msg.you .bubble {
     background:linear-gradient(158deg, var(--aqua-fill-lit), var(--aqua-fill));
     border:1px solid var(--aqua-fill); color:#fff;
-    border-top-right-radius:5px; box-shadow:0 2px 8px rgba(49,91,125,.18);
+    border-top-right-radius:5px; box-shadow:0 2px 8px rgb(var(--sink) / .18);
   }
   /* Machine talk (hint level, action) is smaller and quieter than speech.
      Quieter by size and weight only: an opacity on top of --dim composited it
@@ -564,7 +602,7 @@
     border-radius:var(--r-chip); border:1px solid var(--aqua-fill);
     background:linear-gradient(158deg, var(--aqua-fill-lit), var(--aqua-fill)); color:#fff;
     padding:.5rem 1.05rem .5rem .85rem; font:800 .84rem var(--font); cursor:pointer;
-    box-shadow:0 2px 8px rgba(49,91,125,.20);
+    box-shadow:0 2px 8px rgb(var(--sink) / .20);
     transition:filter .18s, box-shadow .18s, transform .1s;
   }
   #orb .dot {
@@ -572,7 +610,7 @@
     transition:background .25s, box-shadow .25s, opacity .25s;
   }
   #orb:hover { filter:brightness(1.06); box-shadow:var(--shadow-lift); }
-  #orb:active { transform:translateY(1px); box-shadow:0 1px 4px rgba(49,91,125,.22); }
+  #orb:active { transform:translateY(1px); box-shadow:0 1px 4px rgb(var(--sink) / .22); }
   #orb:focus-visible { outline:2px solid var(--accent-deep); outline-offset:3px; }
   /* once it is running the button stops being a button and becomes the light */
   #orb:disabled {
@@ -580,13 +618,19 @@
     border-color:var(--line); box-shadow:none; filter:none;
   }
   #orb:disabled .dot { background:var(--dim); opacity:1; }
-  #orb[data-state="LISTENING"] .dot      { background:var(--accent); }
-  #orb[data-state="USER_SPEAKING"] .dot  { background:var(--sea-deep); box-shadow:0 0 0 4px var(--accent-soft); }
-  #orb[data-state="PROCESSING"] .dot     { background:var(--peach); }
-  #orb[data-state="AGENT_SPEAKING"] .dot { background:var(--coral); box-shadow:0 0 0 4px var(--err-soft); }
+  /* The dot only ever shows on the disabled fill, so these are the ink
+     versions of the palette rather than the clay ones: --peach and --coral
+     are 1.3:1 there, which is a light that is not on. */
+  #orb[data-state="LISTENING"] .dot      { background:var(--accent-deep); }
+  #orb[data-state="USER_SPEAKING"] .dot  { background:var(--accent-deep); box-shadow:0 0 0 4px var(--accent-soft); }
+  #orb[data-state="PROCESSING"] .dot     { background:var(--amber-ink); }
+  #orb[data-state="AGENT_SPEAKING"] .dot { background:var(--err); box-shadow:0 0 0 4px var(--err-soft); }
+  /* keep-all keeps Korean from breaking mid-word; anywhere is its companion
+     for the strings this carries that have no spaces at all, like the browser's
+     own getUserMedia error text */
   #status {
     min-width:0; font-size:.72rem; line-height:1.45; color:var(--dim);
-    word-break:keep-all;
+    word-break:keep-all; overflow-wrap:anywhere;
   }
 
   /* ===================================================================
@@ -614,7 +658,7 @@
     #tutorStage .squid, #tutorStage video { width:76px; }
     #boardHead { gap:.75rem; }
     #problemText { font-size:1rem; }
-    .boardline.key { font-size:1.16rem; }
+    .boardline { font-size:1.16rem; }
     .chatfoot { flex-wrap:wrap; gap:.5rem .7rem; }
     #status { flex:1 0 100%; }
   }
@@ -906,7 +950,7 @@
           <span class="face" aria-hidden="true"></span>
           <span class="who">
             <b>오징어 튜터</b>
-            <span id="stateLabel">대기 중</span>
+            <span id="stateLabel" aria-live="polite">대기 중</span>
           </span>
         </div>
         <div id="chat">
@@ -1226,8 +1270,11 @@ function setState(s) {
     LISTENING: "듣는 중", USER_SPEAKING: "말하는 중",
     PROCESSING: "생각 중", AGENT_SPEAKING: "튜터 발화 중",
   }[s] || "대기";
+  // The state is announced ONCE, by the live region in the conversation's
+  // header. It used to be written over the button's aria-label as well, which
+  // renamed a control after it had stopped being one and left a screen reader
+  // saying "듣는 중" for a button that reads 마이크 켜짐.
   $("stateLabel").textContent = label;
-  orb.setAttribute("aria-label", label);
   swim(s === "PROCESSING");
   const thinking = $("thinking");
   thinking.hidden = s !== "PROCESSING";
