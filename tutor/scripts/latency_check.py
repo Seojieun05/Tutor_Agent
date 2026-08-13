@@ -80,17 +80,19 @@ def build(settings):
     from tutor.server.app import build_shared
     from tutor.vision.recognizer import Recognizer
 
-    (db, llm, _transcriber, speaker, semantic, vision_llm, hint_llm,
-     eval_llm, estimate_llm, _illustrate_llm, _eval_second) = build_shared(settings)
+    shared = build_shared(settings)
+    db = shared.db
     return {
         "db": db,
-        "recognizer": Recognizer(vision_llm, settings),
-        "matcher": Matcher(db, semantic=semantic),
-        "solver": GrokSolver(llm, db),
-        "estimator": StudentStateEstimator(estimate_llm, db, settings.recog_conf_threshold),
-        "hint_gen": HintGenerator(hint_llm, db, settings.input_mode),
-        "evaluator": AnswerEvaluator(eval_llm, db),
-        "speaker": speaker,
+        "recognizer": Recognizer(shared.vision_llm, settings),
+        "matcher": Matcher(db, semantic=shared.semantic),
+        "solver": GrokSolver(shared.solve_llm, db),
+        "estimator": StudentStateEstimator(
+            shared.estimate_llm, db, settings.recog_conf_threshold
+        ),
+        "hint_gen": HintGenerator(shared.hint_llm, db, settings.input_mode),
+        "evaluator": AnswerEvaluator(shared.eval_llm, db),
+        "speaker": shared.speaker,
     }
 
 
@@ -219,8 +221,13 @@ def main() -> None:
         image = captures[0]
     jpeg = image.read_bytes()
     say(f"사진: {image}  ({len(jpeg) // 1024} KB)")
-    say(f"모델: chat={settings.chat_model} vision={settings.gemini_vision_model} "
-        f"hint={settings.gemini_hint_model}")
+    def routed(provider: str, gemini_model: str) -> str:
+        return gemini_model if provider == "gemini" else settings.chat_model
+
+    say(f"모델: chat={settings.chat_model} "
+        f"vision={routed(settings.vision_provider, settings.gemini_vision_model)} "
+        f"hint={routed(settings.hint_provider, settings.gemini_hint_model)} "
+        f"solve={routed(settings.solve_provider, settings.gemini_solve_model)}")
 
     dep = build(settings)
     hints, checks, answers, ctx = [], [], [], None

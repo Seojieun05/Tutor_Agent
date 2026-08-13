@@ -197,9 +197,37 @@ class GeminiClient:
                 try:
                     return parse_into(schema, text)
                 except Exception as e:  # noqa: BLE001 — same seam
-                    raise LLMError(
-                        f"{purpose}: gemini output failed validation: {e}"
-                    ) from e
+                    # One retry with the error in hand, exactly as the grok
+                    # seam does. Without it, tool-loop calls got a single shot
+                    # at valid JSON where every other call got two, and a
+                    # solution good enough to grade against died of a missing
+                    # field it could have added on request.
+                    log.warning(
+                        "%s: invalid JSON from gemini, retrying once (%s)", purpose, e
+                    )
+                    contents.append(response.candidates[0].content)
+                    contents.append(
+                        types.Content(
+                            role="user",
+                            parts=[types.Part.from_text(
+                                text=f"Your previous response did not match the schema: {e}. "
+                                     "Respond again with ONLY the corrected JSON object."
+                            )],
+                        )
+                    )
+                    try:
+                        retry = self._client.models.generate_content(
+                            model=self.model,
+                            contents=contents,
+                            config=types.GenerateContentConfig(
+                                system_instruction=instruction, temperature=0
+                            ),
+                        )
+                        return parse_into(schema, getattr(retry, "text", None) or "")
+                    except Exception as e2:  # noqa: BLE001 — same seam
+                        raise LLMError(
+                            f"{purpose}: gemini output failed validation twice: {e2}"
+                        ) from e2
             log.info(
                 "%s round %d: gemini looking up %s",
                 purpose, round_no, ", ".join(c.name for c in calls),

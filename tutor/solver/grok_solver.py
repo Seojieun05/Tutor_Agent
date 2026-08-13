@@ -33,6 +33,9 @@ _SYSTEM = """You are a careful math solver. Solve the given problem step by step
 Rules:
 - One atomic operation per step, in order. `expression` is the state AFTER the step,
   in ASCII sympy syntax (* for multiplication, ** for powers).
+- A student is walked through these steps one at a time and asked a question
+  about each, so a step that bundles two ideas asks too much: split it. A 4점
+  problem is usually 8-12 steps.
 - Write step descriptions in Korean (the student is Korean).
 - final_answer.kind: "SCALAR" for a single value, "ROOT_SET" for multiple roots,
   "EXPRESSION" for a symbolic result (e.g. a derivative).

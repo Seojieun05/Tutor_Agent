@@ -18,6 +18,7 @@ import socket
 import ssl
 import sys
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 from pathlib import Path
 
 from websockets.asyncio.server import serve
@@ -80,7 +81,31 @@ def serve_static(connection, request):
     )
 
 
-def build_shared(settings: Settings):
+@dataclass
+class Shared:
+    """The per-server dependencies: built once, shared by every connection.
+
+    A dataclass rather than the tuple this used to be. Every model that got
+    its own routing knob added an element, callers unpacked by position, and
+    tutor.scripts.warm_kb was quietly unpacking nine values out of eleven —
+    broken since the illustrator landed, and invisible until it ran.
+    """
+
+    db: object
+    llm: object          # the chat model: every unrouted purpose, and the standby
+    transcriber: object
+    speaker: object
+    semantic: object | None
+    vision_llm: object
+    hint_llm: object
+    eval_llm: object
+    estimate_llm: object
+    illustrate_llm: object
+    solve_llm: object
+    eval_second_llm: object | None
+
+
+def build_shared(settings: Settings) -> Shared:
     """Build the per-server (shared) dependencies."""
     db = KnowledgeDB(settings.db_path)
     # Pedagogy, not problems, is the thing the tutor cannot work without: an
@@ -118,13 +143,26 @@ def build_shared(settings: Settings):
     eval_second_llm = build_eval_second_llm(settings, llm, registry)
     estimate_llm = build_estimate_llm(settings, llm, registry)
     illustrate_llm = build_illustrate_llm(settings, llm)
+    solve_llm = build_solve_llm(settings, llm, registry)
     # One log line per model call, always on. The tutor's latency is almost
     # entirely other people's servers, so the only useful question is which
     # call — and that is not answerable after the fact without this.
-    return (db, timed(llm, settings.chat_model), transcriber, speaker, semantic,
-            timed(vision_llm), timed(hint_llm), timed(eval_llm),
-            timed(estimate_llm), timed(illustrate_llm),
-            timed(eval_second_llm) if eval_second_llm is not None else None)
+    return Shared(
+        db=db,
+        llm=timed(llm, settings.chat_model),
+        transcriber=transcriber,
+        speaker=speaker,
+        semantic=semantic,
+        vision_llm=timed(vision_llm),
+        hint_llm=timed(hint_llm),
+        eval_llm=timed(eval_llm),
+        estimate_llm=timed(estimate_llm),
+        illustrate_llm=timed(illustrate_llm),
+        solve_llm=timed(solve_llm),
+        eval_second_llm=(
+            timed(eval_second_llm) if eval_second_llm is not None else None
+        ),
+    )
 
 
 def wrap_with_cache(settings: Settings, speaker):
@@ -228,6 +266,20 @@ def build_illustrate_llm(settings: Settings, llm):
                       settings.gemini_illustrate_model, "ILLUSTRATE_PROVIDER")
 
 
+def build_solve_llm(settings: Settings, llm, registry=None):
+    """Whichever model writes the reference solution. Only the solver sees it.
+
+    The registry rides along: `solve` may search the KB for a similar solved
+    problem and verify its own final answer with sympy. What comes back is
+    checked the same way whatever wrote it — never marked verified, and stored
+    only if mathnorm.verify_answer agrees — so this knob trades speed against
+    how finely the solution is cut, not against whether it is believed.
+    """
+    return _gemini_or(settings, llm, settings.solve_provider,
+                      settings.gemini_solve_model, "SOLVE_PROVIDER",
+                      registry=registry)
+
+
 def build_estimate_llm(settings: Settings, llm, registry=None):
     """Whichever model diagnoses the written work. Only the estimator sees it.
 
@@ -268,14 +320,14 @@ def _gemini_or(settings: Settings, llm, provider: str, model: str, knob: str,
 def make_deps(
     settings: Settings, db, llm, transcriber, speaker, semantic=None, cameras=None,
     vision_llm=None, hint_llm=None, eval_llm=None, estimate_llm=None,
-    illustrate_llm=None, eval_second_llm=None,
+    illustrate_llm=None, eval_second_llm=None, solve_llm=None,
 ) -> Deps:
     """Per-connection dependencies (fresh SessionStore each time)."""
     return Deps(
         settings=settings,
         recognizer=Recognizer(vision_llm or llm, settings),
         matcher=Matcher(db, semantic=semantic),
-        solver=GrokSolver(llm, db),
+        solver=GrokSolver(solve_llm or llm, db),
         estimator=StudentStateEstimator(estimate_llm or llm, db, settings.recog_conf_threshold),
         hint_gen=HintGenerator(hint_llm or llm, db, settings.input_mode),
         # the drawing hand: it runs while the tutor speaks, so its seconds
@@ -333,8 +385,10 @@ async def amain(settings: Settings) -> None:
     for port in ports:
         if not port_is_free(settings.ws_host, port):
             raise PortInUse(port)
-    (db, llm, transcriber, speaker, semantic, vision_llm, hint_llm,
-     eval_llm, estimate_llm, illustrate_llm, eval_second_llm) = build_shared(settings)
+    shared = build_shared(settings)
+    db, llm, transcriber, speaker = (
+        shared.db, shared.llm, shared.transcriber, shared.speaker
+    )
 
     cameras = CameraHub()
 
@@ -360,9 +414,10 @@ async def amain(settings: Settings) -> None:
             await CameraConnection(ws, cameras).run()
             return
         deps = make_deps(
-            settings, db, llm, transcriber, speaker, semantic, cameras,
-            vision_llm, hint_llm, eval_llm, estimate_llm, illustrate_llm,
-            eval_second_llm,
+            settings, db, llm, transcriber, speaker, shared.semantic, cameras,
+            shared.vision_llm, shared.hint_llm, shared.eval_llm,
+            shared.estimate_llm, shared.illustrate_llm, shared.eval_second_llm,
+            shared.solve_llm,
         )
         if path.rstrip("/") == "/browser":
             from tutor.server.browser import BrowserSession

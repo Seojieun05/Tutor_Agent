@@ -90,17 +90,17 @@ PRESOLVE = {
 
 def build(settings):
     from tutor.hints.generator import HintGenerator
-    from tutor.server.app import build_hint_llm, build_shared, wrap_with_cache
+    from tutor.server.app import build_shared, wrap_with_cache
     from tutor.speech.tts import XaiSpeaker
 
     db = KnowledgeDB(settings.db_path)
-    (_db, llm, _t, _s, _sem, _v, hint_llm, _e, _est) = build_shared(settings)
+    shared = build_shared(settings)
     speaker = (
         wrap_with_cache(settings, XaiSpeaker(settings))
         if not settings.echo_mode
         else None
     )
-    return db, llm, HintGenerator(hint_llm, db), speaker
+    return db, shared.solve_llm, HintGenerator(shared.hint_llm, db), speaker
 
 
 def warm_concepts(db, gen, speaker, concept_ids: list[str], workers: int = 5) -> list[str]:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 AnswerKind = Literal["SCALAR", "ROOT_SET", "EXPRESSION"]
 
@@ -27,6 +27,24 @@ class ReferenceSolution(BaseModel):
     concepts: list[str] = []
     verified: bool = False
     origin: Literal["db", "template", "grok"] = "grok"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _number_the_steps(cls, data):
+        """Fill in `idx` from position when the model left it out.
+
+        A step's index IS where it sits in the list, and demanding the model
+        restate it buys nothing — one solver wrote six perfectly good steps
+        and lost the whole solution to six "Field required" errors. Numbering
+        the model DID give is left exactly as it is: a solution that skips or
+        reorders indices is saying something, and this is not the place to
+        argue with it.
+        """
+        if isinstance(data, dict) and isinstance(data.get("steps"), list):
+            for position, step in enumerate(data["steps"], start=1):
+                if isinstance(step, dict) and step.get("idx") is None:
+                    step["idx"] = position
+        return data
 
 
 class Problem(BaseModel):

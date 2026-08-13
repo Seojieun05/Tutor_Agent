@@ -19,6 +19,36 @@ GOOD = {
 BAD = dict(GOOD, final_answer={"kind": "SCALAR", "value": "4"})
 
 
+UNNUMBERED = {
+    "steps": [
+        {"description": "이항", "expression": "3*x = 15"},
+        {"description": "나눗셈", "expression": "x = 5"},
+    ],
+    "final_answer": {"kind": "SCALAR", "value": "5"},
+}
+
+
+def test_steps_the_model_forgot_to_number_are_numbered_by_position(db):
+    """A step's index IS its position, and a solver that omits it has not
+    made a mistake worth throwing six good steps away for — which is what
+    happened when the whole solution died of `idx: Field required`."""
+    llm = EchoLLMClient({"solve": [UNNUMBERED]})
+    solution = GrokSolver(llm, db).solve(REC, "hash-3")
+    assert [s.idx for s in solution.steps] == [1, 2]  # 1-based, as everything downstream reads
+
+
+def test_numbering_the_model_did_give_is_left_alone(db):
+    """A solution that numbers its own steps is saying something: 1, 3, 7 is
+    not this validator's business to renumber."""
+    sparse = dict(UNNUMBERED, steps=[
+        {"idx": 1, "description": "이항", "expression": "3*x = 15"},
+        {"idx": 7, "description": "나눗셈", "expression": "x = 5"},
+    ])
+    llm = EchoLLMClient({"solve": [sparse]})
+    solution = GrokSolver(llm, db).solve(REC, "hash-4")
+    assert [s.idx for s in solution.steps] == [1, 7]
+
+
 def test_machine_checked_solution_stays_unverified(db):
     llm = EchoLLMClient({"solve": [GOOD]})
     solution = GrokSolver(llm, db).solve(REC, "hash-1")

@@ -58,6 +58,16 @@ class Settings:
     # way, and a FallbackLLM keeps Grok on standby exactly as with eval.
     estimate_provider: str = "grok"
     gemini_estimate_model: str = "gemini-3.6-flash"
+    # Writing the reference solution is the longest single call in the system
+    # and the student waits on it twice: a work check needs it for the verdict,
+    # and a spoken answer cannot be graded without it. Measured on three real
+    # 4점 problems, two runs each: grok-4.5 27.5s and 6/6 right, flash 14.5s
+    # and 6/6 right, flash-lite 8.0s and 1/6 — fast and wrong is not a trade,
+    # so the small model is not offered here. Flash cuts the solution coarser
+    # (6 steps where grok wrote 17), which is the real thing being traded: the
+    # hint ladder walks these steps, so each one is a slightly bigger ask.
+    solve_provider: str = "grok"
+    gemini_solve_model: str = "gemini-3.6-flash"
     # The drawing hand runs while the tutor speaks, so its only deadline is
     # the end of the sentence: it has to land inside ~8s of speech, and a
     # short hint gives it half that. Measured on the same sketch, flash-lite
@@ -182,6 +192,13 @@ def load_settings(env_file: Path | None = None) -> Settings:
     s.gemini_estimate_model = (
         os.getenv("GEMINI_ESTIMATE_MODEL", s.gemini_estimate_model).strip()
         or s.gemini_estimate_model
+    )
+    s.solve_provider = (
+        os.getenv("SOLVE_PROVIDER", s.solve_provider).strip().lower() or s.solve_provider
+    )
+    s.gemini_solve_model = (
+        os.getenv("GEMINI_SOLVE_MODEL", s.gemini_solve_model).strip()
+        or s.gemini_solve_model
     )
     s.illustrate_provider = (
         os.getenv("ILLUSTRATE_PROVIDER", s.illustrate_provider).strip().lower()

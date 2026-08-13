@@ -203,6 +203,70 @@ class TestEstimateProvider:
 
 
 
+class TestSolveProvider:
+    """The reference solution is the longest call in the system and the
+    student waits on it twice — for a work-check verdict and to have a spoken
+    answer graded. Measured on three 4점 problems, two runs each: grok 27.5s
+    6/6, flash 14.5s 6/6, flash-lite 8.0s 1/6."""
+
+    def test_solving_stays_on_grok_by_default(self):
+        from tutor.server.app import build_solve_llm
+
+        llm = EchoLLMClient()
+        assert build_solve_llm(Settings(xai_api_key="k"), llm) is llm
+
+    def test_the_knob_reads_from_the_environment(self, env, monkeypatch):
+        monkeypatch.setenv("SOLVE_PROVIDER", "gemini")
+        s = load_settings(env)
+        assert (s.solve_provider, s.gemini_solve_model) == ("gemini", "gemini-3.6-flash")
+
+    def test_a_missing_key_degrades_instead_of_refusing_to_start(self, caplog):
+        from tutor.server.app import build_solve_llm
+
+        llm = EchoLLMClient()
+        settings = Settings(xai_api_key="k", solve_provider="gemini", google_api_key="")
+        with caplog.at_level(logging.ERROR):
+            assert build_solve_llm(settings, llm) is llm
+        assert "SOLVE_PROVIDER" in caplog.text
+
+    def test_only_the_solver_changes_hands(self, db):
+        from tutor.server.app import make_deps
+
+        llm, solve_llm = EchoLLMClient(), EchoLLMClient()
+        deps = make_deps(Settings(), db, llm, None, None, solve_llm=solve_llm)
+        assert deps.solver.llm is solve_llm
+        assert deps.estimator.llm is llm      # diagnosis is a separate judgement
+        assert deps.evaluator.llm is llm      # so is grading
+        assert deps.hint_gen.llm is llm
+
+    def test_the_solver_keeps_its_tools_when_routed(self):
+        """It searches the KB for a solved problem and checks its own answer:
+        a toolless solve model would silently lose both."""
+        from tutor.server.app import build_solve_llm
+
+        seen = {}
+
+        class FakeGemini:
+            def __init__(self, settings, model, role, registry=None):
+                seen["model"], seen["role"], seen["registry"] = model, role, registry
+
+        import tutor.llm.gemini as gemini_module
+
+        original = gemini_module.GeminiClient
+        gemini_module.GeminiClient = FakeGemini
+        try:
+            registry = object()
+            build_solve_llm(
+                Settings(xai_api_key="k", google_api_key="g", solve_provider="gemini"),
+                EchoLLMClient(),
+                registry,
+            )
+        finally:
+            gemini_module.GeminiClient = original
+        assert seen["registry"] is registry
+        assert seen["role"] == "SOLVE_PROVIDER"
+
+
 class TestHintProvider:
     """What the tutor SAYS can move to Gemini for its LearnLM tuning. What
     decides how much it may say cannot move anywhere."""
