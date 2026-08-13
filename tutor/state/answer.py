@@ -114,9 +114,16 @@ class AnswerVerdict(BaseModel):
 
 
 class AnswerEvaluator:
-    def __init__(self, llm: LLMClient, db=None):
+    def __init__(self, llm: LLMClient, db=None, second_opinion: LLMClient | None = None):
         self.llm = llm
         self.db = db
+        # Consulted ONLY before telling a student they are wrong. Measured on
+        # a student who answered a slope question with the whole tangent —
+        # correct, and a step further than asked — the small routed model said
+        # INCORRECT in 2.0s while flash and grok both said CORRECT. Grading a
+        # right answer wrong is the most expensive mistake this system makes,
+        # and it is the one judgement worth paying twice for.
+        self.second_opinion = second_opinion
 
     def evaluate(
         self,
@@ -127,12 +134,8 @@ class AnswerEvaluator:
         target_step: int,
         transcript: str,
     ) -> AnswerVerdict:
-        verdict = self.llm.run_with_tools(
-            purpose="evaluate",
-            system=_SYSTEM,
-            user=self._context(problem_text, reference, question, target_step, transcript),
-            schema=AnswerVerdict,
-        )
+        context = self._context(problem_text, reference, question, target_step, transcript)
+        verdict = self._judge(self.llm, context)
         log.info(
             "answer intent=%s verdict=%s target_step=%d transcript=%r",
             verdict.intent,
@@ -140,7 +143,29 @@ class AnswerEvaluator:
             target_step,
             transcript[:60],
         )
+        if (
+            verdict.verdict == "INCORRECT"
+            and verdict.intent == "ANSWER"
+            and self.second_opinion is not None
+        ):
+            # A correct answer stays fast: only "wrong" pays for the second
+            # look, and a student who is actually wrong is the one who can
+            # afford the wait.
+            log.info("second opinion before telling the student they are wrong")
+            try:
+                better = self._judge(self.second_opinion, context)
+            except Exception:  # noqa: BLE001 — the first verdict still stands
+                log.exception("second opinion failed; keeping the first verdict")
+                return verdict
+            if better.verdict == "CORRECT":
+                log.info("the second opinion overturns it: the answer was right")
+                return better
         return verdict
+
+    def _judge(self, llm: LLMClient, context: str) -> AnswerVerdict:
+        return llm.run_with_tools(
+            purpose="evaluate", system=_SYSTEM, user=context, schema=AnswerVerdict
+        )
 
     def _context(
         self,

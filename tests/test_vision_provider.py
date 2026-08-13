@@ -128,6 +128,16 @@ class TestEvalProvider:
         deps = make_deps(Settings(), db, llm, None, None, eval_llm=eval_llm)
         assert deps.evaluator.llm is eval_llm
 
+    def test_a_routed_grader_gets_a_second_opinion_before_saying_wrong(self, db):
+        from tutor.server.app import build_eval_second_llm, make_deps
+
+        llm, eval_llm, second = EchoLLMClient(), EchoLLMClient(), EchoLLMClient()
+        deps = make_deps(Settings(), db, llm, None, None,
+                         eval_llm=eval_llm, eval_second_llm=second)
+        assert deps.evaluator.second_opinion is second
+        # and none is built at all while grading runs on the chat model
+        assert build_eval_second_llm(Settings(xai_api_key="k"), llm) is None
+
 
 class TestIllustrateProvider:
     """The drawing hand has one deadline: land before the sentence ends. On

@@ -115,6 +115,7 @@ def build_shared(settings: Settings):
     vision_llm = build_vision_llm(settings, llm)
     hint_llm = build_hint_llm(settings, llm)
     eval_llm = build_eval_llm(settings, llm, registry)
+    eval_second_llm = build_eval_second_llm(settings, llm, registry)
     estimate_llm = build_estimate_llm(settings, llm, registry)
     illustrate_llm = build_illustrate_llm(settings, llm)
     # One log line per model call, always on. The tutor's latency is almost
@@ -122,7 +123,8 @@ def build_shared(settings: Settings):
     # call — and that is not answerable after the fact without this.
     return (db, timed(llm, settings.chat_model), transcriber, speaker, semantic,
             timed(vision_llm), timed(hint_llm), timed(eval_llm),
-            timed(estimate_llm), timed(illustrate_llm))
+            timed(estimate_llm), timed(illustrate_llm),
+            timed(eval_second_llm) if eval_second_llm is not None else None)
 
 
 def wrap_with_cache(settings: Settings, speaker):
@@ -201,6 +203,20 @@ def build_eval_llm(settings: Settings, llm, registry=None):
                       settings.gemini_eval_model, "EVAL_PROVIDER", registry=registry)
 
 
+def build_eval_second_llm(settings: Settings, llm, registry=None):
+    """The judge consulted before a student is told they are wrong.
+
+    None unless grading was routed to a smaller model: the same model asked
+    twice is not an opinion. It gets the registry because overturning a
+    verdict usually turns on equivalence — the whole tangent the student said
+    against the slope the question asked for.
+    """
+    if settings.eval_provider != "gemini":
+        return None
+    return _gemini_or(settings, llm, "gemini", settings.gemini_eval_second_model,
+                      "GEMINI_EVAL_SECOND_MODEL", registry=registry)
+
+
 def build_illustrate_llm(settings: Settings, llm):
     """Whichever model decides what to draw. Only the Illustrator sees it.
 
@@ -252,7 +268,7 @@ def _gemini_or(settings: Settings, llm, provider: str, model: str, knob: str,
 def make_deps(
     settings: Settings, db, llm, transcriber, speaker, semantic=None, cameras=None,
     vision_llm=None, hint_llm=None, eval_llm=None, estimate_llm=None,
-    illustrate_llm=None,
+    illustrate_llm=None, eval_second_llm=None,
 ) -> Deps:
     """Per-connection dependencies (fresh SessionStore each time)."""
     return Deps(
@@ -267,7 +283,7 @@ def make_deps(
         illustrator=Illustrator(illustrate_llm or hint_llm or llm),
         transcriber=transcriber,
         speaker=speaker,
-        evaluator=AnswerEvaluator(eval_llm or llm, db),
+        evaluator=AnswerEvaluator(eval_llm or llm, db, second_opinion=eval_second_llm),
         cameras=cameras,
         fillers=FillerBank() if settings.filler_enabled else None,
         classifier=IntentClassifier(llm),
@@ -318,7 +334,7 @@ async def amain(settings: Settings) -> None:
         if not port_is_free(settings.ws_host, port):
             raise PortInUse(port)
     (db, llm, transcriber, speaker, semantic, vision_llm, hint_llm,
-     eval_llm, estimate_llm, illustrate_llm) = build_shared(settings)
+     eval_llm, estimate_llm, illustrate_llm, eval_second_llm) = build_shared(settings)
 
     cameras = CameraHub()
 
@@ -346,6 +362,7 @@ async def amain(settings: Settings) -> None:
         deps = make_deps(
             settings, db, llm, transcriber, speaker, semantic, cameras,
             vision_llm, hint_llm, eval_llm, estimate_llm, illustrate_llm,
+            eval_second_llm,
         )
         if path.rstrip("/") == "/browser":
             from tutor.server.browser import BrowserSession

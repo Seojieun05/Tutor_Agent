@@ -193,6 +193,77 @@ async def test_utterance_without_pending_hint_is_not_an_answer(db):
     assert llm.calls.count("evaluate") == 0
 
 
+class TestSecondOpinionBeforeSayingWrong:
+    """Grading a right answer wrong is the most expensive mistake here, and
+    measurably the one the small routed model makes: on a student who answered
+    a slope question with the whole tangent, flash-lite said INCORRECT in 2.0s
+    where flash and grok both said CORRECT. So "wrong" — and only "wrong" —
+    is checked twice."""
+
+    def _evaluator(self, first, second=None):
+        from tutor.state.answer import AnswerEvaluator
+
+        return AnswerEvaluator(
+            EchoLLMClient({"evaluate": [first]}),
+            None,
+            second_opinion=EchoLLMClient({"evaluate": [second]}) if second else None,
+        )
+
+    def _ask(self, ev):
+        return ev.evaluate(
+            problem_text="p", reference=REFERENCE,
+            question="기울기가 얼마일까요?", target_step=1, transcript="L은 -2x - 4",
+        )
+
+    WRONG = {"intent": "ANSWER", "verdict": "INCORRECT", "feedback": "음, 조금 달라요.",
+             "misconception": None, "status": "CONCEPT_ERROR"}
+    RIGHT = {"intent": "ANSWER", "verdict": "CORRECT", "feedback": "맞아요!",
+             "misconception": None, "status": "CORRECT"}
+
+    def test_a_wrong_verdict_is_overturned_when_the_answer_was_right(self):
+        verdict = self._ask(self._evaluator(self.WRONG, self.RIGHT))
+        assert verdict.verdict == "CORRECT"
+        assert verdict.feedback == "맞아요!"          # and its reaction travels with it
+
+    def test_when_the_second_look_agrees_the_first_verdict_stands(self):
+        verdict = self._ask(self._evaluator(self.WRONG, dict(self.WRONG)))
+        assert verdict.verdict == "INCORRECT"
+        assert verdict.status == "CONCEPT_ERROR"     # the diagnosis survives
+
+    def test_a_correct_answer_never_pays_for_a_second_look(self):
+        second = EchoLLMClient({"evaluate": [self.WRONG]})
+        from tutor.state.answer import AnswerEvaluator
+
+        ev = AnswerEvaluator(EchoLLMClient({"evaluate": [self.RIGHT]}), None,
+                             second_opinion=second)
+        assert self._ask(ev).verdict == "CORRECT"
+        assert second.calls == []                    # not consulted at all
+
+    def test_a_question_is_not_re_graded(self):
+        """QUESTION and WORK_CHECK ignore the verdict entirely, so a second
+        look would be spent on nothing."""
+        second = EchoLLMClient({"evaluate": [self.RIGHT]})
+        from tutor.state.answer import AnswerEvaluator
+
+        asking = {"intent": "QUESTION", "verdict": "INCORRECT", "feedback": "",
+                  "misconception": None, "status": None}
+        ev = AnswerEvaluator(EchoLLMClient({"evaluate": [asking]}), None,
+                             second_opinion=second)
+        assert self._ask(ev).intent == "QUESTION"
+        assert second.calls == []
+
+    def test_a_broken_second_opinion_leaves_the_first_verdict_alone(self):
+        from tutor.state.answer import AnswerEvaluator
+
+        class Broken(EchoLLMClient):
+            def run_with_tools(self, **kwargs):
+                raise RuntimeError("no network")
+
+        ev = AnswerEvaluator(EchoLLMClient({"evaluate": [self.WRONG]}), None,
+                             second_opinion=Broken())
+        assert self._ask(ev).verdict == "INCORRECT"
+
+
 class TestRunningAhead:
     """A student who answers past the question is ahead, not wrong. The number
     that says so also raises the leak guard's ceiling, so it is a proposal the

@@ -46,6 +46,11 @@ class Settings:
     # FallbackLLM keeps Grok on standby exactly as with hints and vision.
     eval_provider: str = "grok"
     gemini_eval_model: str = "gemini-3.6-flash"
+    # Consulted only before telling a student they are wrong, so its cost
+    # lands on the turn that can afford it. Measured on an ordinary wrong
+    # answer: this model adds ~4.5s where the chat model adds ~9s, and both
+    # catch what the small grader missed — the cheaper second look wins.
+    gemini_eval_second_model: str = "gemini-3.6-flash"
     # Diagnosing written work (estimate) sits on the WORK_CHECK critical path:
     # the student asked a yes/no question and is waiting on this call for the
     # verdict. ESTIMATE_PROVIDER=gemini moves it off grok; the estimate feeds
@@ -165,6 +170,10 @@ def load_settings(env_file: Path | None = None) -> Settings:
     )
     s.gemini_eval_model = (
         os.getenv("GEMINI_EVAL_MODEL", s.gemini_eval_model).strip() or s.gemini_eval_model
+    )
+    s.gemini_eval_second_model = (
+        os.getenv("GEMINI_EVAL_SECOND_MODEL", s.gemini_eval_second_model).strip()
+        or s.gemini_eval_second_model
     )
     s.estimate_provider = (
         os.getenv("ESTIMATE_PROVIDER", s.estimate_provider).strip().lower()

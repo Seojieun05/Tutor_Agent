@@ -81,7 +81,7 @@ def build(settings):
     from tutor.vision.recognizer import Recognizer
 
     (db, llm, _transcriber, speaker, semantic, vision_llm, hint_llm,
-     eval_llm, estimate_llm, _illustrate_llm) = build_shared(settings)
+     eval_llm, estimate_llm, _illustrate_llm, _eval_second) = build_shared(settings)
     return {
         "db": db,
         "recognizer": Recognizer(vision_llm, settings),
