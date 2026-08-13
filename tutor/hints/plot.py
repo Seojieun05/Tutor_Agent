@@ -29,7 +29,10 @@ DEFAULT_SPAN = (-6.0, 6.0)
 # Past this the curve is a vertical wall, not a shape: clip and break the line
 # so an asymptote reads as an asymptote instead of a spike across the frame.
 MAX_ABS_Y = 1e4
-CURVES = ("var(--accent-deep)", "var(--err)")
+# What the question is about is drawn like it matters; what only exists to
+# get there is drawn like a construction line, so a glance sorts them.
+TARGETS = ("var(--accent-deep)", "var(--err)")
+SCAFFOLDS = ("var(--dim)", "var(--dim)")
 
 
 def _sample(expr_text: str, x0: float, x1: float) -> list[tuple[float, float | None]]:
@@ -90,13 +93,18 @@ def _fmt(v: float) -> str:
 
 
 def function_svg(
-    expressions: list[str], span: tuple[float, float] = DEFAULT_SPAN
+    curves, span: tuple[float, float] = DEFAULT_SPAN
 ) -> str | None:
-    """Markup for one or two curves, or None when nothing can be drawn."""
-    series: list[tuple[str, list[tuple[float, float | None]]]] = []
-    for text in expressions[:2]:
+    """Markup for the scene, or None when nothing in it can be drawn.
+
+    `curves` are objects with .expr and optionally .label/.role, or plain
+    expression strings.
+    """
+    series: list[tuple[object, list[tuple[float, float | None]]]] = []
+    for curve in list(curves)[:4]:
+        text = curve if isinstance(curve, str) else curve.expr
         try:
-            series.append((text, _sample(text, *span)))
+            series.append((curve, _sample(text, *span)))
         except Exception as e:  # noqa: BLE001 — an unplottable hint still speaks
             log.info("not plotting %r: %s", text, e)
     if not series:
@@ -140,7 +148,20 @@ def function_svg(
             )
     parts.append(f'<g class="ticks">{"".join(labels)}</g>')
 
-    for i, (text, points) in enumerate(series):
+    targets = scaffolds = 0
+    for i, (curve, points) in enumerate(series):
+        text = curve if isinstance(curve, str) else curve.expr
+        label = "" if isinstance(curve, str) else (curve.label or "")
+        target = not isinstance(curve, str) and getattr(curve, "role", "") == "target"
+        if target:
+            colour = TARGETS[targets % len(TARGETS)]
+            width, dash = "2.4", ""
+            targets += 1
+        else:
+            colour = SCAFFOLDS[scaffolds % len(SCAFFOLDS)]
+            width, dash = "1.5", ' stroke-dasharray="5 4"'
+            scaffolds += 1
+
         segments, run = [], []
         for x, y in points:
             if y is None or not (y0 - (y1 - y0) <= y <= y1 + (y1 - y0)):
@@ -151,17 +172,17 @@ def function_svg(
             run.append(f"{px(x):.1f},{py(y):.1f}")
         if len(run) > 1:
             segments.append(run)
-        colour = CURVES[i % len(CURVES)]
         for run in segments:
             parts.append(
                 f'<polyline points="{" ".join(run)}" fill="none" '
-                f'stroke="{colour}" stroke-width="2.2" stroke-linecap="round"/>'
+                f'stroke="{colour}" stroke-width="{width}"{dash} stroke-linecap="round"/>'
             )
         # the legend is read, so it gets the eye's notation like everything
         # else on screen: x², ·, √ rather than programmer ASCII
+        name = f"{escape(label)}: y = " if label else "y = "
         parts.append(
             f'<text x="{WIDTH - PAD}" y="{PAD - 10 + i * 15:.0f}" text-anchor="end" '
-            f'class="legend" fill="{colour}">y = {escape(mathspeak.displayable(text))}</text>'
+            f'class="legend" fill="{colour}">{name}{escape(mathspeak.displayable(text))}</text>'
         )
     parts.append("</svg>")
     return "".join(parts)

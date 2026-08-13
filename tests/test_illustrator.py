@@ -68,7 +68,9 @@ class TestTheTrigger:
 class TestTheSpec:
     def test_it_reads_the_hint_and_returns_a_window(self, db):
         llm = EchoLLMClient({"illustrate": [{
-            "functions": ["y = x**2 - 4*x + 3"], "x_min": -1, "x_max": 5,
+            "curves": [{"expr": "y = x**2 - 4*x + 3", "label": "f",
+                        "role": "scaffold"}],
+            "x_min": -1, "x_max": 5,
             "caption": "x축과 만나는 곳", "why": "부호 변화를 보여줌",
         }]})
         spec = Illustrator(llm).draw(
@@ -76,17 +78,18 @@ class TestTheSpec:
             equations=REC.equations, student_work=REC.student_work,
             board=[], misconception=None, level=1,
         )
-        assert spec.functions == ["x**2 - 4*x + 3"]     # "y =" stripped for plotting
+        assert [c.expr for c in spec.curves] == ["x**2 - 4*x + 3"]  # "y =" stripped
+        assert (spec.curves[0].label, spec.curves[0].role) == ("f", "scaffold")
         assert (spec.x_min, spec.x_max) == (-1, 5)
         assert spec.caption == "x축과 만나는 곳"
 
     def test_nothing_to_draw_is_a_valid_answer(self, db):
-        llm = EchoLLMClient({"illustrate": [{"functions": [], "why": "대수로 충분"}]})
+        llm = EchoLLMClient({"illustrate": [{"curves": [], "why": "대수로 충분"}]})
         spec = Illustrator(llm).draw(
             hint="그래프를 떠올려 볼까요?", problem_text="p", equations=[],
             student_work=[], board=[], misconception=None, level=1,
         )
-        assert spec.functions == []
+        assert spec.curves == []
 
     def test_a_broken_call_costs_the_picture_and_nothing_else(self, db):
         class Broken(EchoLLMClient):
@@ -100,7 +103,7 @@ class TestTheSpec:
 
     def test_a_caption_that_grew_into_a_sentence_is_trimmed(self, db):
         llm = EchoLLMClient({"illustrate": [{
-            "functions": ["x**2"],
+            "curves": [{"expr": "x**2"}],
             "caption": "이 그래프에서 x축과 만나는 부분을 보시면 방정식의 해가 보이는데 그것을 확인해 보세요",
         }]})
         spec = Illustrator(llm).draw(
@@ -154,8 +157,8 @@ def a_hint(level=1):
 class TestInTheSession:
     async def test_it_draws_while_the_hint_is_spoken(self, db):
         session, llm, speaker = build(db, [{
-            "functions": ["x**2 - 4*x + 3"], "x_min": -1, "x_max": 5,
-            "caption": "x축과 만나는 곳", "why": "t",
+            "curves": [{"expr": "x**2 - 4*x + 3", "label": "f", "role": "scaffold"}],
+            "x_min": -1, "x_max": 5, "caption": "x축과 만나는 곳", "why": "t",
         }])
         await session._deliver(a_hint(), "x축과 만나는 점을 생각해 볼까요?", "p1")
         await asyncio.gather(*[t for t in session._tasks if not t.done()])
@@ -163,10 +166,14 @@ class TestInTheSession:
         figure = next(e for e in session.ws.events if e["event"] == "figure")
         assert figure["data"]["svg"].startswith("<svg")
         assert figure["data"]["note"] == "x축과 만나는 곳"
+        assert figure["data"]["id"] == "p1"          # one canvas per problem
         assert speaker.spoken == ["x축과 만나는 점을 생각해 볼까요?"]
+        # the scene is remembered, so the next turn can be told what is drawn
+        assert [c.expr for c in session.ctx.scene] == ["x**2 - 4*x + 3"]
+        assert session.ctx.span == (-1, 5)
 
     async def test_an_algebraic_hint_never_pays_for_the_call(self, db):
-        session, llm, _ = build(db, [{"functions": ["x**2"], "why": "t"}])
+        session, llm, _ = build(db, [{"curves": [{"expr": "x**2"}], "why": "t"}])
         await session._deliver(a_hint(), "양변에서 5를 빼면 무엇이 남을까요?", "p1")
         await asyncio.gather(*[t for t in session._tasks if not t.done()])
 
@@ -176,7 +183,7 @@ class TestInTheSession:
     async def test_a_sketch_of_the_answer_is_not_drawn(self, db):
         """A curve of the answer IS the answer: the same gate as the words."""
         session, llm, _ = build(db, [{
-            "functions": ["(x - 1)*(x - 3)"],   # the reference's own step 1
+            "curves": [{"expr": "(x - 1)*(x - 3)"}],   # the reference's own step 1
             "why": "t",
         }])
         await session._deliver(a_hint(), "그래프의 개형을 떠올려 볼까요?", "p1")
@@ -189,7 +196,7 @@ class TestInTheSession:
         underneath it — and a sketch of the last hint on the next problem is
         worse than no sketch at all."""
         session, llm, _ = build(db, [{
-            "functions": ["x**2 - 4*x + 3"], "why": "t",
+            "curves": [{"expr": "x**2 - 4*x + 3"}], "why": "t",
         }])
         task = asyncio.create_task(
             session._illustrate(a_hint(), "그래프의 개형을 볼까요?", (), "p1")
@@ -198,6 +205,52 @@ class TestInTheSession:
         await task
 
         assert "figure" not in session.ws.names()
+
+    async def test_the_scene_grows_on_one_grid_and_wipes_its_scaffolding(self, db):
+        """The behaviour the whole scene model exists for. f is drawn to find
+        the tangent l; once l is on the grid f has done its job and the next
+        scene simply omits it. Same canvas id throughout — the picture
+        changes rather than a second picture appearing below it."""
+        session, llm, _ = build(db, [
+            {"curves": [{"expr": "x**2 - 4*x - 3", "label": "f", "role": "scaffold"}],
+             "x_min": -2, "x_max": 6, "caption": "접점을 지나는 곡선", "why": "1"},
+            {"curves": [{"expr": "-2*x - 4", "label": "l", "role": "target"}],
+             "caption": "구한 접선", "why": "2"},
+        ])
+        await session._deliver(a_hint(), "곡선의 개형을 떠올려 볼까요?", "p1")
+        await asyncio.gather(*[t for t in session._tasks if not t.done()])
+        assert [c.label for c in session.ctx.scene] == ["f"]
+
+        # the student says the tangent, and it replaces the curve it came from
+        await session._deliver(
+            a_hint(2), "이제 접선의 기울기를 어떻게 쓸 수 있을까요?", "p1",
+            student_said="접선은 y = -2x - 4예요",
+        )
+        await asyncio.gather(*[t for t in session._tasks if not t.done()])
+
+        assert [c.label for c in session.ctx.scene] == ["l"]     # f is gone
+        assert session.ctx.span == (-2, 6)                       # the grid held still
+        figures = [e for e in session.ws.events if e["event"] == "figure"]
+        assert len(figures) == 2
+        assert {f["data"]["id"] for f in figures} == {"p1"}       # one canvas
+        assert "-2·x - 4" in figures[-1]["data"]["svg"]
+
+    async def test_what_the_student_said_reaches_the_drawing_hand(self, db):
+        session, llm, _ = build(db, [{
+            "curves": [{"expr": "-2*x - 4", "label": "l", "role": "target"}], "why": "t",
+        }])
+        seen: dict = {}
+        inner = session.deps.illustrator.draw
+
+        def spy(**kwargs):
+            seen.update(kwargs)
+            return inner(**kwargs)
+
+        session.deps.illustrator.draw = spy
+        await session._deliver(a_hint(), "접선을 그려 볼까요?", "p1",
+                               student_said="기울기는 -2예요")
+        await asyncio.gather(*[t for t in session._tasks if not t.done()])
+        assert seen["student_said"] == "기울기는 -2예요"
 
     async def test_without_an_illustrator_the_tutor_still_teaches(self, db):
         session, llm, speaker = build(db, None)

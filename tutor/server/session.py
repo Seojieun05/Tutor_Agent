@@ -186,6 +186,11 @@ class ProblemContext:
     # None while the background solver is still writing it (NEW problems only).
     reference: ReferenceSolution | None
     solving: asyncio.Task | None = None
+    # ONE grid per problem: what is drawn on it right now, and the window it
+    # is drawn in. The illustrator redeclares both every turn, which is how a
+    # scaffold curve disappears once the thing it produced is on the board.
+    scene: tuple = ()
+    span: tuple[float, float] | None = None
 
     def reference_if_ready(self) -> ReferenceSolution | None:
         """The reference if it exists RIGHT NOW; never waits.
@@ -762,7 +767,10 @@ class Session:
         if spoke_feedback:
             # one acknowledgement per turn: the reaction already was it
             text = strip_leading_acknowledgement(text)
-        await self._deliver(decision, text, ctx.hash, board)
+        # A correct answer often IS the reason the picture changes — the
+        # tangent they just found is what replaces the curve it came from.
+        said = transcript if verdict.verdict == "CORRECT" else None
+        await self._deliver(decision, text, ctx.hash, board, said)
 
     async def _answer_question(
         self, ctx: ProblemContext, pending: HintRecord, question: str
@@ -1250,16 +1258,19 @@ class Session:
                 pass
 
     async def _illustrate(
-        self, decision: Decision, hint: str, board: tuple, problem_hash: str
+        self, decision: Decision, hint: str, board: tuple, problem_hash: str,
+        student_said: str | None = None,
     ) -> None:
-        """Draw beside a hint that is already being spoken. Never awaited by
-        the turn: a picture is optional, and a slow or broken drawing hand
-        must cost the lesson nothing."""
+        """Redraw the problem's grid beside a hint that is already being
+        spoken. Never awaited by the turn: a picture is optional, and a slow
+        or broken drawing hand must cost the lesson nothing."""
         ctx = self.ctx
         if self.deps.illustrator is None or ctx is None:
             return
-        if not illustrator.wants_a_picture(hint):
-            # the sentence never mentions a shape, so no curve supports it
+        if not ctx.scene and not illustrator.wants_a_picture(hint):
+            # Nothing drawn yet and the sentence never mentions a shape. Once
+            # a grid IS open it is kept current every turn, because what
+            # changes it is often the student's answer, not the tutor's words.
             return
         spec = await asyncio.to_thread(
             self.deps.illustrator.draw,
@@ -1270,21 +1281,26 @@ class Session:
             board=[b.expr for b in board],
             misconception=decision.misconception,
             level=decision.level,
+            scene=list(ctx.scene),
+            span=ctx.span,
+            student_said=student_said,
         )
-        if spec is None or not spec.functions:
+        if spec is None or not spec.curves:
             return
         # The same gate as the words: a curve of the answer IS the answer.
         seen = visible_to_student(ctx.recognition)
         if ctx.reference is not None and any(
             leaks_answer(part, ctx.reference, decision.target_step, seen)
-            for part in (*spec.functions, spec.caption) if part
+            for part in (*(c.expr for c in spec.curves), spec.caption) if part
         ):
             log.info("the sketch would leak the answer; nothing is drawn")
             return
-        span = plot.DEFAULT_SPAN
+        # A window that jumps every turn reads as a new picture rather than
+        # the same board, so the previous one stands unless a new one is given.
+        span = ctx.span or plot.DEFAULT_SPAN
         if spec.x_min is not None and spec.x_max is not None and spec.x_min < spec.x_max:
             span = (spec.x_min, spec.x_max)
-        svg = await asyncio.to_thread(plot.function_svg, spec.functions, span)
+        svg = await asyncio.to_thread(plot.function_svg, spec.curves, span)
         if not svg:
             return
         # The turn moved on while we drew: a picture of the last hint landing
@@ -1295,17 +1311,29 @@ class Session:
         if getattr(self, "_interrupted", False):
             log.info("dropping a sketch the student talked over")
             return
+        gone = [c.label or c.expr for c in ctx.scene
+                if c.expr not in {n.expr for n in spec.curves}]
+        ctx.scene, ctx.span = tuple(spec.curves), span
         try:
             await self.ws.send(make_event("figure", {
-                "svg": svg, "of": ", ".join(spec.functions), "note": spec.caption,
+                # one canvas per problem: the page replaces it in place, so
+                # the scene changes rather than a second picture appearing
+                "id": problem_hash or "scene",
+                "svg": svg,
+                "of": ", ".join(c.expr for c in spec.curves),
+                "note": spec.caption,
             }))
         except Exception:
             log.debug("could not send figure event (connection gone)")
-        log.info("sketched %s over %s — %s", spec.functions, span, spec.why[:60])
+        log.info(
+            "scene: %s over %s%s — %s",
+            [f"{c.label or '?'}={c.expr}({c.role})" for c in spec.curves], span,
+            f", wiped {gone}" if gone else "", spec.why[:60],
+        )
 
     async def _deliver(
         self, decision: Decision, text: str, problem_hash: str = "",
-        board: tuple[str, ...] = (),
+        board: tuple[str, ...] = (), student_said: str | None = None,
     ) -> None:
         if board:
             # written as the voice starts, like a tutor's hand reaching the
@@ -1322,7 +1350,9 @@ class Session:
             # say, which is time the drawing hand can use — and by starting
             # here it gets what no parallel design could: the finished
             # sentence, so it draws what was said instead of guessing.
-            self._spawn(self._illustrate(decision, text, board, problem_hash))
+            self._spawn(
+                self._illustrate(decision, text, board, problem_hash, student_said)
+            )
             await self._speak(text)
         self.store.append_hint(
             problem_hash=problem_hash,

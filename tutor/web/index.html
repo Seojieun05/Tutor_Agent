@@ -146,6 +146,10 @@
   .boardline .katex { font-size:1.15em; }
   /* a function sketched on the board: axes, a light grid, the curve */
   .boardfigure { padding:.5rem 0; }
+  @media (prefers-reduced-motion: no-preference) {
+    .boardfigure { transition:opacity .18s ease; }
+    .boardfigure.fading { opacity:.15; }
+  }
   .boardfigure svg { display:block; width:100%; height:auto; }
   .boardfigure .grid line { stroke:var(--line); stroke-width:1; }
   .boardfigure .axes line { stroke:var(--dim); stroke-width:1.4; }
@@ -552,7 +556,7 @@ function onEvent(msg) {
     case "transcript":  addTurn("you", d.text || "(인식 실패)"); break;
     case "tutor_says":  addTurn("tutor", d.text); break;
     case "board":       for (const line of d.lines || []) boardWrite(line); break;
-    case "figure":      boardDraw(d.svg, d.of, d.note); break;
+    case "figure":      boardDraw(d); break;
     case "stage":       setStage(d.text); break;
     case "solved":      addSolved(d.text); break;
     case "problem":     showProblem(d); break;
@@ -664,25 +668,46 @@ function boardClear() {
 /** A function sketched on the board. The markup is built by the server (sympy
     samples the curve there), so this only has to place it — and the same leak
     guard that screens the spoken hint has already seen it. */
-function boardDraw(svg, of, note) {
-  const key = `figure:${of || (svg || "").length}`;
-  if (!svg || boardSeen.has(key)) return;
+/** ONE grid per problem, replaced in place. The server re-declares the whole
+    scene each turn — a curve that has served its purpose is simply absent
+    from the next one — so the picture must CHANGE rather than a second
+    picture appearing beneath it. */
+function boardDraw(d) {
+  const svg = d && d.svg;
+  if (!svg) return;
+  const id = `fig:${d.id || d.of || "scene"}`;
+  const key = `${id}|${d.of}|${d.note || ""}`;
+  if (boardSeen.has(key)) return;      // the same scene twice is not a change
   boardSeen.add(key);
-  const empty = document.getElementById("boardEmpty");
-  if (empty) empty.remove();
-  const box = document.createElement("div");
-  box.className = "boardfigure";
-  box.innerHTML = svg;
-  if (note) {
-    // what to look at, in the same margin voice the written lines use
-    const label = document.createElement("div");
-    label.className = "note";
-    label.textContent = note;
-    box.appendChild(label);
+
+  let box = document.querySelector(`[data-figure="${CSS.escape(id)}"]`);
+  const fresh = !box;
+  if (fresh) {
+    const empty = document.getElementById("boardEmpty");
+    if (empty) empty.remove();
+    box = document.createElement("div");
+    box.className = "boardfigure";
+    box.dataset.figure = id;
+    $("boardLines").appendChild(box);
   }
-  const lines = $("boardLines");
-  lines.appendChild(box);
-  lines.scrollTop = lines.scrollHeight;
+  const paint = () => {
+    box.innerHTML = svg;
+    if (d.note) {
+      // what to look at, in the same margin voice the written lines use
+      const label = document.createElement("div");
+      label.className = "note";
+      label.textContent = d.note;
+      box.appendChild(label);
+    }
+    box.classList.remove("fading");
+    const lines = $("boardLines");
+    lines.scrollTop = lines.scrollHeight;
+  };
+  if (fresh) return paint();
+  // redrawing an existing grid: fade out the old scene so a curve leaving is
+  // seen as leaving rather than as a flicker
+  box.classList.add("fading");
+  setTimeout(paint, 180);
 }
 
 /** The board shows ONLY what the tutor deliberately wrote (the `board`

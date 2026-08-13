@@ -24,10 +24,24 @@ class TestItDraws:
         assert points, "no curve drawn"
         assert len(points[0].split()) > 50          # sampled, not a straight line
 
-    def test_two_curves_get_two_colours(self):
-        svg = function_svg(["x**2", "2*x + 1"])
+    def test_a_target_and_a_scaffold_are_told_apart_at_a_glance(self):
+        """What the question asks for is drawn like it matters; what only
+        exists to get there is drawn like a construction line."""
+        from tutor.hints.illustrator import Curve
+
+        svg = function_svg([
+            Curve(expr="x**2 - 4*x - 3", label="f", role="scaffold"),
+            Curve(expr="-2*x - 4", label="l", role="target"),
+        ])
+        assert "stroke-dasharray" in svg              # the scaffold is dashed
+        assert svg.count("stroke-dasharray") < svg.count("<polyline")
+        assert "f: y = " in svg and "l: y = " in svg  # named as the problem names them
         strokes = set(re.findall(r'stroke="(var\(--[a-z-]+\))"', svg))
         assert len(strokes) == 2
+
+    def test_two_bare_expressions_still_draw(self):
+        svg = function_svg(["x**2", "2*x + 1"])
+        assert len(re.findall(r"<polyline", svg)) >= 2
 
     def test_the_legend_names_the_function_in_print_notation(self):
         assert "y = x²" in function_svg(["x**2"])          # not "x**2"
