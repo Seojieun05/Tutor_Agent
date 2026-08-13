@@ -1025,14 +1025,27 @@ class Session:
         # (only a pending hint of the SAME problem can be resolved).
         pending = self.store.pending_hint(ctx.hash)
         self.store.set_state(new_state)
+        log.info(
+            "state: %s at step %d%s",
+            new_state.status, new_state.last_correct_step,
+            f" ({new_state.misconception})" if new_state.misconception else "",
+        )
         # an UNCERTAIN estimate carries no evidence either way: keep the hint
         # pending rather than resolving its effectiveness on a blurry frame.
         # A skipped estimate (reference still solving) carries none either.
         if (reference is not None and pending is not None and prev_state is not None
                 and new_state.status != "UNCERTAIN"):
-            self.store.mark_hint_effective(
-                pending.id, hint_was_effective(prev_state, new_state)
+            effective = hint_was_effective(prev_state, new_state)
+            # The escalation one turn later reads "hint L1 ineffective" and
+            # names no evidence. This is the evidence: two states and the
+            # comparison between them, at the moment it is made.
+            log.info(
+                "hint L%d at step %d: %s (was %s at step %d)",
+                pending.level, pending.step,
+                "helped" if effective else "did not help",
+                prev_state.status, prev_state.last_correct_step,
             )
+            self.store.mark_hint_effective(pending.id, effective)
 
         # Always read state/history through the store right before the policy.
         current = self.store.get_state() or new_state
