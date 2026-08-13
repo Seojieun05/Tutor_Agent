@@ -656,15 +656,24 @@ class Session:
         try:
             reference = await ctx.reference_ready()
         except Exception:
-            # The background solve died. Grading is impossible, but the student
-            # is mid-sentence expecting a reply — fall back to the capture flow,
-            # which restarts the solve (see _problem_context) and still says
-            # something useful meanwhile. Not the public entry point: this turn
-            # already holds the busy flag.
-            log.exception("no reference for the answer turn; re-running the hint flow")
-            self.last_transcript = transcript
-            await self._handle_hint_request()
-            return
+            # The background solve died. This used to fall back to the capture
+            # flow, which is the wrong shape twice over: the student SPOKE, so
+            # there is nothing new on the paper to look at, and if the phone has
+            # dropped (it had, three seconds earlier) the answer turn ends by
+            # asking for a photo nobody can take. The photo we already have is
+            # enough to solve from, so retry from that — and if the retry loses
+            # too, explain the pending question, which needs no reference.
+            log.exception("no reference for the answer turn; retrying the solve")
+            await self._stage("기준 풀이를 다시 계산하고 있어요")
+            ctx.solving = self._start_solve(ctx.recognition, ctx.hash)
+            try:
+                reference = await ctx.reference_ready()
+            except Exception:
+                log.exception("the retried solve failed too; explaining instead")
+                # never graded, so it is still evidence the next turn can read
+                self.last_transcript = transcript
+                await self._answer_question(ctx, pending, transcript)
+                return
 
         await self._stage("답을 확인하고 있어요")
         verdict = await asyncio.to_thread(

@@ -54,12 +54,13 @@ class GatedSolver:
         self.inner = inner
         self.release = threading.Event()
         self.fail_next = False
+        self.fail_always = False
         self.calls = 0
 
     def solve(self, rec, h):
         self.calls += 1
         assert self.release.wait(timeout=10), "test never released the solver"
-        if self.fail_next:
+        if self.fail_always or self.fail_next:
             self.fail_next = False
             raise RuntimeError("solver exploded")
         return self.inner.solve(rec, h)
@@ -156,9 +157,22 @@ async def test_a_spoken_answer_waits_out_the_solve_then_grades(db):
     assert session.ctx.reference is not None
 
 
-async def test_a_failed_solve_falls_back_to_the_hint_flow_and_retries(db):
-    """A dead solve must not strand the student mid-conversation."""
-    session, llm, speaker, ws, solver = build(db, "이 문제 힌트 줄래?", "5예요")
+async def test_a_failed_solve_is_retried_on_the_answer_turn_never_re_photographed(db):
+    """A dead solve must not cost the student the answer they just gave.
+
+    This used to fall back to the capture flow, which is the wrong shape twice
+    over: the student SPOKE, so nothing on the paper has changed, and if the
+    phone has dropped — it had, three seconds earlier, the night this was
+    found — the answer turn ends by asking for a photo nobody can take. The
+    recognition already in hand is all the solver ever needed.
+    """
+    session, llm, speaker, ws, solver = build(
+        db, "이 문제 힌트 줄래?", "5예요",
+        llm_responses={
+            "evaluate": [{"intent": "ANSWER", "verdict": "CORRECT", "feedback": "맞아요!",
+                          "misconception": None, "status": "CORRECT"}],
+        },
+    )
     solver.fail_next = True
     solver.release.set()                                     # fail immediately
 
@@ -166,13 +180,32 @@ async def test_a_failed_solve_falls_back_to_the_hint_flow_and_retries(db):
     await asyncio.sleep(0.05)                                # let the failure land
     assert session.ctx.reference is None
 
-    await session._handle_utterance(PCM, 16000)              # "5예요" — ungradeable
+    await session._handle_utterance(PCM, 16000)              # "5예요"
 
-    assert llm.calls.count("evaluate") == 0                  # nothing was graded...
-    assert len(speaker.spoken) == 2                          # ...but the tutor spoke
-    assert solver.calls == 2                                 # and the solve restarted
-    reference = await session.ctx.reference_ready()          # retry succeeds
-    assert reference.steps
+    assert solver.calls == 2                                 # the solve was retried...
+    assert session.ctx.reference is not None                 # ...and won this time
+    assert llm.calls.count("evaluate") == 1                  # so the answer WAS graded
+    assert llm.calls.count("recognize") == 1                 # and no second look at the page
+    assert sum(1 for e in ws.events if e["event"] == "capture_request") == 1
+
+
+async def test_when_the_retry_loses_too_the_tutor_explains_instead_of_asking_for_a_photo(db):
+    """Second failure: still no camera. An explanation needs no reference."""
+    session, llm, speaker, ws, solver = build(db, "이 문제 힌트 줄래?", "5예요")
+    solver.fail_always = True
+    solver.release.set()
+
+    await session._handle_utterance(PCM, 16000)
+    await asyncio.sleep(0.05)
+    await session._handle_utterance(PCM, 16000)              # "5예요" — ungradeable twice
+
+    assert solver.calls == 2                                 # tried again, lost again
+    assert llm.calls.count("evaluate") == 0                  # nothing could be graded
+    assert llm.calls.count("explain") == 1                   # so the pending question is explained
+    assert len(speaker.spoken) == 2                          # and the student hears a reply
+    assert sum(1 for e in ws.events if e["event"] == "capture_request") == 1
+    # ungraded, so the answer is still evidence for whatever comes next
+    assert session.last_transcript == "5예요"
 
 
 async def test_a_kb_problem_never_starts_a_background_solve(db):

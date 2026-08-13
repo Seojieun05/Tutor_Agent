@@ -3,6 +3,17 @@
 Solutions are sympy machine-checked but NEVER marked verified (spec: Grok
 output is not automatically verified); passing candidates are stored in the
 DB as unverified for later human review.
+
+The prompt used to say "check yourself as you go", and on the one problem in
+three that took it literally the model checked a single step per round trip:
+9 rounds, 13 `compute` calls, two of them spent discovering that
+`f = ...; diff(f, x)` does not parse, one an exact repeat of the round before,
+one asking sympy to simplify `2*x - 4`. It ran out of rounds and the whole
+solve was lost — which is how a background solve failure reached a student as
+"show me your worksheet". Measured over three runs of that problem: checking
+as it goes, 31.8s median; verifying once at the end, 16.9s, same answer. The
+same-answer part holds across all twelve runs of three problems, and the
+deterministic check below still decides what is stored.
 """
 
 from __future__ import annotations
@@ -26,11 +37,10 @@ Rules:
 - final_answer.kind: "SCALAR" for a single value, "ROOT_SET" for multiple roots,
   "EXPRESSION" for a symbolic result (e.g. a derivative).
 - You may search the domain knowledge base for similar solved problems.
-- Check yourself as you go: `compute` evaluates an expression or solves a
-  one-variable equation; `check_equivalence` confirms a step's expression is
-  still the same claim as the one before it. Verify the final answer with
-  `compute` before returning. If a check contradicts a step, fix the step —
-  never return work a tool call disagreed with.
+- Solve it yourself. Use `compute` ONCE, at the end, to verify the final
+  answer; do not check intermediate steps one at a time. It takes ONE sympy
+  expression — `diff(x**2 - 4*x - 3, x)`, never `f = x**2 - 4*x - 3; diff(f, x)`.
+  If the check contradicts your answer, fix it before returning.
 - concepts: short English snake_case tags like "linear_equation".
 - origin must be "grok" and verified must be false.
 

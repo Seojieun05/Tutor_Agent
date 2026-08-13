@@ -171,11 +171,12 @@ class GeminiClient:
         contents = [types.Content(role="user", parts=parts)]
         # tools and response_schema do not combine reliably, so the schema
         # rides in the system instruction and the final text is validated here
+        instruction = (
+            f"{system}\n\nRespond with ONLY a JSON object matching this schema:\n"
+            + json.dumps(schema.model_json_schema(), ensure_ascii=False)
+        )
         config = types.GenerateContentConfig(
-            system_instruction=(
-                f"{system}\n\nRespond with ONLY a JSON object matching this schema:\n"
-                + json.dumps(schema.model_json_schema(), ensure_ascii=False)
-            ),
+            system_instruction=instruction,
             tools=[types.Tool(function_declarations=declarations)],
             temperature=0,
         )
@@ -212,4 +213,29 @@ class GeminiClient:
                 for call in calls
             ]
             contents.append(types.Content(role="user", parts=results))
-        raise LLMError(f"{purpose}: gemini tool loop exceeded {max_rounds} rounds")
+        # Out of rounds, same as the grok seam: ask once more with the tools
+        # withdrawn rather than discarding every round trip that got us here.
+        log.warning(
+            "%s: gemini out of tool rounds after %d; asking for the answer without tools",
+            purpose, max_rounds,
+        )
+        contents.append(
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(
+                    text="No more tool calls are available. Answer now, using what "
+                         "you already worked out — do not request another tool call."
+                )],
+            )
+        )
+        try:
+            response = self._client.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=instruction, temperature=0
+                ),
+            )
+            return parse_into(schema, getattr(response, "text", None) or "")
+        except Exception as e:  # noqa: BLE001 — one seam, one error type
+            raise LLMError(f"{purpose}: gemini ran out of tool rounds: {e}") from e

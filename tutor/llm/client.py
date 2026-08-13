@@ -165,7 +165,29 @@ class GrokClient:
                         "content": json.dumps(result, ensure_ascii=False),
                     }
                 )
-        raise LLMError(f"{purpose}: tool loop exceeded {max_rounds} rounds")
+        # Out of rounds — but not out of work. Everything the model looked up
+        # is in `messages`, and raising here discarded all of it: a solver that
+        # had done six of eight steps died with nothing, and the student heard
+        # the failure as a request for a photo. So spend one more call with the
+        # tools withdrawn and ask for the answer from what it already has. A
+        # half-checked reference beats no reference, and the deterministic
+        # checks downstream (the solver's machine check, the leak guard) are
+        # unchanged by how the model got here.
+        log.warning(
+            "%s: out of tool rounds after %d; asking for the answer without tools",
+            purpose, max_rounds,
+        )
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "No more tool calls are available. Answer now, using what you "
+                    "already worked out — do not request another tool call."
+                ),
+            }
+        )
+        with timing.stage(f"{purpose}.last"):
+            return self._final_json(purpose, messages, schema)
 
     def _final_json(self, purpose: str, messages: list, schema: type[M]) -> M:
         resp = self._client.chat.completions.create(

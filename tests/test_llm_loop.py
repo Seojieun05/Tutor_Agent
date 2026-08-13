@@ -111,6 +111,53 @@ def test_blocked_kind_returns_error_to_model(db):
     assert "x = 5" not in tool_msgs[0]["content"]
 
 
+def _endless_lookup(n: int) -> list:
+    """A model that keeps checking and never answers."""
+    return [
+        FakeMessage(
+            tool_calls=[FakeToolCall(f"c{i}", "compute", json.dumps({"expression": "1+1"}))]
+        )
+        for i in range(n)
+    ]
+
+
+def test_running_out_of_rounds_asks_once_more_without_tools(db):
+    """Out of rounds is not out of work.
+
+    This used to raise, and the discarded transcript was a whole background
+    solve: six round trips of real arithmetic thrown away, surfacing to the
+    student as an ungradeable answer. The last call keeps the transcript and
+    withdraws the tools, so the model answers from what it already has.
+    """
+    grok = make_grok(db, _endless_lookup(3) + [FakeMessage(content='{"answer": "49"}')])
+
+    result = grok.run_with_tools(
+        purpose="solve", system="s", user="u", schema=Out, max_rounds=3
+    )
+
+    assert result.answer == "49"
+    sent = grok._client.requests[-1]
+    assert "tools" not in sent                      # the tools are gone...
+    assert any(                                     # ...and the model was told so
+        m.get("role") == "user" and "No more tool calls" in (m.get("content") or "")
+        for m in sent["messages"]
+    )
+    # everything the model looked up is still in front of it
+    assert sum(1 for m in sent["messages"] if m.get("role") == "tool") == 3
+
+
+def test_the_last_call_still_raises_if_the_model_will_not_answer(db):
+    """A model that answers nothing is still a failed call — one retry, then out."""
+    grok = make_grok(
+        db,
+        _endless_lookup(2) + [FakeMessage(content="not json"), FakeMessage(content="nope")],
+    )
+    with pytest.raises(LLMError):
+        grok.run_with_tools(
+            purpose="solve", system="s", user="u", schema=Out, max_rounds=2
+        )
+
+
 def test_invalid_json_retries_once_then_raises(db):
     grok = make_grok(
         db,
