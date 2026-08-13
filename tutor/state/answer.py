@@ -42,6 +42,10 @@ verdict:
                 they understand the targeted step. Accept informal or partial
                 phrasing ("5를 빼면 돼요", "부호가 바뀌어요") when the idea is right.
                 Do not demand exact numbers unless the question asked for them.
+                A student who runs AHEAD is correct, not wrong: if the question
+                asked for a slope and they give the whole tangent, they have
+                done the step and more. Grade what they demonstrated, not
+                whether it matches the question word for word.
 - "INCORRECT" — the answer is wrong, targets the wrong idea, or the student says
                 they do not know / asks for more help ("모르겠어요", "힌트 더 주세요").
 - "UNCLEAR"   — off-topic, unintelligible, or too vague to judge either way.
@@ -71,6 +75,14 @@ This is the ONLY reaction the student hears — what follows it is written
 separately, so keep feedback to one clause and never continue into a hint.
 NEVER state the final answer, a later step, or the result of the current step.
 
+reached_step / reached_claim: only when the student answered BEYOND the step
+they were asked about. `reached_step` is the highest reference step their
+answer demonstrably completes, and `reached_claim` is the expression they said
+that proves it, written in ASCII ("y = -2*x - 4"). The claim is checked
+mechanically against that step before anything moves, so an unprovable jump
+costs nothing — but a claim that does not match the step you named will simply
+be ignored. Leave both out when the answer is to the step that was asked.
+
 misconception: an id from the given list if the wrong answer matches one, else null.
 status: the student's state after this answer, one of CORRECT, CALCULATION_ERROR,
 CONCEPT_ERROR, PROCEDURAL_ERROR, MISREAD, STUCK.
@@ -93,6 +105,12 @@ class AnswerVerdict(BaseModel):
     feedback: str = ""
     misconception: str | None = None
     status: Status | None = None
+    # A PROPOSAL, not a verdict: how far the student ran ahead, and the
+    # expression that proves it. The orchestrator checks the claim against
+    # that reference step with sympy before letting either of them move
+    # anything — see Session._reached_step.
+    reached_step: int | None = None
+    reached_claim: str = ""
 
 
 class AnswerEvaluator:

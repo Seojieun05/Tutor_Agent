@@ -193,6 +193,87 @@ async def test_utterance_without_pending_hint_is_not_an_answer(db):
     assert llm.calls.count("evaluate") == 0
 
 
+class TestRunningAhead:
+    """A student who answers past the question is ahead, not wrong. The number
+    that says so also raises the leak guard's ceiling, so it is a proposal the
+    orchestrator checks rather than a verdict it accepts."""
+
+    # Three steps, so there is room to run ahead and still stop short of the
+    # last one — the whole point of the ceiling.
+    LONGER = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="기울기를 구한다", expression="m = -2"),
+            SolutionStep(idx=2, description="접선을 세운다", expression="y = -2*x - 4"),
+            SolutionStep(idx=3, description="넓이를 구한다", expression="S = 28"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="28"),
+        concepts=["differentiation"], verified=True, origin="db",
+    )
+
+    def _verdict(self, **extra):
+        return {"intent": "ANSWER", "verdict": "CORRECT", "feedback": "맞아요!",
+                "misconception": None, "status": "CORRECT", **extra}
+
+    def _session(self, db, verdict):
+        session, llm, speaker = build_session(db, [verdict])
+        session.ctx.reference = self.LONGER
+        return session, llm, speaker
+
+    async def test_a_verified_jump_moves_the_student_forward(self, db):
+        """The live case: asked for the slope, answered with the whole tangent
+        — which is step 1 done and step 2 as well."""
+        session, _, _ = self._session(db, self._verdict(
+            reached_step=2, reached_claim="y = -2*x - 4",
+        ))
+        ask_l1(session, step=1)
+        await session.handle_answer("L은 마이너스 2x 마이너스 4", session.store.pending_hint("p1"))
+
+        assert session.store.get_state().last_correct_step == 2
+
+    async def test_an_unprovable_jump_costs_nothing(self, db):
+        """No claim to check means no jump — the answer still counts for the
+        step that was asked."""
+        session, _, _ = self._session(db, self._verdict(reached_step=2))
+        ask_l1(session, step=1)
+        await session.handle_answer("다 풀었어요", session.store.pending_hint("p1"))
+
+        assert session.store.get_state().last_correct_step == 1
+
+    async def test_a_claim_that_does_not_match_the_step_is_ignored(self, db):
+        session, _, _ = self._session(db, self._verdict(
+            reached_step=2, reached_claim="y = 5*x + 1",   # not step 2
+        ))
+        ask_l1(session, step=1)
+        await session.handle_answer("y는 5x 더하기 1이요", session.store.pending_hint("p1"))
+
+        assert session.store.get_state().last_correct_step == 1
+
+    async def test_a_rearranged_claim_still_counts(self, db):
+        """sympy decides, not string equality: the student said the same line
+        a different way."""
+        session, _, _ = self._session(db, self._verdict(
+            reached_step=2, reached_claim="y + 2*x = -4",
+        ))
+        ask_l1(session, step=1)
+        await session.handle_answer("y 더하기 2x는 마이너스 4요", session.store.pending_hint("p1"))
+
+        assert session.store.get_state().last_correct_step == 2
+
+    async def test_running_ahead_never_reaches_the_last_step(self, db):
+        """The ceiling is what keeps the leak guard shut and the problem open.
+        A jump to the final step would make the answer sayable and close the
+        problem on one spoken sentence, so it is clamped one short."""
+        session, _, speaker = self._session(db, self._verdict(
+            reached_step=3, reached_claim="S = 28",    # the final step itself
+        ))
+        ask_l1(session, step=1)
+        await session.handle_answer("넓이는 28이요", session.store.pending_hint("p1"))
+
+        assert session.store.get_state().last_correct_step == 1   # not 3
+        assert session.ctx is not None                            # still open
+        assert "문제를 끝까지" not in " ".join(speaker.spoken)
+
+
 class TestProblemCompletion:
     """Getting the LAST step right ends the problem, it does not hint again."""
 

@@ -707,11 +707,12 @@ class Session:
         # the pending hint IS the signal that moves it up, down or nowhere.
         prev = self.store.get_state() or StudentState()
         if verdict.verdict == "CORRECT":
+            reached = self._reached_step(verdict, reference, pending.step)
             self.store.set_state(
                 prev.model_copy(
                     update={
-                        "current_step": f"{pending.step}단계를 말로 설명함",
-                        "last_correct_step": max(prev.last_correct_step, pending.step),
+                        "current_step": f"{reached}단계를 말로 설명함",
+                        "last_correct_step": max(prev.last_correct_step, reached),
                         "status": "CORRECT",
                         "misconception": None,
                         "attempt_count": 1,
@@ -720,6 +721,10 @@ class Session:
                 )
             )
             self.store.mark_hint_effective(pending.id, True)
+            # Completion is never reached by running ahead: closing a problem
+            # wipes the student's context, and one spoken sentence is not
+            # enough evidence to do that. Only answering the LAST step's own
+            # question ends it — _reached_step never reports that far.
             if pending.step >= len(reference.steps):
                 await self._finish_problem(ctx, verdict, pending.step)
                 return
@@ -771,6 +776,42 @@ class Session:
         # tangent they just found is what replaces the curve it came from.
         said = transcript if verdict.verdict == "CORRECT" else None
         await self._deliver(decision, text, ctx.hash, board, said)
+
+    @staticmethod
+    def _reached_step(verdict, reference: ReferenceSolution, asked: int) -> int:
+        """How far the student actually got, in steps we can prove.
+
+        A student who answers the slope question with the whole tangent has
+        done that step and the next one, and treating that as "wrong step"
+        was punishing them for being ahead. But the number that says so also
+        raises the leak guard's ceiling — everything up to the target step
+        becomes sayable — so it may not be taken on the grader's word:
+
+          · the claim is checked against that reference step with sympy, and
+            an unverifiable jump simply does not happen
+          · the jump stops short of the last step, so no amount of running
+            ahead can make the answer sayable or close the problem
+          · the next photo overrules all of it, because the estimator writes
+            last_correct_step from what is actually on the page
+        """
+        proposed = verdict.reached_step
+        if not isinstance(proposed, int) or proposed <= asked:
+            return asked
+        ceiling = len(reference.steps) - 1     # never the final step
+        proposed = min(proposed, ceiling)
+        if proposed <= asked:
+            return asked
+        step = next((s for s in reference.steps if s.idx == proposed), None)
+        claim = (verdict.reached_claim or "").strip()
+        if step is None or not claim or not step.expression:
+            log.info("no way to check a jump to step %s; staying at %s", proposed, asked)
+            return asked
+        if not mathnorm.equations_equivalent(claim, step.expression):
+            log.info("claim %r does not match step %d; staying at %s",
+                     claim[:40], proposed, asked)
+            return asked
+        log.info("student ran ahead to step %d (%r checks out)", proposed, claim[:40])
+        return proposed
 
     async def _answer_question(
         self, ctx: ProblemContext, pending: HintRecord, question: str
