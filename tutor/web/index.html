@@ -111,9 +111,20 @@
     background:radial-gradient(60% 100% at 50% 100%, var(--bg-near), transparent 72%);
     opacity:.75;
   }
+  /* the reef, along the bottom edge. Soft and out of focus on purpose: it is
+     scenery, and the panels above it carry the lesson. */
+  /* width:100% explicitly: an <svg> is a replaced element, so left:0 with
+     right:0 sizes it from the viewBox ratio instead of stretching, and the
+     right-hand coral stand walks off a narrow screen */
+  #reef {
+    position:fixed; left:0; bottom:0; z-index:0; width:100%;
+    height:clamp(120px, 17vh, 190px);
+    pointer-events:none; opacity:.8; filter:blur(.6px);
+  }
   @media (prefers-color-scheme: dark) {
     body::before { opacity:.28; }
     body::after { opacity:.45; }
+    #reef { opacity:.3; }
   }
 
   /* bubbles: six of them, rising, behind everything */
@@ -136,25 +147,47 @@
 
   main, header, footer { position:relative; z-index:1; }
 
-  /* ---- top bar ---- */
+  /* ---- top bar: the brand, and the microphone that used to sit at the
+     bottom. Nothing was dropped with the bottom bar; 시작 is the click that
+     grants the microphone and unlocks the speaker, so it has to stay. ---- */
   header {
-    flex:none; height:64px;
-    display:flex; align-items:center; justify-content:space-between;
-    padding:0 1.5rem;
+    flex:none; min-height:68px;
+    display:flex; align-items:center; justify-content:space-between; gap:1rem;
+    padding:.7rem 1.5rem;
   }
-  .brand { display:flex; align-items:center; gap:.6rem; }
-  .brand .mark {
-    width:40px; height:40px; border-radius:50%; display:grid; place-items:center;
-    background:var(--surface); border:1px solid var(--line);
-    box-shadow:var(--shadow); backdrop-filter:blur(10px);
-  }
-  .brand .mark svg { width:26px; height:31px; }
+  .brand { display:flex; align-items:baseline; gap:.5rem; min-width:0; }
   .brand .name {
-    font-size:.95rem; font-weight:800; letter-spacing:-.01em; color:var(--accent-deep);
+    font-size:1.05rem; font-weight:800; letter-spacing:-.02em; color:var(--accent-deep);
   }
-  .brand .name span { display:block; font-size:.7rem; font-weight:600; color:var(--dim); letter-spacing:.02em; }
+  .brand .name span {
+    margin-left:.5rem; font-size:.72rem; font-weight:600; color:var(--dim); letter-spacing:.02em;
+  }
+  .mic { display:flex; align-items:center; gap:.7rem; min-width:0; }
+  #status {
+    font-size:.76rem; line-height:1.45; color:var(--dim); text-align:right;
+    max-width:48ch; word-break:keep-all;
+  }
+  #orb {
+    flex:none; display:inline-flex; align-items:center; gap:.5rem;
+    border-radius:999px; border:1px solid var(--accent-line);
+    background:var(--surface); backdrop-filter:blur(10px);
+    padding:.42rem .95rem .42rem .8rem;
+    color:var(--accent-deep); font:800 .82rem var(--font); cursor:pointer;
+    transition:border-color .25s, box-shadow .25s, transform .12s;
+  }
+  #orb .dot {
+    width:.5rem; height:.5rem; border-radius:50%; background:var(--dim);
+    transition:background .25s, box-shadow .25s;
+  }
+  #orb:disabled { cursor:default; }
+  #orb:not(:disabled):hover { border-color:var(--accent); }
+  #orb:not(:disabled):active { transform:scale(.97); }
+  #orb[data-state="LISTENING"] .dot      { background:var(--accent); }
+  #orb[data-state="USER_SPEAKING"] .dot  { background:var(--accent); box-shadow:0 0 0 4px var(--accent-soft); }
+  #orb[data-state="PROCESSING"] .dot     { background:var(--dim); }
+  #orb[data-state="AGENT_SPEAKING"] .dot { background:var(--err); }
   #conn {
-    font-size:.76rem; font-weight:700; color:var(--dim);
+    flex:none; font-size:.76rem; font-weight:700; color:var(--dim);
     border:1px solid var(--line); border-radius:999px; padding:.3rem .9rem;
     background:var(--surface); backdrop-filter:blur(10px);
   }
@@ -162,10 +195,12 @@
   #conn.down { color:var(--err); }
 
   /* ---- middle: board in the centre, conversation on the right ---- */
+  /* the bottom padding is the reef's: the panels stop short of the floor so
+     the water they float in is visible under them */
   main {
     flex:1 1 auto; min-height:0; width:100%;
     display:flex; justify-content:center;
-    padding:.4rem 1.5rem 0;
+    padding:.4rem 1.5rem 5.5rem;
   }
   .grid {
     width:100%; max-width:1400px; min-height:0;
@@ -226,8 +261,18 @@
     background-size:24px 24px;
     background-position:12px 12px;
   }
-  #board .cardlabel { align-self:flex-start; }
-  #boardLines { flex:1 1 auto; min-height:0; overflow-y:auto; padding-top:.6rem; scrollbar-width:thin; }
+  /* the tutor sits in the corner of its own board, no title needed */
+  #boardHead { flex:none; display:flex; align-items:center; padding-bottom:.2rem; }
+  #boardHead svg { width:56px; height:auto; }
+  #boardLines {
+    flex:1 1 auto; min-height:0; overflow-y:auto; padding-top:.2rem; scrollbar-width:thin;
+    /* A board fills downward and scrolls, so the line at the top edge is
+       usually a line in half. Fade it out instead of slicing it. */
+    -webkit-mask-image:linear-gradient(180deg, transparent 0, #000 18px,
+                       #000 calc(100% - 10px), transparent 100%);
+            mask-image:linear-gradient(180deg, transparent 0, #000 18px,
+                       #000 calc(100% - 10px), transparent 100%);
+  }
   .boardline {
     padding:.45rem .2rem; font-size:1.06rem; line-height:1.7;
     word-break:keep-all; overflow-wrap:anywhere;
@@ -252,27 +297,28 @@
     color:var(--accent-deep); word-break:keep-all;
   }
 
-  /* what the tutor deliberately WROTE, as opposed to math inside a sentence */
+  /* What the tutor deliberately WROTE. Written, not framed: a person at a
+     board writes the line and scribbles why beside it, and a card around
+     every step turns a train of thought into a list of receipts. */
   .boardline.key {
-    background:var(--surface-solid); border:1px solid var(--accent-line);
-    border-left:3px solid var(--accent);
-    border-radius:var(--radius-sm); padding:.7rem 1rem; margin:.45rem 0;
-    font-size:1.2rem; text-align:center; box-shadow:var(--shadow);
+    padding:.55rem .2rem .75rem; margin:.2rem 0;
+    font-size:1.32rem; line-height:1.5; color:var(--text);
   }
-  .boardline.key .katex { font-size:1.25em; }
+  .boardline.key .katex { font-size:1.3em; }
   .boardline.key .note {
-    margin-top:.35rem; font-size:.78rem; font-weight:600; color:var(--accent-deep);
-    letter-spacing:-.01em; word-break:keep-all;
+    margin-top:.25rem; font-size:.8rem; font-weight:600; color:var(--accent-deep);
+    letter-spacing:-.01em; word-break:keep-all; opacity:.85;
   }
-  /* Empty state: the tutor waiting in the water, which is the whole picture
-     until the first hint lands. */
+  /* Empty state: the tutor is already in the corner, so this is just the
+     invitation. */
+  /* min-height, not flex: #boardLines is a scroll container, so a flex-grow
+     child of it grows to its content and sits at the top */
   #boardEmpty {
-    flex:1 1 auto; display:flex; flex-direction:column;
-    align-items:center; justify-content:center; gap:.9rem;
-    color:var(--dim); font-size:.9rem; text-align:center; padding-bottom:1.5rem;
+    min-height:100%; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:.35rem;
+    color:var(--dim); font-size:.9rem; text-align:center; padding-bottom:2rem;
   }
-  #boardEmpty svg { width:132px; height:auto; }
-  #boardEmpty b { display:block; font-size:1.02rem; font-weight:700; color:var(--text); }
+  #boardEmpty b { display:block; font-size:1.05rem; font-weight:700; color:var(--text); }
 
   /* ---- conversation (right) ---- */
   #chatPanel {
@@ -320,34 +366,9 @@
     @keyframes blink { 40% { opacity:1; } }
   }
 
-  /* ---- mic bar: the tutor itself is the status light ---- */
-  footer { flex:none; display:flex; justify-content:center; padding:1rem 1.5rem 1.2rem; }
-  .micbar {
-    width:100%; max-width:1400px; display:flex; align-items:center; gap:1rem;
-    padding:.7rem 1.2rem;
-  }
-  #orb {
-    flex:none; width:64px; height:64px; border-radius:50%;
-    border:2px solid var(--line); background:var(--surface-solid);
-    display:grid; place-items:center; padding:0;
-    color:var(--accent-deep); font:800 .85rem var(--font); cursor:pointer;
-    transition:border-color .25s, box-shadow .25s, transform .12s;
-  }
-  #orb svg { width:34px; height:41px; display:none; }
-  #orb.live svg { display:block; }
-  #orb.live #orbLabel { display:none; }
-  #orb:disabled { cursor:default; }
-  #orb:not(:disabled):active { transform:scale(.97); }
-  #orb[data-state="LISTENING"]      { border-color:var(--accent-line); }
-  #orb[data-state="USER_SPEAKING"]  { border-color:var(--accent); box-shadow:0 0 0 6px var(--accent-soft); }
-  #orb[data-state="PROCESSING"]     { border-color:var(--line); opacity:.75; }
-  #orb[data-state="AGENT_SPEAKING"] { border-color:var(--accent); }
-  .micinfo { min-width:0; }
-  #stateLabel { font-size:.95rem; font-weight:800; color:var(--accent-deep); }
-  #status { font-size:.8rem; color:var(--dim); }
-
-  /* the squid breathes; it bobs while it talks. Nothing loops fast enough to
-     compete with the voice, and nothing loops at all under reduced motion. */
+  /* the squid breathes; it bobs faster while it talks. Nothing loops fast
+     enough to compete with the voice, and nothing loops at all under reduced
+     motion. */
   .squid { overflow:visible; }
   @media (prefers-reduced-motion: no-preference) {
     .squid .swim { transform-origin:50% 30%; animation:drift 6s ease-in-out infinite; }
@@ -355,22 +376,26 @@
       0%, 100% { transform:translateY(0) rotate(0deg); }
       50%      { transform:translateY(-5px) rotate(-1.6deg); }
     }
-    #orb[data-state="AGENT_SPEAKING"] .swim { animation-duration:2.2s; }
-    #boardEmpty .squid .swim { animation-duration:7s; }
+    body:has(#orb[data-state="AGENT_SPEAKING"]) #boardHead .swim { animation-duration:2.4s; }
   }
 
-  /* One column under 960px: problem, photo, board, chat, mic. The page scrolls
-     rather than dividing one screen four ways, because splitting 844px of
+  /* One column under 960px: problem, photo, board, chat. The page scrolls
+     rather than dividing one screen three ways, because splitting 844px of
      phone between a problem statement, a board and a conversation leaves the
      board a sliver, and the board is the lesson. */
   @media (max-width: 960px) {
-    main { flex:none; padding:.4rem .8rem 0; }
-    footer { padding:.8rem .8rem 1rem; }
+    header { flex-wrap:wrap; padding:.6rem .8rem; }
+    /* #status is a child of .mic, not of header, so it is .mic that has to
+       wrap: giving the status `flex:1 0 100%` in a nowrap parent just made it
+       426px wide inside a 719px page and scrolled the whole document sideways */
+    .mic { flex-wrap:wrap; justify-content:flex-end; }
+    #status { flex:1 0 100%; max-width:100%; text-align:right; order:3; }
+    main { flex:none; padding:.4rem .8rem .8rem; }
     .grid { grid-template-columns:minmax(0,1fr); }
     #board { min-height:20rem; }
     #chatPanel { min-height:20rem; }
+    #boardHead svg { width:44px; }
     #problemText { font-size:1.02rem; }
-    #boardEmpty svg { width:96px; }
     .msg { max-width:88%; }
   }
 </style>
@@ -432,14 +457,83 @@
     </defs>
   </svg>
 
+  <!-- The reef along the bottom of the water: two stands of tube coral and a
+       branching one, lit from the upper left like the rest of the scene. Drawn
+       to fill its own box exactly (preserveAspectRatio="none"), because
+       anchoring a taller drawing to the bottom edge crops the rounded tops off
+       and leaves a row of flat sticks. Soft organic shapes do not mind the
+       vertical stretch; the tube tops read as ellipses, which is what they are
+       in the reference anyway. -->
+  <svg id="reef" viewBox="0 0 1440 300" preserveAspectRatio="none"
+       aria-hidden="true" focusable="false">
+    <defs>
+      <radialGradient id="cr1" cx="34%" cy="10%" r="88%">
+        <stop offset="0" stop-color="#ffe9dc"/><stop offset="58%" stop-color="#f9c3ce"/>
+        <stop offset="100%" stop-color="#e79aad"/>
+      </radialGradient>
+      <radialGradient id="cr2" cx="34%" cy="10%" r="88%">
+        <stop offset="0" stop-color="#fff0d8"/><stop offset="58%" stop-color="#f8cdae"/>
+        <stop offset="100%" stop-color="#e5a68c"/>
+      </radialGradient>
+      <radialGradient id="cr3" cx="34%" cy="10%" r="88%">
+        <stop offset="0" stop-color="#efeaff"/><stop offset="58%" stop-color="#cfc8f4"/>
+        <stop offset="100%" stop-color="#aca4e0"/>
+      </radialGradient>
+      <radialGradient id="cr4" cx="34%" cy="10%" r="88%">
+        <stop offset="0" stop-color="#e4f8ee"/><stop offset="58%" stop-color="#bde5d5"/>
+        <stop offset="100%" stop-color="#95cdb9"/>
+      </radialGradient>
+      <radialGradient id="reefFloor" cx="50%" cy="100%" r="70%">
+        <stop offset="0" stop-color="#ffffff" stop-opacity=".55"/>
+        <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <ellipse cx="720" cy="300" rx="820" ry="120" fill="url(#reefFloor)"/>
+    <!-- left stand -->
+    <g>
+      <ellipse cx="215" cy="292" rx="215" ry="20" fill="#7ba6d4" opacity=".18"/>
+      <rect x="46"  y="150" width="62" height="152" rx="31" fill="url(#cr3)"/>
+      <rect x="104" y="96"  width="78" height="206" rx="39" fill="url(#cr1)"/>
+      <rect x="176" y="164" width="56" height="138" rx="28" fill="url(#cr2)"/>
+      <rect x="228" y="118" width="70" height="184" rx="35" fill="url(#cr3)"/>
+      <rect x="292" y="182" width="52" height="120" rx="26" fill="url(#cr1)"/>
+    </g>
+    <!-- a branching coral, further along -->
+    <g>
+      <ellipse cx="470" cy="294" rx="105" ry="14" fill="#7ba6d4" opacity=".15"/>
+      <g fill="url(#cr2)">
+        <rect x="452" y="140" width="38" height="162" rx="19"/>
+        <path d="M470 190c-26-16-46-46-70-34-22 11-10 44 14 52 18 6 38 4 56-2z"/>
+        <path d="M470 152c24-20 48-44 70-28 20 15 4 44-20 50-16 4-34 0-50-4z"/>
+        <rect x="404" y="196" width="32" height="106" rx="16"/>
+        <rect x="506" y="176" width="32" height="126" rx="16"/>
+      </g>
+    </g>
+    <!-- right stand, a little further away -->
+    <g opacity=".9">
+      <ellipse cx="1240" cy="292" rx="215" ry="20" fill="#7ba6d4" opacity=".18"/>
+      <rect x="1074" y="176" width="54" height="126" rx="27" fill="url(#cr4)"/>
+      <rect x="1124" y="112" width="74" height="190" rx="37" fill="url(#cr3)"/>
+      <rect x="1192" y="158" width="58" height="144" rx="29" fill="url(#cr1)"/>
+      <rect x="1244" y="196" width="64" height="106" rx="32" fill="url(#cr4)"/>
+      <rect x="1302" y="134" width="52" height="168" rx="26" fill="url(#cr2)"/>
+      <rect x="1348" y="190" width="60" height="112" rx="30" fill="url(#cr1)"/>
+    </g>
+  </svg>
+
   <div id="water" aria-hidden="true"></div>
 
   <header>
     <div class="brand">
-      <span class="mark"><svg class="squid" viewBox="0 0 120 152"><use href="#squid"/></svg></span>
       <span class="name">오징어 튜터<span>Visual Socratic Tutor</span></span>
     </div>
-    <div id="conn">연결 대기</div>
+    <div class="mic">
+      <div id="status">시작을 누르고 마이크를 허용한 뒤, 그냥 말하면 됩니다.</div>
+      <button id="orb" aria-label="시작">
+        <i class="dot"></i><span id="stateLabel">시작</span>
+      </button>
+      <div id="conn">연결 대기</div>
+    </div>
   </header>
 
   <main>
@@ -461,14 +555,13 @@
         <input type="file" id="sheet" accept="image/*">
 
         <section id="board" class="panel">
-          <span class="cardlabel">튜터 풀이</span>
+          <div id="boardHead">
+            <svg class="squid" viewBox="0 0 120 152" aria-label="튜터"><use href="#squid"/></svg>
+          </div>
           <div id="boardLines">
             <div id="boardEmpty">
-              <svg class="squid" viewBox="0 0 120 152"><use href="#squid"/></svg>
-              <div>
-                <b>같이 풀어 볼까요?</b>
-                튜터가 짚어 주는 수식이 여기에 쌓여요.
-              </div>
+              <b>같이 풀어 볼까요?</b>
+              튜터가 짚어 주는 수식이 여기에 쌓여요.
             </div>
           </div>
         </section>
@@ -487,19 +580,6 @@
       </section>
     </div>
   </main>
-
-  <footer>
-    <div class="micbar panel">
-      <button id="orb" aria-label="시작">
-        <svg class="squid" viewBox="0 0 120 152" aria-hidden="true"><use href="#squid"/></svg>
-        <span id="orbLabel">시작</span>
-      </button>
-      <div class="micinfo">
-        <div id="stateLabel">대기</div>
-        <div id="status">시작을 누르고 마이크를 허용한 뒤, 그냥 말하면 됩니다.</div>
-      </div>
-    </div>
-  </footer>
 
   <audio id="player"></audio>
 
@@ -649,9 +729,8 @@ async function start() {
   const speakerReady = await unlockAudio();   // must happen inside this click
   connect();
 
-  // from here on the orb is a status light: the label goes, the tutor stays
+  // from here on the button is a status light, not a control
   $("orb").disabled = true;
-  $("orb").classList.add("live");
   setStatus(
     speakerReady
       ? "핸즈프리로 대화하세요. 튜터 목소리는 이 기기에서 나옵니다."
@@ -737,9 +816,9 @@ function onBinary(buffer) {
 
 function setState(s) {
   turnState = s;
+  // a data attribute, not a class: the state light is one dot inside the
+  // button, and the button keeps its own classes
   const orb = $("orb");
-  // a data attribute, not a class: the class list carries `live`, which says
-  // the button has become a status light and must not be overwritten
   if (orb.disabled) orb.dataset.state = s;
   const label = {
     LISTENING: "듣는 중", USER_SPEAKING: "말하는 중",
@@ -803,17 +882,15 @@ function addSolved(title) {
 
 let boardSeen = new Set();             // one problem's writing, no duplicates
 
-const EMPTY_BOARD =
-  '<svg class="squid" viewBox="0 0 120 152"><use href="#squid"/></svg>' +
-  '<div><b>같이 풀어 볼까요?</b>튜터가 짚어 주는 수식이 여기에 쌓여요.</div>';
-
 function boardClear() {
   boardSeen = new Set();
   const lines = $("boardLines");
   lines.textContent = "";
   const empty = document.createElement("div");
   empty.id = "boardEmpty";
-  empty.innerHTML = EMPTY_BOARD;        // fixed markup, no data in it
+  const invite = document.createElement("b");
+  invite.textContent = "같이 풀어 볼까요?";
+  empty.append(invite, "튜터가 짚어 주는 수식이 여기에 쌓여요.");
   lines.appendChild(empty);
 }
 
