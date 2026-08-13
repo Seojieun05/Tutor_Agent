@@ -24,12 +24,19 @@
 
   Chrome/Edge recommended (AudioWorklet at a 16 kHz AudioContext).
 
-  DESIGN: light theme, one green accent, locked. Three zones: the problem
-  pinned top-center (notation, never the photo), the BOARD in the middle where
-  every mathematical line the tutor says is written out in real type (KaTeX),
-  the conversation on the right, the mic at the bottom. Every control on this
-  page is wired to something real; there are deliberately no decorative
-  buttons.
+  DESIGN: one underwater scene, one blue accent, one 20px corner. Two zones:
+  the BOARD in the middle, where the problem is pinned and every mathematical
+  line the tutor says is written out in real type (KaTeX), and the
+  conversation on the right. The tutor is a squid, drawn here as SVG: it
+  breathes in the mic bar and fills the board before the first hint. Every
+  control on this page is wired to something real; there are deliberately no
+  decorative buttons. The archive of solved problems is on hold, so its panel
+  is gone and only the transcript it will need is still kept.
+
+  Both colour schemes are the same water at different depths: the surface in
+  light mode, the deep in dark. Everything is a variable, including the four
+  the server names when it draws a curve (--accent-deep, --err, --dim, --line
+  in tutor/hints/plot.py), so a figure is legible either way.
 
   MATH: the server sends one normalized display vocabulary (x², ·, √, log₃,
   1/5 — see tutor/speech/mathspeak.py displayable()). This page converts that
@@ -46,68 +53,148 @@
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js"></script>
 <style>
   :root {
-    --bg:#f4f7f5; --surface:#ffffff; --line:#e3e9e5;
-    --text:#1c211e; --dim:#68716c;
-    --accent:#0f9d63; --accent-deep:#0c7c4f;
-    --accent-soft:#e6f5ee; --accent-line:#c9e9da;
-    --err:#c0463c;
-    --shadow:0 1px 2px rgba(23,64,45,.05), 0 10px 28px rgba(23,64,45,.07);
+    /* The surface of the water. Every colour here is a variable because the
+       server names four of them when it draws a curve (tutor/hints/plot.py). */
+    --bg:#c6ddf5; --bg-far:#96c2ea; --bg-near:#e9f4ff;
+    --surface:rgba(255,255,255,.66); --surface-solid:#f4f9ff;
+    --line:#c2d9f0;
+    --text:#2c4d7e; --dim:#6f92c0;
+    --accent:#5b86d6; --accent-deep:#39619f;
+    --accent-soft:#e2edfb; --accent-line:#bdd5f4;
+    --err:#cc6b5e;
+    --squid-lit:#ffe6cf; --squid-mid:#f8c49d; --squid-deep:#e79b6d;
+    --shadow:0 1px 2px rgba(38,77,132,.06), 0 14px 34px rgba(38,77,132,.10);
+    --shadow-lift:0 2px 4px rgba(38,77,132,.08), 0 22px 50px rgba(38,77,132,.14);
+    --radius:20px; --radius-sm:12px;
     --font:"Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
            "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
     --math:"STIX Two Math", "Cambria Math", "Times New Roman", serif;
+  }
+  /* The same water, deeper. Note --accent-deep inverts to a LIGHT blue: the
+     server hands it to the curve stroke and the figure note, both of which sit
+     on the surface colour. */
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#12293f; --bg-far:#0a1a2b; --bg-near:#1b3a58;
+      --surface:rgba(226,240,255,.07); --surface-solid:#173049;
+      --line:#2b4d70;
+      --text:#dceaf9; --dim:#8fb2d8;
+      --accent:#6f9fe8; --accent-deep:#a8c9f6;
+      --accent-soft:rgba(111,159,232,.16); --accent-line:rgba(111,159,232,.38);
+      --err:#e58b7d;
+      --shadow:0 1px 2px rgba(0,0,0,.28), 0 14px 34px rgba(0,0,0,.30);
+      --shadow-lift:0 2px 4px rgba(0,0,0,.32), 0 22px 50px rgba(0,0,0,.38);
+    }
   }
   * { box-sizing:border-box; }
   html, body { height:100%; }
   body {
     margin:0; min-height:100dvh; display:flex; flex-direction:column;
-    background:var(--bg); color:var(--text); font:15px/1.6 var(--font);
+    color:var(--text); font:15px/1.6 var(--font);
+    background:
+      radial-gradient(120% 80% at 12% -10%, var(--bg-near), transparent 60%),
+      radial-gradient(140% 90% at 88% 108%, var(--bg-far), transparent 62%),
+      linear-gradient(180deg, var(--bg), var(--bg-far));
+    background-attachment:fixed;
   }
+  /* light through water: one slow band across the top, never in the way */
+  body::before {
+    content:""; position:fixed; inset:-20% -10% auto -10%; height:70vh; z-index:0;
+    background:linear-gradient(102deg, transparent 30%, rgba(255,255,255,.30) 46%,
+               transparent 58%, rgba(255,255,255,.18) 70%, transparent 82%);
+    pointer-events:none;
+  }
+  /* the floor, far below: one soft rise so the water has a bottom */
+  body::after {
+    content:""; position:fixed; left:-15%; right:-15%; bottom:-42vh; height:70vh;
+    z-index:0; border-radius:50% 50% 0 0; pointer-events:none;
+    background:radial-gradient(60% 100% at 50% 100%, var(--bg-near), transparent 72%);
+    opacity:.75;
+  }
+  @media (prefers-color-scheme: dark) {
+    body::before { opacity:.28; }
+    body::after { opacity:.45; }
+  }
+
+  /* bubbles: six of them, rising, behind everything */
+  #water { position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden; }
+  #water i {
+    position:absolute; bottom:-8vh; border-radius:50%;
+    background:radial-gradient(circle at 32% 28%, rgba(255,255,255,.92), rgba(255,255,255,.18) 58%,
+               rgba(255,255,255,.06));
+    border:1px solid rgba(255,255,255,.45); opacity:0;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    #water i { animation:rise linear infinite; }
+    @keyframes rise {
+      0%   { transform:translateY(0) scale(.7); opacity:0; }
+      14%  { opacity:.7; }
+      86%  { opacity:.5; }
+      100% { transform:translateY(-118vh) scale(1); opacity:0; }
+    }
+  }
+
+  main, header, footer { position:relative; z-index:1; }
 
   /* ---- top bar ---- */
   header {
-    flex:none; height:60px; background:var(--surface);
-    border-bottom:1px solid var(--line);
+    flex:none; height:64px;
     display:flex; align-items:center; justify-content:space-between;
-    padding:0 1.25rem;
+    padding:0 1.5rem;
   }
-  .brand { font-size:1rem; font-weight:700; letter-spacing:-.01em; }
-  .brand b { color:var(--accent-deep); font-weight:700; }
+  .brand { display:flex; align-items:center; gap:.6rem; }
+  .brand .mark {
+    width:40px; height:40px; border-radius:50%; display:grid; place-items:center;
+    background:var(--surface); border:1px solid var(--line);
+    box-shadow:var(--shadow); backdrop-filter:blur(10px);
+  }
+  .brand .mark svg { width:26px; height:31px; }
+  .brand .name {
+    font-size:.95rem; font-weight:800; letter-spacing:-.01em; color:var(--accent-deep);
+  }
+  .brand .name span { display:block; font-size:.7rem; font-weight:600; color:var(--dim); letter-spacing:.02em; }
   #conn {
-    font-size:.78rem; font-weight:600; color:var(--dim);
-    border:1px solid var(--line); border-radius:999px; padding:.25rem .8rem;
-    background:var(--bg);
+    font-size:.76rem; font-weight:700; color:var(--dim);
+    border:1px solid var(--line); border-radius:999px; padding:.3rem .9rem;
+    background:var(--surface); backdrop-filter:blur(10px);
   }
   #conn.ok { color:var(--accent-deep); border-color:var(--accent-line); background:var(--accent-soft); }
   #conn.down { color:var(--err); }
 
-  /* ---- middle: problem on top, board center, chat right ---- */
+  /* ---- middle: board in the centre, conversation on the right ---- */
   main {
     flex:1 1 auto; min-height:0; width:100%;
     display:flex; justify-content:center;
-    padding:1.1rem 1rem 0;
+    padding:.4rem 1.5rem 0;
   }
   .grid {
-    width:100%; max-width:1280px; min-height:0;
-    display:grid; gap:.9rem;
-    grid-template-columns:250px minmax(0,1fr) 340px;
-    grid-template-rows:auto auto minmax(0,1fr);
+    width:100%; max-width:1400px; min-height:0;
+    display:grid; gap:1rem;
+    grid-template-columns:minmax(0,1fr) 360px;
   }
-  .span2 { grid-column:1 / -1; }
+  .centre { min-height:0; display:flex; flex-direction:column; gap:.8rem; }
+
+  .panel {
+    background:var(--surface); border:1px solid var(--line);
+    border-radius:var(--radius); box-shadow:var(--shadow);
+    backdrop-filter:blur(14px);
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    .panel, .brand .mark, #conn { background:var(--surface-solid); backdrop-filter:none; }
+  }
+  .cardlabel {
+    display:inline-block; font-size:.72rem; font-weight:700;
+    color:var(--accent-deep); background:var(--accent-soft);
+    border:1px solid var(--accent-line);
+    border-radius:999px; padding:.18rem .75rem;
+  }
 
   /* ---- problem card: notation, not a photo ---- */
-  #problemCard {
-    background:var(--surface); border:1px solid var(--line);
-    border-radius:16px; box-shadow:var(--shadow);
-    padding:1.1rem 1.5rem 1.2rem; text-align:center;
-  }
+  #problemCard { flex:none; padding:1.1rem 1.6rem 1.25rem; text-align:center; }
   #problemCard[hidden] { display:none; }
-  .cardlabel {
-    display:inline-block; font-size:.75rem; font-weight:700;
-    color:var(--accent-deep); background:var(--accent-soft);
-    border-radius:999px; padding:.15rem .7rem; margin-bottom:.55rem;
-  }
+  #problemCard .cardlabel { margin-bottom:.6rem; }
   #problemText { font-size:1.15rem; font-weight:700; line-height:1.6; word-break:keep-all; }
-  #problemEqs { margin-top:.4rem; font-family:var(--math); font-size:1.15rem; }
+  #problemEqs { margin-top:.45rem; font-family:var(--math); font-size:1.18rem; }
   #problemEqs div { padding:.12rem 0; }
 
   /* ---- worksheet photo (click / drag / paste) ----
@@ -117,32 +204,34 @@
   #sheet { display:none; }
   #drop[hidden] { display:none; }
   #drop {
-    display:flex; align-items:center; justify-content:center; gap:.9rem;
-    background:var(--surface); border:1.5px dashed var(--line); border-radius:16px;
-    padding:.7rem 1rem; color:var(--dim); font-size:.82rem; line-height:1.5;
-    text-align:center; cursor:pointer;
+    flex:none; display:flex; align-items:center; justify-content:center; gap:.9rem;
+    border-style:dashed; padding:.75rem 1rem; color:var(--dim);
+    font-size:.82rem; line-height:1.5; text-align:center; cursor:pointer;
+    transition:border-color .2s, color .2s;
   }
   #drop:hover, #drop.over { border-color:var(--accent); color:var(--text); }
   #drop.has { border-style:solid; border-color:var(--accent-line); background:var(--accent-soft); color:var(--text); }
   #drop b { font-weight:700; }
-  #thumb { max-height:3rem; border-radius:8px; display:none; }
+  #thumb { max-height:3rem; border-radius:var(--radius-sm); display:none; }
   #thumb.has { display:block; }
   .meta { font-size:.75rem; color:var(--dim); }
 
-  /* ---- the board: every mathematical line the tutor says ---- */
+  /* ---- the board: every mathematical line the tutor writes ---- */
   #board {
-    min-height:0; display:flex; flex-direction:column;
-    background:var(--surface); border:1px solid var(--line);
-    border-radius:16px; box-shadow:var(--shadow); padding:1rem 1.3rem;
+    flex:1 1 auto; min-height:0; display:flex; flex-direction:column;
+    padding:1rem 1.4rem 1.2rem;
+    /* the dot grid a whiteboard has; the panel's own surface shows through it,
+       so the board is not a second layer of white over the water */
+    background-image:radial-gradient(circle, var(--line) 1.1px, transparent 1.1px);
+    background-size:24px 24px;
+    background-position:12px 12px;
   }
   #board .cardlabel { align-self:flex-start; }
-  #boardLines { flex:1 1 auto; min-height:0; overflow-y:auto; padding-top:.4rem; }
+  #boardLines { flex:1 1 auto; min-height:0; overflow-y:auto; padding-top:.6rem; scrollbar-width:thin; }
   .boardline {
     padding:.45rem .2rem; font-size:1.06rem; line-height:1.7;
     word-break:keep-all; overflow-wrap:anywhere;
-    border-bottom:1px dashed var(--line);
   }
-  .boardline:last-child { border-bottom:none; }
   .boardline .katex { font-size:1.15em; }
   /* a function sketched on the board: axes, a light grid, the curve */
   .boardfigure { padding:.5rem 0; }
@@ -150,7 +239,10 @@
     .boardfigure { transition:opacity .18s ease; }
     .boardfigure.fading { opacity:.15; }
   }
-  .boardfigure svg { display:block; width:100%; height:auto; }
+  /* The server draws the sketch at 520x300 and sizes the tick labels for it.
+     Stretched across a wide board it scales the type with it and swallows the
+     written lines above; capped, it stays a sketch beside them. */
+  .boardfigure svg { display:block; width:100%; max-width:520px; margin:0 auto; height:auto; }
   .boardfigure .grid line { stroke:var(--line); stroke-width:1; }
   .boardfigure .axes line { stroke:var(--dim); stroke-width:1.4; }
   .boardfigure .ticks text { fill:var(--dim); font-size:10px; font-family:var(--font); }
@@ -162,61 +254,53 @@
 
   /* what the tutor deliberately WROTE, as opposed to math inside a sentence */
   .boardline.key {
-    border-left:3px solid var(--accent); padding-left:.8rem;
-    background:var(--accent-soft); border-radius:8px; margin:.3rem 0;
-    font-size:1.2rem; text-align:center;
+    background:var(--surface-solid); border:1px solid var(--accent-line);
+    border-left:3px solid var(--accent);
+    border-radius:var(--radius-sm); padding:.7rem 1rem; margin:.45rem 0;
+    font-size:1.2rem; text-align:center; box-shadow:var(--shadow);
   }
   .boardline.key .katex { font-size:1.25em; }
   .boardline.key .note {
-    margin-top:.3rem; font-size:.78rem; font-weight:600; color:var(--accent-deep);
+    margin-top:.35rem; font-size:.78rem; font-weight:600; color:var(--accent-deep);
     letter-spacing:-.01em; word-break:keep-all;
   }
-  #boardEmpty { color:var(--dim); font-size:.85rem; padding-top:.6rem; }
-
-  /* ---- solved problems (left) ---- */
-  #solvedPanel {
-    min-height:0; display:flex; flex-direction:column;
-    background:var(--surface); border:1px solid var(--line);
-    border-radius:16px; box-shadow:var(--shadow); padding:.9rem .9rem .6rem;
+  /* Empty state: the tutor waiting in the water, which is the whole picture
+     until the first hint lands. */
+  #boardEmpty {
+    flex:1 1 auto; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:.9rem;
+    color:var(--dim); font-size:.9rem; text-align:center; padding-bottom:1.5rem;
   }
-  #solvedPanel .cardlabel { align-self:flex-start; }
-  #solvedList { flex:1 1 auto; min-height:0; overflow-y:auto; padding:.4rem 0 .5rem; scrollbar-width:thin; }
-  #solvedEmpty { color:var(--dim); font-size:.8rem; }
-  details.solved { border-bottom:1px dashed var(--line); padding:.35rem 0; }
-  details.solved:last-child { border-bottom:none; }
-  details.solved summary {
-    cursor:pointer; font-size:.82rem; font-weight:600; line-height:1.5;
-    word-break:keep-all; overflow-wrap:anywhere; list-style-position:outside;
-  }
-  details.solved summary::marker { color:var(--accent); }
-  .minichat { padding:.4rem 0 .2rem .4rem; display:flex; flex-direction:column; gap:.35rem; }
-  .miniline { font-size:.76rem; line-height:1.55; word-break:keep-all; overflow-wrap:anywhere; }
-  .miniline b { font-weight:700; color:var(--dim); }
-  .miniline.you b { color:var(--accent-deep); }
+  #boardEmpty svg { width:132px; height:auto; }
+  #boardEmpty b { display:block; font-size:1.02rem; font-weight:700; color:var(--text); }
 
   /* ---- conversation (right) ---- */
   #chatPanel {
-    min-height:0; display:flex; flex-direction:column;
-    background:var(--surface); border:1px solid var(--line);
-    border-radius:16px; box-shadow:var(--shadow); padding:.9rem .9rem .6rem;
+    min-height:0; display:flex; flex-direction:column; padding:1rem 1rem .7rem;
   }
   #chatPanel .cardlabel { align-self:flex-start; }
   #chat {
     flex:1 1 auto; min-height:0; overflow-y:auto;
-    display:flex; flex-direction:column; gap:.8rem;
-    padding:.5rem .1rem .6rem; scrollbar-width:thin;
+    display:flex; flex-direction:column; gap:.85rem;
+    padding:.7rem .1rem .6rem; scrollbar-width:thin;
   }
   .msg { max-width:92%; display:flex; flex-direction:column; gap:.22rem; }
-  .msg .who { font-size:.7rem; font-weight:700; color:var(--dim); padding:0 .3rem; }
+  .msg .who { font-size:.7rem; font-weight:700; color:var(--dim); padding:0 .35rem; }
   .msg .bubble {
-    border-radius:13px; padding:.5rem .8rem; font-size:.88rem;
+    border-radius:var(--radius-sm); padding:.55rem .85rem; font-size:.88rem;
     white-space:pre-wrap; word-break:keep-all; overflow-wrap:anywhere;
   }
   .msg.tutor { align-self:flex-start; }
-  .msg.tutor .bubble { background:var(--bg); border:1px solid var(--line); border-top-left-radius:5px; }
+  .msg.tutor .bubble {
+    background:var(--surface-solid); border:1px solid var(--line);
+    border-top-left-radius:5px;
+  }
   .msg.you { align-self:flex-end; align-items:flex-end; }
-  .msg.you .bubble { background:var(--accent-soft); border:1px solid var(--accent-line); border-top-right-radius:5px; }
-  .msg .note { font-size:.7rem; color:var(--dim); padding:0 .3rem; }
+  .msg.you .bubble {
+    background:var(--accent); border:1px solid var(--accent); color:#fff;
+    border-top-right-radius:5px;
+  }
+  .msg .note { font-size:.7rem; color:var(--dim); padding:0 .35rem; }
   .sys { align-self:center; font-size:.75rem; color:var(--err); text-align:center; }
 
   /* the tutor is thinking: shown only during PROCESSING */
@@ -236,85 +320,161 @@
     @keyframes blink { 40% { opacity:1; } }
   }
 
-  /* ---- mic bar ---- */
-  footer {
-    flex:none; background:var(--surface); border-top:1px solid var(--line);
-    display:flex; justify-content:center; padding:.7rem 1rem .9rem; margin-top:1rem;
+  /* ---- mic bar: the tutor itself is the status light ---- */
+  footer { flex:none; display:flex; justify-content:center; padding:1rem 1.5rem 1.2rem; }
+  .micbar {
+    width:100%; max-width:1400px; display:flex; align-items:center; gap:1rem;
+    padding:.7rem 1.2rem;
   }
-  .micbar { width:100%; max-width:1180px; display:flex; align-items:center; gap:1rem; }
   #orb {
-    flex:none; width:60px; height:60px; border-radius:50%; border:2px solid var(--line);
-    background:var(--bg); color:var(--text); font:700 .85rem var(--font);
-    cursor:pointer; transition:background .2s, border-color .2s, box-shadow .2s;
+    flex:none; width:64px; height:64px; border-radius:50%;
+    border:2px solid var(--line); background:var(--surface-solid);
+    display:grid; place-items:center; padding:0;
+    color:var(--accent-deep); font:800 .85rem var(--font); cursor:pointer;
+    transition:border-color .25s, box-shadow .25s, transform .12s;
   }
+  #orb svg { width:34px; height:41px; display:none; }
+  #orb.live svg { display:block; }
+  #orb.live #orbLabel { display:none; }
   #orb:disabled { cursor:default; }
   #orb:not(:disabled):active { transform:scale(.97); }
-  #orb.LISTENING      { background:var(--surface); border-color:var(--accent-line); }
-  #orb.USER_SPEAKING  { background:var(--accent); border-color:var(--accent); }
-  #orb.PROCESSING     { background:var(--line); border-color:var(--line); }
-  #orb.AGENT_SPEAKING { background:var(--accent-soft); border-color:var(--accent); }
-  @media (prefers-reduced-motion: no-preference) {
-    #orb.USER_SPEAKING { animation:pulse 1.3s ease-in-out infinite; }
-    @keyframes pulse {
-      0%, 100% { box-shadow:0 0 0 0 rgba(15,157,99,.25); }
-      50%      { box-shadow:0 0 0 14px rgba(15,157,99,.06); }
-    }
-  }
+  #orb[data-state="LISTENING"]      { border-color:var(--accent-line); }
+  #orb[data-state="USER_SPEAKING"]  { border-color:var(--accent); box-shadow:0 0 0 6px var(--accent-soft); }
+  #orb[data-state="PROCESSING"]     { border-color:var(--line); opacity:.75; }
+  #orb[data-state="AGENT_SPEAKING"] { border-color:var(--accent); }
   .micinfo { min-width:0; }
-  #stateLabel { font-size:.95rem; font-weight:700; }
+  #stateLabel { font-size:.95rem; font-weight:800; color:var(--accent-deep); }
   #status { font-size:.8rem; color:var(--dim); }
 
-  /* single column on narrow screens: problem, photo, board, chat, solved, mic */
-  @media (max-width: 900px) {
-    .grid {
-      grid-template-columns:minmax(0,1fr);
-      grid-template-rows:auto auto minmax(12rem,38dvh) minmax(0,1fr) minmax(0,24dvh);
+  /* the squid breathes; it bobs while it talks. Nothing loops fast enough to
+     compete with the voice, and nothing loops at all under reduced motion. */
+  .squid { overflow:visible; }
+  @media (prefers-reduced-motion: no-preference) {
+    .squid .swim { transform-origin:50% 30%; animation:drift 6s ease-in-out infinite; }
+    @keyframes drift {
+      0%, 100% { transform:translateY(0) rotate(0deg); }
+      50%      { transform:translateY(-5px) rotate(-1.6deg); }
     }
-    .span2 { grid-column:auto; }
-    #solvedPanel { order:5; }            /* the archive yields to the lesson */
+    #orb[data-state="AGENT_SPEAKING"] .swim { animation-duration:2.2s; }
+    #boardEmpty .squid .swim { animation-duration:7s; }
+  }
+
+  /* One column under 960px: problem, photo, board, chat, mic. The page scrolls
+     rather than dividing one screen four ways, because splitting 844px of
+     phone between a problem statement, a board and a conversation leaves the
+     board a sliver, and the board is the lesson. */
+  @media (max-width: 960px) {
+    main { flex:none; padding:.4rem .8rem 0; }
+    footer { padding:.8rem .8rem 1rem; }
+    .grid { grid-template-columns:minmax(0,1fr); }
+    #board { min-height:20rem; }
+    #chatPanel { min-height:20rem; }
     #problemText { font-size:1.02rem; }
+    #boardEmpty svg { width:96px; }
     .msg { max-width:88%; }
   }
 </style>
 </head>
 <body>
+  <!-- The tutor, drawn once and used wherever it appears. Hand-drawn SVG
+       rather than an image file: it has to sit at 26px in the header and
+       132px on the board, tint itself for both colour schemes, and ship
+       inside the one file the server serves. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <defs>
+      <!-- gradients live OUTSIDE the symbol: a <use> clone resolves url(#…)
+           against the document, and a gradient hidden inside the symbol is a
+           coin flip across browsers -->
+      <radialGradient id="sqMantle" cx="34%" cy="24%" r="82%">
+        <stop offset="0" stop-color="var(--squid-lit)"/>
+        <stop offset="56%" stop-color="var(--squid-mid)"/>
+        <stop offset="100%" stop-color="var(--squid-deep)"/>
+      </radialGradient>
+      <radialGradient id="sqHead" cx="34%" cy="18%" r="88%">
+        <stop offset="0" stop-color="var(--squid-lit)"/>
+        <stop offset="62%" stop-color="var(--squid-mid)"/>
+        <stop offset="100%" stop-color="var(--squid-deep)"/>
+      </radialGradient>
+      <linearGradient id="sqArm" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="var(--squid-mid)"/>
+        <stop offset="100%" stop-color="var(--squid-deep)"/>
+      </linearGradient>
+      <symbol id="squid" viewBox="0 0 120 152">
+        <g class="swim">
+          <!-- arms: tapered, splayed, back pair first so the front three
+               overlap them. Long enough that the silhouette reads as a squid
+               and not as a body with legs. -->
+          <g fill="url(#sqArm)" opacity=".78">
+            <path d="M40 106c-6 13-11 26-13 39-1 6 6 8 8 2 4-14 8-27 12-41z"/>
+            <path d="M80 106c6 13 11 26 13 39 1 6-6 8-8 2-4-14-8-27-12-41z"/>
+          </g>
+          <g fill="url(#sqArm)">
+            <path d="M49 108c-4 14-8 27-8 41 0 6 8 6 9 0 2-14 4-27 7-41z"/>
+            <path d="M56 109c-1 15-1 29 0 43 0 6 8 6 8 0 1-14 1-28 0-43z"/>
+            <path d="M71 108c4 14 8 27 8 41 0 6-8 6-9 0-2-14-4-27-7-41z"/>
+          </g>
+          <!-- head, then mantle on top of it -->
+          <rect x="26" y="82" width="68" height="36" rx="17" fill="url(#sqHead)"/>
+          <path d="M60 6c26 0 40 20 40 46 0 24-16 40-40 40S20 76 20 52C20 26 34 6 60 6z"
+                fill="url(#sqMantle)"/>
+          <!-- the light on top, and two spots, exactly as the reference reads -->
+          <ellipse cx="45" cy="30" rx="15" ry="11" fill="#fff" opacity=".38" transform="rotate(-24 45 30)"/>
+          <circle cx="76" cy="44" r="6" fill="var(--squid-deep)" opacity=".45"/>
+          <circle cx="52" cy="68" r="4.5" fill="var(--squid-deep)" opacity=".38"/>
+          <circle cx="78" cy="102" r="4" fill="var(--squid-deep)" opacity=".3"/>
+          <!-- eyes -->
+          <ellipse cx="44" cy="99" rx="7.5" ry="9" fill="#20303f"/>
+          <ellipse cx="76" cy="99" rx="7.5" ry="9" fill="#20303f"/>
+          <circle cx="41.6" cy="95.4" r="2.4" fill="#fff" opacity=".9"/>
+          <circle cx="73.6" cy="95.4" r="2.4" fill="#fff" opacity=".9"/>
+        </g>
+      </symbol>
+    </defs>
+  </svg>
+
+  <div id="water" aria-hidden="true"></div>
+
   <header>
-    <div class="brand">Visual Socratic <b>Tutor</b></div>
+    <div class="brand">
+      <span class="mark"><svg class="squid" viewBox="0 0 120 152"><use href="#squid"/></svg></span>
+      <span class="name">오징어 튜터<span>Visual Socratic Tutor</span></span>
+    </div>
     <div id="conn">연결 대기</div>
   </header>
 
   <main>
     <div class="grid">
-      <section id="problemCard" class="span2" hidden>
-        <span class="cardlabel">현재 문제</span>
-        <div id="problemText"></div>
-        <div id="problemEqs"></div>
-      </section>
+      <div class="centre">
+        <section id="problemCard" class="panel" hidden>
+          <span class="cardlabel">현재 문제</span>
+          <div id="problemText"></div>
+          <div id="problemEqs"></div>
+        </section>
 
-      <div id="drop" class="span2" hidden>
-        <img id="thumb" alt="문제 사진 미리보기">
-        <div>
-          <b>문제 사진 올리기</b> · 클릭해서 고르거나, 끌어다 놓거나, Ctrl+V로 붙여넣기
-          <div id="sheetname" class="meta"></div>
+        <div id="drop" class="panel" hidden>
+          <img id="thumb" alt="문제 사진 미리보기">
+          <div>
+            <b>문제 사진 올리기</b> · 클릭해서 고르거나, 끌어다 놓거나, Ctrl+V로 붙여넣기
+            <div id="sheetname" class="meta"></div>
+          </div>
         </div>
+        <input type="file" id="sheet" accept="image/*">
+
+        <section id="board" class="panel">
+          <span class="cardlabel">튜터 풀이</span>
+          <div id="boardLines">
+            <div id="boardEmpty">
+              <svg class="squid" viewBox="0 0 120 152"><use href="#squid"/></svg>
+              <div>
+                <b>같이 풀어 볼까요?</b>
+                튜터가 짚어 주는 수식이 여기에 쌓여요.
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
-      <input type="file" id="sheet" accept="image/*">
 
-      <aside id="solvedPanel">
-        <span class="cardlabel">해결한 문제</span>
-        <div id="solvedList">
-          <div id="solvedEmpty">끝까지 푼 문제가 여기에 쌓여요.</div>
-        </div>
-      </aside>
-
-      <section id="board">
-        <span class="cardlabel">튜터 풀이</span>
-        <div id="boardLines">
-          <div id="boardEmpty">튜터가 짚어 주는 수식이 여기에 나타나요.</div>
-        </div>
-      </section>
-
-      <section id="chatPanel">
+      <section id="chatPanel" class="panel">
         <span class="cardlabel">대화</span>
         <div id="chat">
           <div id="thinking" class="msg tutor" hidden>
@@ -329,8 +489,11 @@
   </main>
 
   <footer>
-    <div class="micbar">
-      <button id="orb" aria-label="시작">시작</button>
+    <div class="micbar panel">
+      <button id="orb" aria-label="시작">
+        <svg class="squid" viewBox="0 0 120 152" aria-hidden="true"><use href="#squid"/></svg>
+        <span id="orbLabel">시작</span>
+      </button>
       <div class="micinfo">
         <div id="stateLabel">대기</div>
         <div id="status">시작을 누르고 마이크를 허용한 뒤, 그냥 말하면 됩니다.</div>
@@ -486,8 +649,9 @@ async function start() {
   const speakerReady = await unlockAudio();   // must happen inside this click
   connect();
 
-  $("orb").disabled = true;             // from here on the orb is a status light
-  $("orb").textContent = "";
+  // from here on the orb is a status light: the label goes, the tutor stays
+  $("orb").disabled = true;
+  $("orb").classList.add("live");
   setStatus(
     speakerReady
       ? "핸즈프리로 대화하세요. 튜터 목소리는 이 기기에서 나옵니다."
@@ -574,7 +738,9 @@ function onBinary(buffer) {
 function setState(s) {
   turnState = s;
   const orb = $("orb");
-  if (orb.disabled) orb.className = s;   // before start the orb stays a button
+  // a data attribute, not a class: the class list carries `live`, which says
+  // the button has become a status light and must not be overwritten
+  if (orb.disabled) orb.dataset.state = s;
   const label = {
     LISTENING: "듣는 중", USER_SPEAKING: "말하는 중",
     PROCESSING: "생각 중", AGENT_SPEAKING: "튜터 발화 중",
@@ -621,39 +787,25 @@ function showProblem(d) {
   boardClear();                          // a new problem starts a clean board
 }
 
-// --- the solved-problems archive (left panel) ------------------------------
-// The page keeps this problem's conversation as it happens; when the server
-// says the problem is DONE (a `solved` event from the finish path, not from a
-// mere "맞아요"), the dialogue is filed under the problem in the left panel.
+// --- the solved-problems archive -------------------------------------------
+// The PANEL is on hold, so nothing is drawn. What is kept is the transcript it
+// will be built from: the conversation since the last problem event, cleared
+// when the server says that problem is DONE (a `solved` event from the finish
+// path, not from a mere "맞아요"). Two lines, and the archive can come back
+// without the lesson having lost anything in the meantime.
 let currentDialogue = [];              // {kind, text} since the last problem event
 let problemTitle = "";
 
 function addSolved(title) {
-  const list = $("solvedList");
-  const empty = document.getElementById("solvedEmpty");
-  if (empty) empty.remove();
-  const item = document.createElement("details");
-  item.className = "solved";
-  const label = document.createElement("summary");
-  label.append(mathify(title || problemTitle || "문제").frag);
-  item.appendChild(label);
-  const box = document.createElement("div");
-  box.className = "minichat";
-  for (const m of currentDialogue) {
-    const line = document.createElement("div");
-    line.className = `miniline ${m.kind}`;
-    const who = document.createElement("b");
-    who.textContent = m.kind === "you" ? "나 · " : "튜터 · ";
-    line.appendChild(who);
-    line.append(mathify(m.text).frag);
-    box.appendChild(line);
-  }
-  item.appendChild(box);
-  list.prepend(item);                  // newest victory on top
+  console.info("solved: %s (%d turns)", title || problemTitle, currentDialogue.length);
   currentDialogue = [];
 }
 
 let boardSeen = new Set();             // one problem's writing, no duplicates
+
+const EMPTY_BOARD =
+  '<svg class="squid" viewBox="0 0 120 152"><use href="#squid"/></svg>' +
+  '<div><b>같이 풀어 볼까요?</b>튜터가 짚어 주는 수식이 여기에 쌓여요.</div>';
 
 function boardClear() {
   boardSeen = new Set();
@@ -661,7 +813,7 @@ function boardClear() {
   lines.textContent = "";
   const empty = document.createElement("div");
   empty.id = "boardEmpty";
-  empty.textContent = "튜터가 짚어 주는 수식이 여기에 나타나요.";
+  empty.innerHTML = EMPTY_BOARD;        // fixed markup, no data in it
   lines.appendChild(empty);
 }
 
@@ -969,6 +1121,20 @@ function note(text) {
 }
 
 $("orb").addEventListener("click", start, { once: true });
+
+// --- 6. the water ----------------------------------------------------------
+// Six bubbles, sized and paced apart so they never read as a row. Built here
+// rather than in markup because the only thing that varies is numbers, and
+// the CSS keyframe is already gated on prefers-reduced-motion.
+for (const [size, left, seconds, delay] of
+     [[14, 8, 22, 0], [8, 19, 28, 6], [20, 34, 25, 12],
+      [10, 63, 30, 3], [16, 78, 21, 15], [7, 91, 26, 9]]) {
+  const bubble = document.createElement("i");
+  bubble.style.cssText =
+    `width:${size}px;height:${size}px;left:${left}%;` +
+    `animation-duration:${seconds}s;animation-delay:-${delay}s`;
+  $("water").appendChild(bubble);
+}
 </script>
 </body>
 </html>
