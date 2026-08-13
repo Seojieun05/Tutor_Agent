@@ -248,10 +248,14 @@
      column. Both start at the same y and end at the same y, because they
      are siblings in one grid row rather than a stack beside a panel.
      =================================================================== */
+  /* The panels run nearly to the bottom of the window and cover most of the
+     reef, which is what scenery is for: it shows in the gutters, under the
+     panels and behind the header, and gives way to the lesson everywhere
+     else. */
   main {
     flex:1 1 auto; min-height:0; width:100%;
     display:flex; justify-content:center;
-    padding:.35rem 1.5rem 6.5rem;
+    padding:.35rem 1.5rem 1.15rem;
   }
   .grid {
     width:100%; max-width:1440px; min-height:0;
@@ -405,9 +409,10 @@
 
   #boardLines {
     flex:1 1 auto; min-height:0; overflow-y:auto;
-    padding:.5rem .1rem 0; scrollbar-width:thin;
-    /* A board fills downward and scrolls, so the line at the top edge is
-       usually a line in half. Fade it out instead of slicing it. */
+    /* the top padding is exactly the fade below: the fade is there to dissolve
+       a line scrolled halfway off, and it must not wash out the first line
+       when nothing is scrolled at all */
+    padding:16px .1rem 0; scrollbar-width:thin;
     -webkit-mask-image:linear-gradient(180deg, transparent 0, #000 16px,
                        #000 calc(100% - 8px), transparent 100%);
             mask-image:linear-gradient(180deg, transparent 0, #000 16px,
@@ -593,7 +598,7 @@
     header { max-width:calc(1440px + 2rem); padding:.7rem 1rem .35rem; }
     /* the reef is pinned to the viewport, so on a page that scrolls it only
        shows at the end of the scroll: leave it that much room */
-    main { flex:none; padding:.35rem 1rem 7rem; }
+    main { flex:none; padding:.35rem 1rem 1.15rem; }
     .grid { grid-template-columns:minmax(0,1fr); gap:.9rem; }
     #board { min-height:24rem; }
     #chatPanel { min-height:26rem; }
@@ -603,7 +608,7 @@
     header { flex-wrap:wrap; gap:.5rem .7rem; max-width:calc(1440px + 1.4rem); padding-inline:.7rem; }
     .brand { margin-right:auto; }
     .brand .sub { display:none; }
-    main { padding:.35rem .7rem 4rem; }
+    main { padding:.35rem .7rem 1rem; }
     #board { padding:.9rem 1rem 1.1rem; min-height:21rem; }
     #tutorStage { width:76px; height:88px; }
     #tutorStage .squid, #tutorStage video { width:76px; }
