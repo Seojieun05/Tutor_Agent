@@ -24,19 +24,24 @@
 
   Chrome/Edge recommended (AudioWorklet at a 16 kHz AudioContext).
 
-  DESIGN: one underwater scene, one blue accent, one 20px corner. Two zones:
-  the BOARD in the middle, where the problem is pinned and every mathematical
-  line the tutor says is written out in real type (KaTeX), and the
-  conversation on the right. The tutor is a squid, drawn here as SVG: it
-  breathes in the mic bar and fills the board before the first hint. Every
-  control on this page is wired to something real; there are deliberately no
-  decorative buttons. The archive of solved problems is on hold, so its panel
-  is gone and only the transcript it will need is still kept.
+  DESIGN: one undersea scene in three planes (a blurred seabed far off, light
+  and bubbles in the middle, the reef in focus at the front, all drawn in this
+  file), and two zones on top of it. The BOARD takes about three quarters: the
+  tutor stands at its top left, the problem is its heading, and every
+  mathematical line the tutor writes is typeset below (KaTeX). The
+  CONVERSATION takes the rest, with its own header and the voice controls
+  pinned at its foot. Surfaces are opaque and lit from above rather than
+  frosted; radius is a hierarchy (panel 24, card 16, bubble 14, button 12,
+  chip full) so a bubble never reads as a panel. Every control on this page is
+  wired to something real; there are deliberately no decorative buttons. The
+  archive of solved problems is on hold, so its panel is gone and only the
+  transcript it will need is still kept.
 
   Both colour schemes are the same water at different depths: the surface in
-  light mode, the deep in dark. Everything is a variable, including the four
+  light mode, the deep in dark. Every colour is a token, including the four
   the server names when it draws a curve (--accent-deep, --err, --dim, --line
-  in tutor/hints/plot.py), so a figure is legible either way.
+  in tutor/hints/plot.py), and each one used as ink was picked against the
+  surface it actually sits on rather than by eye.
 
   MATH: the server sends one normalized display vocabulary (x², ·, √, log₃,
   1/5 — see tutor/speech/mathspeak.py displayable()). This page converts that
@@ -52,45 +57,70 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css">
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js"></script>
 <style>
+  /* ===================================================================
+     TOKENS. Colour, radius and shadow live here and nowhere else; four of
+     the colour names are also the server's, because tutor/hints/plot.py
+     writes var(--accent-deep), var(--err), var(--dim) and var(--line) into
+     the figures it draws. Anything used as TEXT is picked for contrast on
+     the panel, not for prettiness: the water is pale and a pale ink on it
+     is unreadable, whatever the reference does at poster size.
+     =================================================================== */
   :root {
-    /* The surface of the water. Every colour here is a variable because the
-       server names four of them when it draws a curve (tutor/hints/plot.py). */
-    --bg:#bad6f0; --bg-far:#93b9e2; --bg-near:#e6f1fd;
-    --surface:rgba(255,255,255,.62); --surface-solid:#f4f9ff;
-    /* the glass: a lit top edge, a white rim, and the water blurred behind */
-    --glass:linear-gradient(158deg, rgba(255,255,255,.70), rgba(255,255,255,.46));
-    --glass-rim:rgba(255,255,255,.62);
-    --glass-lip:inset 0 1px 0 rgba(255,255,255,.9);
-    --line:#c2d9f0;
-    --text:#2c4d7e; --dim:#6f92c0;
-    --accent:#5b86d6; --accent-deep:#39619f;
-    --accent-soft:#e2edfb; --accent-line:#bdd5f4;
-    --err:#cc6b5e;
+    /* the water, top to floor */
+    --sea-top:#ddf3ff; --sea-mid:#b6e4f5; --sea-bottom:#8fd3ea;
+    --sea-deep:#43a9c6;
+    /* the clay palette. Only what the interface itself uses lives here; the
+       reef's own creams, mints and lilacs are gradient stops inside its SVG,
+       where they belong, rather than tokens nothing references. */
+    --coral:#f3a6a8; --peach:#ffd0a6;
+    /* surfaces */
+    --panel:rgba(248,253,255,.94); --panel-solid:#f8fdff;
+    --panel-rim:rgba(255,255,255,.75);
+    --panel-tint:#eef8fd;          /* the board, a shade cooler than the chat */
+    --line:#d3e6f3;                /* hairlines, and the figure's grid */
+    /* Ink, measured against the surface it actually sits on. --dim is checked
+       against the BOARD (#eef8fd), which is darker than the chat panel, so it
+       passes on both: 4.9:1 and 5.2:1. */
+    --text:#1c3d57; --text-mid:#315b7d; --dim:#476f92;
+    --accent:#43a9c6;              /* fills and borders, never small text */
+    --accent-deep:#166d88;         /* accent as INK: 5.5:1 on the board */
+    --accent-soft:#e2f4fa; --accent-line:#a8dcea;
+    /* The student's own bubble is filled with this, in white: aqua at the
+       reference's own lightness is 2.7:1 under white, which is not a colour
+       choice but an unreadable message. */
+    --aqua-fill:#237789; --aqua-fill-lit:#2a7d93;   /* both ends ≥4.7:1 under white */
+    --err:#b34a43;                 /* 4.6:1 on its own tint, 5.2:1 on a panel */
+    --err-soft:#fdeceb;
     --squid-lit:#ffe6cf; --squid-mid:#f8c49d; --squid-deep:#e79b6d;
-    --shadow:0 1px 2px rgba(38,77,132,.06), 0 14px 34px rgba(38,77,132,.10);
-    --shadow-lift:0 2px 4px rgba(38,77,132,.08), 0 22px 50px rgba(38,77,132,.14);
-    --radius:20px; --radius-sm:12px;
+    /* Radius is a hierarchy, not a habit: the further in you go, the tighter
+       the corner, so a bubble never reads as a panel. */
+    --r-panel:24px; --r-card:16px; --r-bubble:14px; --r-btn:12px; --r-chip:999px;
+    /* Shadows are the sea's own blue, never black. */
+    --shadow-soft:0 2px 6px rgba(49,91,125,.07), 0 14px 30px rgba(49,91,125,.10);
+    --shadow-lift:0 4px 10px rgba(49,91,125,.09), 0 26px 52px rgba(49,91,125,.16);
+    --lip:inset 0 1px 0 rgba(255,255,255,.95);
     --font:"Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
            "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
     --math:"STIX Two Math", "Cambria Math", "Times New Roman", serif;
   }
-  /* The same water, deeper. Note --accent-deep inverts to a LIGHT blue: the
-     server hands it to the curve stroke and the figure note, both of which sit
-     on the surface colour. */
+  /* Night in the same sea. The panels stay opaque and the ink inverts;
+     --accent-deep goes LIGHT because the server hands it to a curve stroke
+     and a caption that both sit on the panel. */
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg:#12293f; --bg-far:#0a1a2b; --bg-near:#1b3a58;
-      --surface:rgba(226,240,255,.07); --surface-solid:#173049;
-      --glass:linear-gradient(158deg, rgba(190,220,255,.13), rgba(190,220,255,.05));
-      --glass-rim:rgba(200,226,255,.18);
-      --glass-lip:inset 0 1px 0 rgba(220,238,255,.20);
-      --line:#2b4d70;
-      --text:#dceaf9; --dim:#8fb2d8;
-      --accent:#6f9fe8; --accent-deep:#a8c9f6;
-      --accent-soft:rgba(111,159,232,.16); --accent-line:rgba(111,159,232,.38);
-      --err:#e58b7d;
-      --shadow:0 1px 2px rgba(0,0,0,.28), 0 14px 34px rgba(0,0,0,.30);
-      --shadow-lift:0 2px 4px rgba(0,0,0,.32), 0 22px 50px rgba(0,0,0,.38);
+      --sea-top:#123a52; --sea-mid:#0e2c40; --sea-bottom:#0a2032;
+      --sea-deep:#2b7d97;
+      --panel:rgba(20,49,68,.94); --panel-solid:#143144;
+      --panel-rim:rgba(154,205,226,.20); --panel-tint:#122c3e;
+      --line:#2c5570;
+      --text:#e4f3fb; --text-mid:#bcd9ea; --dim:#8fb4c9;
+      --accent:#4fb8d4; --accent-deep:#8fd9ee;
+      --accent-soft:rgba(79,184,212,.16); --accent-line:rgba(79,184,212,.40);
+      --aqua-fill:#1e6d80; --aqua-fill-lit:#2a879d;
+      --err:#f0938a; --err-soft:rgba(240,147,138,.14);
+      --shadow-soft:0 2px 6px rgba(0,0,0,.30), 0 14px 30px rgba(0,0,0,.34);
+      --shadow-lift:0 4px 10px rgba(0,0,0,.34), 0 26px 52px rgba(0,0,0,.42);
+      --lip:inset 0 1px 0 rgba(190,225,240,.16);
     }
   }
   * { box-sizing:border-box; }
@@ -98,159 +128,165 @@
   body {
     margin:0; min-height:100dvh; display:flex; flex-direction:column;
     color:var(--text); font:15px/1.6 var(--font);
-    /* the light comes from the upper right and the floor falls away to the
-       left, as it does in the photograph */
-    background:
-      radial-gradient(90% 70% at 88% -6%, var(--bg-near), transparent 62%),
-      radial-gradient(120% 90% at 6% 104%, var(--bg-far), transparent 58%),
-      linear-gradient(168deg, var(--bg), var(--bg-far));
+    background:linear-gradient(178deg, var(--sea-top) 0%, var(--sea-mid) 52%,
+               var(--sea-bottom) 100%);
     background-attachment:fixed;
   }
-  /* light through water: one slow band across the top, never in the way */
-  body::before {
-    content:""; position:fixed; inset:-20% -10% auto -10%; height:70vh; z-index:0;
-    background:linear-gradient(102deg, transparent 30%, rgba(255,255,255,.30) 46%,
-               transparent 58%, rgba(255,255,255,.18) 70%, transparent 82%);
-    pointer-events:none;
+
+  /* ===================================================================
+     THE SCENE, in three planes. Distance is carried by blur and contrast,
+     so only the far plane is blurred: a blurred foreground reads as a
+     smudge on the lens rather than as something close.
+     =================================================================== */
+  .scene { position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden; }
+
+  /* far: two dunes of seabed, out of focus */
+  .scene .far {
+    position:absolute; inset:0; filter:blur(26px); opacity:.85;
+    background:
+      radial-gradient(58% 42% at 18% 74%, rgba(255,255,255,.55), transparent 62%),
+      radial-gradient(70% 46% at 82% 88%, rgba(67,169,198,.34), transparent 66%),
+      radial-gradient(46% 30% at 62% 58%, rgba(255,255,255,.38), transparent 64%);
   }
-  /* the sandbank sweeping in from the right, and the floor it rises from */
-  body::after {
-    content:""; position:fixed; left:-15%; right:-30%; bottom:-46vh; height:78vh;
-    z-index:0; border-radius:50% 50% 0 0; pointer-events:none;
-    transform:rotate(-4deg);
-    background:radial-gradient(58% 100% at 62% 100%, var(--bg-near), transparent 70%);
-    opacity:.8;
-  }
-  /* the reef, along the bottom edge. Soft and out of focus on purpose: it is
-     scenery, and the panels above it carry the lesson. */
-  /* width:100% with height:auto, so the reef keeps its own proportions: a
-     branching coral squashed to fit a fixed height stops being a coral and
-     becomes a worm. It is taller than the strip left for it on purpose, and
-     the glass above blurs the part it overlaps, which is what a panel
-     floating over a reef should look like. */
-  #reef {
-    position:fixed; left:0; bottom:0; z-index:0; width:100%; height:auto;
-    pointer-events:none; opacity:.85; filter:blur(.5px);
+  /* mid: shafts of light from the surface, and the floor they fall on */
+  .scene .mid {
+    position:absolute; inset:0;
+    background:
+      linear-gradient(104deg, transparent 28%, rgba(255,255,255,.30) 40%,
+                      transparent 50%, rgba(255,255,255,.20) 62%, transparent 72%),
+      radial-gradient(120% 46% at 50% 104%, rgba(255,255,255,.42), transparent 70%);
   }
   @media (prefers-color-scheme: dark) {
-    body::before { opacity:.28; }
-    body::after { opacity:.45; }
-    #reef { opacity:.3; }
+    .scene .far { opacity:.5; }
+    .scene .mid { opacity:.28; }
   }
 
-  /* bubbles: six of them, rising, behind everything */
-  #water { position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden; }
-  #water i {
+  /* mid: bubbles, small and few, rising the whole height */
+  .bubbles { position:absolute; inset:0; }
+  .bubbles i {
     position:absolute; bottom:-8vh; border-radius:50%;
-    background:radial-gradient(circle at 32% 28%, rgba(255,255,255,.92), rgba(255,255,255,.18) 58%,
-               rgba(255,255,255,.06));
-    border:1px solid rgba(255,255,255,.45); opacity:0;
+    background:radial-gradient(circle at 32% 28%, rgba(255,255,255,.95),
+               rgba(255,255,255,.22) 58%, rgba(255,255,255,.06));
+    border:1px solid rgba(255,255,255,.55); opacity:0;
   }
   @media (prefers-reduced-motion: no-preference) {
-    #water i { animation:rise linear infinite; }
+    .bubbles i { animation:rise linear infinite; }
     @keyframes rise {
       0%   { transform:translateY(0) scale(.7); opacity:0; }
-      14%  { opacity:.7; }
+      14%  { opacity:.75; }
       86%  { opacity:.5; }
       100% { transform:translateY(-118vh) scale(1); opacity:0; }
     }
   }
 
-  main, header, footer { position:relative; z-index:1; }
+  /* near: the reef, in focus, standing on its own floor rather than being
+     cut off by the bottom of the window */
+  #reef {
+    position:absolute; left:0; bottom:0; width:100%; height:auto;
+    /* one soft ground shadow, not a blur on the objects themselves */
+    filter:drop-shadow(0 10px 16px rgba(49,91,125,.16));
+  }
+  @media (prefers-color-scheme: dark) { #reef { opacity:.55; } }
 
-  /* ---- top bar: the brand, and the microphone that used to sit at the
-     bottom. Nothing was dropped with the bottom bar; 시작 is the click that
-     grants the microphone and unlocks the speaker, so it has to stay. ---- */
+  header, main { position:relative; z-index:1; }
+
+  /* ===================================================================
+     TOP BAR. Three things only, in falling order of importance: whose
+     tutor this is, whether it is connected, and the way out. The voice
+     controls live at the foot of the conversation, next to the words they
+     produce.
+     =================================================================== */
+  /* the same arithmetic main uses, so the brand starts exactly above the
+     board's left edge: box-sizing is border-box, so the gutters have to be
+     inside the max-width here as they are inside main's padding there */
   header {
-    flex:none; min-height:68px;
-    display:flex; align-items:center; justify-content:space-between; gap:1rem;
-    padding:.7rem 1.5rem;
+    flex:none; display:flex; align-items:center; gap:1rem;
+    width:100%; max-width:calc(1440px + 3rem); margin:0 auto;
+    padding:.85rem 1.5rem .45rem;
   }
-  .brand { display:flex; align-items:baseline; gap:.5rem; min-width:0; }
-  /* The reference sets its title in white script over the water. At 120px it
-     can; at 17px white on pale blue is about 1.6:1, so the shape of that type
-     is borrowed and the colour is not: soft, wide-spaced, and dark enough to
-     read. */
+  .brand { display:flex; align-items:baseline; gap:.55rem; min-width:0; margin-right:auto; }
   .brand .name {
-    font-size:1.15rem; font-weight:800; letter-spacing:-.01em; color:var(--accent-deep);
-    text-shadow:0 1px 0 rgba(255,255,255,.55);
+    font-size:1.12rem; font-weight:800; letter-spacing:-.01em; color:var(--text);
   }
-  .brand .name span {
-    margin-left:.6rem; font-size:.66rem; font-weight:600; color:var(--dim);
-    letter-spacing:.16em; text-transform:uppercase;
+  .brand .sub {
+    font-size:.64rem; font-weight:700; color:var(--text-mid);
+    letter-spacing:.15em; text-transform:uppercase; white-space:nowrap;
   }
-  .mic { display:flex; align-items:center; gap:.7rem; min-width:0; }
-  #status {
-    font-size:.76rem; line-height:1.45; color:var(--dim); text-align:right;
-    max-width:48ch; word-break:keep-all;
-  }
-  #orb {
-    flex:none; display:inline-flex; align-items:center; gap:.5rem;
-    border-radius:999px; border:1px solid var(--accent-line);
-    background:var(--surface); backdrop-filter:blur(10px);
-    padding:.42rem .95rem .42rem .8rem;
-    color:var(--accent-deep); font:800 .82rem var(--font); cursor:pointer;
-    transition:border-color .25s, box-shadow .25s, transform .12s;
-  }
-  #orb .dot {
-    width:.5rem; height:.5rem; border-radius:50%; background:var(--dim);
-    transition:background .25s, box-shadow .25s;
-  }
-  #orb:disabled { cursor:default; }
-  #orb:not(:disabled):hover { border-color:var(--accent); }
-  #orb:not(:disabled):active { transform:scale(.97); }
-  #orb[data-state="LISTENING"] .dot      { background:var(--accent); }
-  #orb[data-state="USER_SPEAKING"] .dot  { background:var(--accent); box-shadow:0 0 0 4px var(--accent-soft); }
-  #orb[data-state="PROCESSING"] .dot     { background:var(--dim); }
-  #orb[data-state="AGENT_SPEAKING"] .dot { background:var(--err); }
+  /* a status chip, not a button: it says a thing, it does not do one */
   #conn {
-    flex:none; font-size:.76rem; font-weight:700; color:var(--dim);
-    border:1px solid var(--line); border-radius:999px; padding:.3rem .9rem;
-    background:var(--surface); backdrop-filter:blur(10px);
+    flex:none; display:inline-flex; align-items:center; gap:.4rem;
+    font-size:.74rem; font-weight:700; color:var(--dim);
+    background:var(--panel); border:1px solid var(--line);
+    border-radius:var(--r-chip); padding:.26rem .7rem .26rem .58rem;
+    box-shadow:var(--shadow-soft);
   }
-  #conn.ok { color:var(--accent-deep); border-color:var(--accent-line); background:var(--accent-soft); }
+  #conn::before {
+    content:""; width:.45rem; height:.45rem; border-radius:50%;
+    background:currentColor; opacity:.7;
+  }
+  #conn.ok { color:var(--accent-deep); border-color:var(--accent-line); }
   #conn.down { color:var(--err); }
+  /* the way out: quiet until you reach for it, then plainly a red door */
+  /* text-mid rather than dim: this one sits on the open water, where dim is
+     4.2:1 against the paler part of the gradient */
+  #hangup {
+    flex:none; font:700 .74rem var(--font); color:var(--text-mid); cursor:pointer;
+    background:transparent; border:1px solid transparent;
+    border-radius:var(--r-btn); padding:.3rem .7rem;
+    transition:color .18s, background .18s, border-color .18s;
+  }
+  #hangup[hidden] { display:none; }
+  #hangup:hover { color:var(--err); background:var(--err-soft); border-color:var(--err); }
+  #hangup:active { transform:translateY(1px); }
+  #hangup:focus-visible {
+    outline:2px solid var(--err); outline-offset:2px; color:var(--err);
+  }
 
-  /* ---- middle: board in the centre, conversation on the right ---- */
-  /* the bottom padding is the reef's: the panels stop short of the floor so
-     the water they float in is visible under them */
+  /* ===================================================================
+     LAYOUT. The board is the lesson, so it takes about three quarters;
+     the conversation takes the rest and never drops below a readable
+     column. Both start at the same y and end at the same y, because they
+     are siblings in one grid row rather than a stack beside a panel.
+     =================================================================== */
   main {
     flex:1 1 auto; min-height:0; width:100%;
     display:flex; justify-content:center;
-    padding:1.5rem 1.5rem 7rem;
+    padding:.35rem 1.5rem 6.5rem;
   }
   .grid {
-    width:100%; max-width:1400px; min-height:0;
-    display:grid; gap:1rem;
-    grid-template-columns:minmax(0,1fr) 360px;
+    width:100%; max-width:1440px; min-height:0;
+    display:grid; gap:1.1rem; align-items:stretch;
+    grid-template-columns:minmax(0,74fr) minmax(310px,26fr);
   }
-  .centre { min-height:0; display:flex; flex-direction:column; gap:.8rem; }
 
+  /* One surface recipe: opaque enough to read on, a lit top edge, and the
+     sea's own shadow underneath. No backdrop blur anywhere: a page-wide
+     frosted veil is the look this was asked to stop being. */
   .panel {
-    background:var(--glass); border:1px solid var(--glass-rim);
-    border-radius:var(--radius); box-shadow:var(--glass-lip), var(--shadow);
-    backdrop-filter:blur(20px) saturate(150%);
-  }
-  @media (prefers-reduced-transparency: reduce) {
-    .panel, #conn, #orb {
-      background:var(--surface-solid); border-color:var(--line);
-      box-shadow:var(--shadow); backdrop-filter:none;
-    }
+    background:var(--panel); border:1px solid var(--panel-rim);
+    border-radius:var(--r-panel); box-shadow:var(--lip), var(--shadow-soft);
   }
   .cardlabel {
-    display:inline-block; font-size:.72rem; font-weight:700;
+    display:inline-block; font-size:.7rem; font-weight:800; letter-spacing:.02em;
     color:var(--accent-deep); background:var(--accent-soft);
-    border:1px solid var(--accent-line);
-    border-radius:999px; padding:.18rem .75rem;
+    border-radius:var(--r-chip); padding:.2rem .7rem;
   }
 
-  /* ---- problem card: notation, not a photo ---- */
-  #problemCard { flex:none; padding:1.1rem 1.6rem 1.25rem; text-align:center; }
+  /* ---- the problem, as the board's own heading ---- */
+  #problemCard {
+    padding:0 0 .9rem; margin-bottom:.2rem;
+    border-bottom:1px solid var(--line);
+  }
   #problemCard[hidden] { display:none; }
-  #problemCard .cardlabel { margin-bottom:.6rem; }
-  #problemText { font-size:1.15rem; font-weight:700; line-height:1.6; word-break:keep-all; }
-  #problemEqs { margin-top:.45rem; font-family:var(--math); font-size:1.18rem; }
-  #problemEqs div { padding:.12rem 0; }
+  #problemCard .cardlabel { margin-bottom:.5rem; }
+  #problemText {
+    font-size:1.06rem; font-weight:700; line-height:1.62; color:var(--text);
+    word-break:keep-all;
+  }
+  #problemEqs {
+    margin-top:.5rem; font-family:var(--math); font-size:1.16rem; color:var(--text-mid);
+  }
+  #problemEqs div { padding:.1rem 0; }
 
   /* ---- worksheet photo (click / drag / paste) ----
      Hidden until the server says this laptop is the eye (INPUT_MODE=upload).
@@ -259,127 +295,241 @@
   #sheet { display:none; }
   #drop[hidden] { display:none; }
   #drop {
-    flex:none; display:flex; align-items:center; justify-content:center; gap:.9rem;
-    border-style:dashed; padding:.75rem 1rem; color:var(--dim);
-    font-size:.82rem; line-height:1.5; text-align:center; cursor:pointer;
-    transition:border-color .2s, color .2s;
+    display:flex; align-items:center; gap:.9rem; margin-bottom:.7rem;
+    background:var(--panel-tint); border:1.5px dashed var(--line);
+    border-radius:var(--r-card); padding:.7rem .9rem;
+    color:var(--dim); font-size:.8rem; line-height:1.5; cursor:pointer;
+    transition:border-color .18s, color .18s, background .18s;
   }
   #drop:hover, #drop.over { border-color:var(--accent); color:var(--text); }
-  #drop.has { border-style:solid; border-color:var(--accent-line); background:var(--accent-soft); color:var(--text); }
-  #drop b { font-weight:700; }
-  #thumb { max-height:3rem; border-radius:var(--radius-sm); display:none; }
+  #drop:active { transform:translateY(1px); }
+  #drop:focus-visible { outline:2px solid var(--accent-deep); outline-offset:2px; }
+  #drop.has {
+    border-style:solid; border-color:var(--accent-line);
+    background:var(--accent-soft); color:var(--text);
+  }
+  #drop b { font-weight:800; color:var(--text-mid); }
+  #thumb { max-height:2.6rem; border-radius:8px; display:none; }
   #thumb.has { display:block; }
-  .meta { font-size:.75rem; color:var(--dim); }
+  .meta { font-size:.72rem; color:var(--dim); }
 
-  /* ---- the board: every mathematical line the tutor writes ---- */
+  /* ===================================================================
+     THE BOARD. A cool near-white slate with a whisper of a dot grid, the
+     tutor standing at its top left, and everything it writes below.
+     =================================================================== */
   #board {
-    flex:1 1 auto; min-height:0; display:flex; flex-direction:column;
-    padding:1rem 1.4rem 1.2rem;
-    /* the dot grid a whiteboard has, over the panel's own glass. The glass
-       layer is repeated here because background-image replaces .panel's, and
-       without it the board is a hole straight through to the water. */
-    background-image:
-      radial-gradient(circle, var(--line) 1.1px, transparent 1.1px),
-      var(--glass);
-    background-size:24px 24px, auto;
-    background-position:12px 12px, 0 0;
+    min-height:0; display:flex; flex-direction:column;
+    padding:1.1rem 1.5rem 1.3rem;
+    background-color:var(--panel-tint);
+    /* the grid is a texture, not a feature: one dot every 26px at a tenth
+       of the hairline's weight */
+    background-image:radial-gradient(circle, var(--line) 1px, transparent 1px);
+    background-size:26px 26px; background-position:13px 13px;
   }
-  /* the tutor sits in the corner of its own board, no title needed */
-  #boardHead {
-    flex:none; display:flex; align-items:center; min-height:74px; padding-bottom:.2rem;
+  /* the tutor, and whatever the lesson is about, side by side */
+  #boardHead { flex:none; display:flex; gap:1.1rem; align-items:flex-start; }
+  .headtext { flex:1 1 auto; min-width:0; padding-top:.35rem; }
+
+  /* ---- the tutor's stage: character, ink, and the symbols it thinks in --- */
+  #tutorStage {
+    flex:none; position:relative; width:104px; height:116px;
   }
-  #boardHead svg { width:56px; height:auto; }
-  /* The clip IS the tutor here, paused on its first frame when idle and
-     playing while the pipeline works, so the squid on the board is the same
-     squid either way and moving means thinking. The drawn one underneath is
-     the fallback, and stays if the video never loads. */
-  #boardHead video { width:72px; height:auto; display:none; margin-left:-8px; }
-  #boardHead.hasclip svg { display:none; }
-  #boardHead.hasclip video { display:block; }
+  #tutorStage .avatar {
+    position:absolute; inset:0; display:grid; place-items:start center;
+    will-change:transform;
+  }
+  #tutorStage .squid { width:100px; height:auto; }
+  /* The clip IS the tutor: paused on its first frame when idle, playing while
+     the pipeline works, so the character never changes identity and moving is
+     what "thinking" looks like. The drawn one is the fallback underneath. */
+  #tutorStage video { width:104px; height:auto; display:none; }
+  #tutorStage.hasclip .squid { display:none; }
+  #tutorStage.hasclip video { display:block; }
+  /* the ink it writes with, and the arithmetic it mutters */
+  #tutorStage .ink {
+    position:absolute; left:52px; top:86px; width:9px; height:11px;
+    border-radius:50% 50% 46% 46%; background:var(--accent-deep);
+    opacity:0; pointer-events:none;
+  }
+  #tutorStage .sym {
+    position:absolute; font:700 .82rem var(--math); color:var(--accent-deep);
+    opacity:0; pointer-events:none; user-select:none;
+  }
+  /* kept inside the stage's own box: a symbol at left:-6px hangs over the
+     board's padding and reads as a stray glyph on the panel edge */
+  #tutorStage .sym:nth-of-type(1) { left:4px;  top:46px; }
+  #tutorStage .sym:nth-of-type(2) { left:84px; top:30px; }
+  #tutorStage .sym:nth-of-type(3) { left:20px; top:10px; }
+  #tutorStage .sym:nth-of-type(4) { left:76px; top:72px; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    /* waiting: it floats, the way anything neutrally buoyant does */
+    #tutorStage .avatar { animation:bob 5.4s ease-in-out infinite; }
+    @keyframes bob {
+      0%, 100% { transform:translateY(0) rotate(0deg); }
+      50%      { transform:translateY(-8px) rotate(-2.5deg); }
+    }
+    /* thinking: it swims, and the symbols drift up around it */
+    #tutorStage.thinking .avatar { animation:swim 3.4s ease-in-out infinite; }
+    @keyframes swim {
+      0%, 100% { transform:translate(0, 0) rotate(-4deg); }
+      35%      { transform:translate(7px, -10px) rotate(5deg); }
+      70%      { transform:translate(-5px, -4px) rotate(-2deg); }
+    }
+    #tutorStage.thinking .sym { animation:mutter 3.6s ease-in-out infinite; }
+    #tutorStage.thinking .sym:nth-of-type(2) { animation-delay:.9s; }
+    #tutorStage.thinking .sym:nth-of-type(3) { animation-delay:1.8s; }
+    #tutorStage.thinking .sym:nth-of-type(4) { animation-delay:2.5s; }
+    @keyframes mutter {
+      0%       { transform:translateY(6px) scale(.7); opacity:0; }
+      22%      { opacity:.85; }
+      70%      { opacity:.5; }
+      100%     { transform:translateY(-26px) scale(1.05); opacity:0; }
+    }
+    /* writing: it runs along the top of the board and lets the ink go */
+    #tutorStage.writing .avatar { animation:writemove 1.5s cubic-bezier(.36,0,.28,1) 1; }
+    @keyframes writemove {
+      0%   { transform:translate(0, 0) rotate(0deg); }
+      30%  { transform:translate(96px, 6px) rotate(7deg); }
+      58%  { transform:translate(168px, 3px) rotate(4deg); }
+      100% { transform:translate(0, 0) rotate(0deg); }
+    }
+    #tutorStage.writing .ink { animation:inkfall 1.5s ease-in 1; }
+    @keyframes inkfall {
+      0%   { transform:translate(0, 0) scale(.5); opacity:0; }
+      26%  { transform:translate(92px, 6px) scale(1); opacity:.9; }
+      64%  { transform:translate(150px, 40px) scale(.85); opacity:.55; }
+      100% { transform:translate(196px, 74px) scale(.4); opacity:0; }
+    }
+  }
+
   #boardLines {
-    flex:1 1 auto; min-height:0; overflow-y:auto; padding-top:.2rem; scrollbar-width:thin;
+    flex:1 1 auto; min-height:0; overflow-y:auto;
+    padding:.5rem .1rem 0; scrollbar-width:thin;
     /* A board fills downward and scrolls, so the line at the top edge is
        usually a line in half. Fade it out instead of slicing it. */
-    -webkit-mask-image:linear-gradient(180deg, transparent 0, #000 18px,
-                       #000 calc(100% - 10px), transparent 100%);
-            mask-image:linear-gradient(180deg, transparent 0, #000 18px,
-                       #000 calc(100% - 10px), transparent 100%);
+    -webkit-mask-image:linear-gradient(180deg, transparent 0, #000 16px,
+                       #000 calc(100% - 8px), transparent 100%);
+            mask-image:linear-gradient(180deg, transparent 0, #000 16px,
+                       #000 calc(100% - 8px), transparent 100%);
   }
   .boardline {
-    padding:.45rem .2rem; font-size:1.06rem; line-height:1.7;
+    padding:.45rem .2rem; font-size:1.04rem; line-height:1.7; color:var(--text-mid);
     word-break:keep-all; overflow-wrap:anywhere;
   }
   .boardline .katex { font-size:1.15em; }
+  /* What the tutor deliberately WROTE, one step of the argument: the biggest
+     type on the board, with the reason scribbled under it in the margin
+     voice. Written, not framed. */
+  .boardline.key {
+    padding:.5rem .2rem .8rem; margin:.15rem 0;
+    font-size:1.36rem; line-height:1.5; color:var(--text);
+  }
+  .boardline.key .katex { font-size:1.3em; }
+  .boardline.key .note {
+    margin-top:.28rem; font-size:.78rem; font-weight:700; color:var(--accent-deep);
+    letter-spacing:-.01em; word-break:keep-all;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .boardline.key { animation:inked .5s ease-out 1; }
+    @keyframes inked {
+      0%   { opacity:0; transform:translateY(-4px); filter:blur(2px); }
+      100% { opacity:1; transform:none; filter:none; }
+    }
+  }
+
   /* a function sketched on the board: axes, a light grid, the curve */
-  .boardfigure { padding:.5rem 0; }
+  .boardfigure { padding:.4rem 0 .2rem; }
   @media (prefers-reduced-motion: no-preference) {
     .boardfigure { transition:opacity .18s ease; }
     .boardfigure.fading { opacity:.15; }
   }
-  /* The server now draws the sketch at 900x470, which is about the width of
-     the board, so it fills it at roughly 1:1 and the tick labels stay the
-     size they were drawn. */
+  /* The server draws the sketch at about the board's width, so it fills it at
+     roughly 1:1 and the tick labels stay the size they were drawn. */
   .boardfigure svg { display:block; width:100%; height:auto; }
   .boardfigure .grid line { stroke:var(--line); stroke-width:1; }
   .boardfigure .axes line { stroke:var(--dim); stroke-width:1.4; }
   .boardfigure .ticks text { fill:var(--dim); font-size:10px; font-family:var(--font); }
   .boardfigure .legend { font-size:12px; font-family:var(--math); }
   .boardfigure .note {
-    margin-top:.15rem; text-align:center; font-size:.78rem; font-weight:600;
+    margin-top:.15rem; text-align:center; font-size:.78rem; font-weight:700;
     color:var(--accent-deep); word-break:keep-all;
   }
 
-  /* What the tutor deliberately WROTE. Written, not framed: a person at a
-     board writes the line and scribbles why beside it, and a card around
-     every step turns a train of thought into a list of receipts. */
-  .boardline.key {
-    padding:.55rem .2rem .75rem; margin:.2rem 0;
-    font-size:1.32rem; line-height:1.5; color:var(--text);
-  }
-  .boardline.key .katex { font-size:1.3em; }
-  .boardline.key .note {
-    margin-top:.25rem; font-size:.8rem; font-weight:600; color:var(--accent-deep);
-    letter-spacing:-.01em; word-break:keep-all; opacity:.85;
-  }
-  /* Empty state: the tutor is already in the corner, so this is just the
-     invitation. */
-  /* min-height, not flex: #boardLines is a scroll container, so a flex-grow
-     child of it grows to its content and sits at the top */
+  /* Empty state: not a message floating in the middle of nothing, but the
+     tutor at the top of its own board, saying it is ready. */
   #boardEmpty {
-    min-height:100%; display:flex; flex-direction:column;
-    align-items:center; justify-content:center; gap:.35rem;
-    color:var(--dim); font-size:.9rem; text-align:center; padding-bottom:2rem;
+    max-width:30rem; margin:.2rem 0 0 .1rem; position:relative;
+    background:var(--panel-solid); border:1px solid var(--line);
+    border-radius:var(--r-card); border-top-left-radius:6px;
+    padding:.85rem 1.1rem; box-shadow:var(--shadow-soft);
+    color:var(--dim); font-size:.88rem; line-height:1.65;
   }
-  #boardEmpty b { display:block; font-size:1.05rem; font-weight:700; color:var(--text); }
+  #boardEmpty b {
+    display:block; font-size:1.02rem; font-weight:800; color:var(--text);
+    margin-bottom:.15rem;
+  }
 
-  /* ---- conversation (right) ---- */
+  /* ===================================================================
+     THE CONVERSATION. Its own header so it is plainly a channel to
+     somebody, and the voice controls pinned at its foot, where the words
+     it produces appear.
+     =================================================================== */
   #chatPanel {
-    min-height:0; display:flex; flex-direction:column; padding:1rem 1rem .7rem;
+    min-height:0; display:flex; flex-direction:column; overflow:hidden;
+    padding:0;                      /* the head and foot run edge to edge */
   }
-  #chatPanel .cardlabel { align-self:flex-start; }
+  .chathead {
+    flex:none; display:flex; align-items:center; gap:.6rem;
+    padding:.85rem 1rem; border-bottom:1px solid var(--line);
+    background:linear-gradient(180deg, var(--accent-soft), transparent);
+  }
+  .chathead .face {
+    flex:none; width:34px; height:34px; border-radius:50%;
+    background:radial-gradient(circle at 34% 28%, var(--squid-lit), var(--squid-mid) 62%,
+               var(--squid-deep));
+    box-shadow:var(--lip), 0 2px 6px rgba(49,91,125,.18);
+  }
+  .chathead .who { min-width:0; }
+  .chathead .who b { display:block; font-size:.92rem; font-weight:800; color:var(--text); }
+  #stateLabel { font-size:.74rem; font-weight:700; color:var(--accent-deep); }
+
   #chat {
     flex:1 1 auto; min-height:0; overflow-y:auto;
-    display:flex; flex-direction:column; gap:.85rem;
-    padding:.7rem .1rem .6rem; scrollbar-width:thin;
+    display:flex; flex-direction:column; gap:.8rem;
+    padding:.9rem .9rem 1rem; scrollbar-width:thin;
   }
-  .msg { max-width:92%; display:flex; flex-direction:column; gap:.22rem; }
-  .msg .who { font-size:.7rem; font-weight:700; color:var(--dim); padding:0 .35rem; }
+  .msg { max-width:94%; display:flex; flex-direction:column; gap:.2rem; }
+  .msg .who { font-size:.68rem; font-weight:700; color:var(--dim); padding:0 .3rem; }
   .msg .bubble {
-    border-radius:var(--radius-sm); padding:.55rem .85rem; font-size:.88rem;
+    border-radius:var(--r-bubble); padding:.6rem .85rem;
+    font-size:.88rem; line-height:1.62;
     white-space:pre-wrap; word-break:keep-all; overflow-wrap:anywhere;
   }
+  /* the tutor speaks in white, the student in the sea's own aqua */
   .msg.tutor { align-self:flex-start; }
   .msg.tutor .bubble {
-    background:var(--surface-solid); border:1px solid var(--line);
-    border-top-left-radius:5px;
+    background:var(--panel-solid); border:1px solid var(--line); color:var(--text);
+    border-top-left-radius:5px; box-shadow:0 1px 2px rgba(49,91,125,.05);
   }
   .msg.you { align-self:flex-end; align-items:flex-end; }
   .msg.you .bubble {
-    background:var(--accent); border:1px solid var(--accent); color:#fff;
-    border-top-right-radius:5px;
+    background:linear-gradient(158deg, var(--aqua-fill-lit), var(--aqua-fill));
+    border:1px solid var(--aqua-fill); color:#fff;
+    border-top-right-radius:5px; box-shadow:0 2px 8px rgba(49,91,125,.18);
   }
-  .msg .note { font-size:.7rem; color:var(--dim); padding:0 .35rem; }
-  .sys { align-self:center; font-size:.75rem; color:var(--err); text-align:center; }
+  /* Machine talk (hint level, action) is smaller and quieter than speech.
+     Quieter by size and weight only: an opacity on top of --dim composited it
+     to 4.2:1, undoing the token that was picked to pass on this surface. */
+  .msg .note {
+    font-size:.68rem; font-weight:600; color:var(--dim); padding:0 .35rem;
+    letter-spacing:.01em;
+  }
+  .sys {
+    align-self:center; max-width:94%; text-align:center;
+    font-size:.74rem; font-weight:600; color:var(--err);
+    background:var(--err-soft); border-radius:var(--r-bubble); padding:.35rem .7rem;
+  }
 
   /* the tutor is thinking: shown only during PROCESSING */
   #thinking { align-self:flex-start; }
@@ -387,7 +537,7 @@
   #thinking .bubble {
     display:flex; align-items:center; gap:.5rem;
     background:var(--accent-soft); border:1px solid var(--accent-line);
-    color:var(--accent-deep); font-size:.8rem; font-weight:600;
+    color:var(--accent-deep); font-size:.79rem; font-weight:700;
   }
   .dots { display:inline-flex; gap:.22rem; }
   .dots i { width:.3rem; height:.3rem; border-radius:50%; background:var(--accent); opacity:.4; }
@@ -398,44 +548,78 @@
     @keyframes blink { 40% { opacity:1; } }
   }
 
-  /* the squid breathes; it bobs faster while it talks. Nothing loops fast
-     enough to compete with the voice, and nothing loops at all under reduced
-     motion. */
-  .squid { overflow:visible; }
-  @media (prefers-reduced-motion: no-preference) {
-    .squid .swim { transform-origin:50% 30%; animation:drift 6s ease-in-out infinite; }
-    @keyframes drift {
-      0%, 100% { transform:translateY(0) rotate(0deg); }
-      50%      { transform:translateY(-5px) rotate(-1.6deg); }
-    }
-    body:has(#orb[data-state="AGENT_SPEAKING"]) #boardHead .swim { animation-duration:2.4s; }
+  /* ---- the voice controls, at the foot of the words they make ---- */
+  .chatfoot {
+    flex:none; display:flex; align-items:center; gap:.75rem;
+    padding:.8rem 1rem .9rem; border-top:1px solid var(--line);
+    background:var(--panel-solid);
+  }
+  #orb {
+    flex:none; display:inline-flex; align-items:center; gap:.5rem;
+    border-radius:var(--r-chip); border:1px solid var(--aqua-fill);
+    background:linear-gradient(158deg, var(--aqua-fill-lit), var(--aqua-fill)); color:#fff;
+    padding:.5rem 1.05rem .5rem .85rem; font:800 .84rem var(--font); cursor:pointer;
+    box-shadow:0 2px 8px rgba(49,91,125,.20);
+    transition:filter .18s, box-shadow .18s, transform .1s;
+  }
+  #orb .dot {
+    width:.5rem; height:.5rem; border-radius:50%; background:#fff; opacity:.85;
+    transition:background .25s, box-shadow .25s, opacity .25s;
+  }
+  #orb:hover { filter:brightness(1.06); box-shadow:var(--shadow-lift); }
+  #orb:active { transform:translateY(1px); box-shadow:0 1px 4px rgba(49,91,125,.22); }
+  #orb:focus-visible { outline:2px solid var(--accent-deep); outline-offset:3px; }
+  /* once it is running the button stops being a button and becomes the light */
+  #orb:disabled {
+    cursor:default; background:var(--panel-tint); color:var(--text-mid);
+    border-color:var(--line); box-shadow:none; filter:none;
+  }
+  #orb:disabled .dot { background:var(--dim); opacity:1; }
+  #orb[data-state="LISTENING"] .dot      { background:var(--accent); }
+  #orb[data-state="USER_SPEAKING"] .dot  { background:var(--sea-deep); box-shadow:0 0 0 4px var(--accent-soft); }
+  #orb[data-state="PROCESSING"] .dot     { background:var(--peach); }
+  #orb[data-state="AGENT_SPEAKING"] .dot { background:var(--coral); box-shadow:0 0 0 4px var(--err-soft); }
+  #status {
+    min-width:0; font-size:.72rem; line-height:1.45; color:var(--dim);
+    word-break:keep-all;
   }
 
-  /* One column under 960px: problem, photo, board, chat. The page scrolls
-     rather than dividing one screen three ways, because splitting 844px of
-     phone between a problem statement, a board and a conversation leaves the
-     board a sliver, and the board is the lesson. */
-  @media (max-width: 960px) {
-    header { flex-wrap:wrap; padding:.6rem .8rem; }
-    /* #status is a child of .mic, not of header, so it is .mic that has to
-       wrap: giving the status `flex:1 0 100%` in a nowrap parent just made it
-       426px wide inside a 719px page and scrolled the whole document sideways */
-    .mic { flex-wrap:wrap; justify-content:flex-end; }
-    #status { flex:1 0 100%; max-width:100%; text-align:right; order:3; }
-    main { flex:none; padding:.4rem .8rem .8rem; }
-    .grid { grid-template-columns:minmax(0,1fr); }
-    #board { min-height:20rem; }
-    #chatPanel { min-height:20rem; }
-    #boardHead svg { width:44px; }
-    #problemText { font-size:1.02rem; }
+  /* ===================================================================
+     RESPONSIVE. Under 1000px the conversation moves below the board,
+     because a 300px column beside a board is not a column any more. The
+     page scrolls rather than dividing one screen three ways.
+     =================================================================== */
+  @media (max-width: 1000px) {
+    header { max-width:calc(1440px + 2rem); padding:.7rem 1rem .35rem; }
+    /* the reef is pinned to the viewport, so on a page that scrolls it only
+       shows at the end of the scroll: leave it that much room */
+    main { flex:none; padding:.35rem 1rem 7rem; }
+    .grid { grid-template-columns:minmax(0,1fr); gap:.9rem; }
+    #board { min-height:24rem; }
+    #chatPanel { min-height:26rem; }
     .msg { max-width:88%; }
+  }
+  @media (max-width: 620px) {
+    header { flex-wrap:wrap; gap:.5rem .7rem; max-width:calc(1440px + 1.4rem); padding-inline:.7rem; }
+    .brand { margin-right:auto; }
+    .brand .sub { display:none; }
+    main { padding:.35rem .7rem 4rem; }
+    #board { padding:.9rem 1rem 1.1rem; min-height:21rem; }
+    #tutorStage { width:76px; height:88px; }
+    #tutorStage .squid, #tutorStage video { width:76px; }
+    #boardHead { gap:.75rem; }
+    #problemText { font-size:1rem; }
+    .boardline.key { font-size:1.16rem; }
+    .chatfoot { flex-wrap:wrap; gap:.5rem .7rem; }
+    #status { flex:1 0 100%; }
   }
 </style>
 </head>
 <body>
-  <!-- The tutor, drawn once and used wherever it appears. Hand-drawn SVG
-       rather than an image file: it has to sit at 26px in the header and
-       132px on the board, tint itself for both colour schemes, and ship
+  <!-- The drawn tutor: the fallback shown until squid-thinking.webm reports
+       it can paint a frame, at 100px on the board and 76px on a phone. Hand
+       drawn as SVG rather than an image file so it can tint itself for both
+       colour schemes and ship
        inside the one file the server serves. -->
   <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
     <defs>
@@ -457,7 +641,7 @@
         <stop offset="100%" stop-color="var(--squid-deep)"/>
       </linearGradient>
       <symbol id="squid" viewBox="0 0 120 152">
-        <g class="swim">
+        <g>
           <!-- arms: tapered, splayed, back pair first so the front three
                overlap them. Long enough that the silhouette reads as a squid
                and not as a body with legs. -->
@@ -489,13 +673,21 @@
     </defs>
   </svg>
 
-  <!-- The reef along the bottom of the water: two stands of tube coral and a
-       branching one, lit from the upper left like the rest of the scene. Drawn
-       to fill its own box exactly (preserveAspectRatio="none"), because
-       anchoring a taller drawing to the bottom edge crops the rounded tops off
-       and leaves a row of flat sticks. Soft organic shapes do not mind the
-       vertical stretch; the tube tops read as ellipses, which is what they are
-       in the reference anyway. -->
+  <!-- ==================================================================
+       THE SCENE, in three planes: a blurred seabed far off, light and
+       bubbles in the middle distance, and the reef in focus at the front.
+       All of it is drawn here, in this file: no external images, nothing
+       hotlinked, nothing whose licence anyone has to take on trust.
+       ================================================================== -->
+  <div class="scene" aria-hidden="true">
+    <div class="far"></div>
+    <div class="mid"></div>
+    <div class="bubbles"></div>
+
+  <!-- The reef: two stands of tube coral, a branching one, seaweed, and the
+       sand they all stand on. It keeps its own proportions (a branching coral
+       squashed to fit a strip becomes a worm) and its floor is drawn in, so
+       nothing is cut off by the bottom of the window. -->
   <svg id="reef" viewBox="0 0 1440 260" aria-hidden="true" focusable="false">
     <defs>
       <!-- Every one of these is userSpaceOnUse, and it has to be: a coral stem
@@ -532,9 +724,22 @@
         <stop offset="0" stop-color="#ffffff" stop-opacity=".5"/>
         <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
       </radialGradient>
+      <!-- the seabed the reef stands on, so nothing looks sliced off -->
+      <linearGradient id="floor" gradientUnits="userSpaceOnUse" x1="0" y1="196" x2="0" y2="260">
+        <stop offset="0" stop-color="#cdeaf5"/><stop offset="100%" stop-color="#a7dcee"/>
+      </linearGradient>
+      <linearGradient id="weed" gradientUnits="userSpaceOnUse" x1="0" y1="120" x2="0" y2="250">
+        <stop offset="0" stop-color="#cfeee2"/><stop offset="100%" stop-color="#8fc9c4"/>
+      </linearGradient>
     </defs>
 
     <ellipse cx="560" cy="262" rx="760" ry="120" fill="url(#sand)"/>
+    <!-- the floor: one soft rise the whole width, drawn BEFORE the reef so
+         the corals sit on it rather than in front of a hard edge -->
+    <path d="M0 260V232c150-16 268 10 408 6 132-4 226-24 356-22 128 2 214 20 342 16
+             130-4 218-18 334-12v40z" fill="url(#floor)"/>
+    <path d="M0 260V240c150-14 268 8 408 4 132-4 226-20 356-18 128 2 214 16 342 12
+             130-4 218-14 334-10v32z" fill="#ffffff" opacity=".34"/>
 
     <!-- the long shadows the light throws to the right, on the floor -->
     <g fill="#7ea7d2" opacity=".2">
@@ -613,61 +818,92 @@
         <path d="M1400 250v-44"/>
       </g>
     </g>
-  </svg>
 
-  <div id="water" aria-hidden="true"></div>
+    <!-- seaweed, bending the way a current bends it: behind the corals on the
+         left, in front of nothing on the right -->
+    <g fill="none" stroke="url(#weed)" stroke-linecap="round" opacity=".9">
+      <g stroke-width="9">
+        <path d="M330 252c-14-26 12-44 0-70s10-40 2-58"/>
+        <path d="M352 252c10-24-10-42 2-66s-6-36 4-52"/>
+      </g>
+      <g stroke-width="7" opacity=".8">
+        <path d="M1074 252c-12-22 10-38 0-60s8-34 2-48"/>
+        <path d="M1092 252c8-20-8-36 2-56s-4-30 4-44"/>
+        <path d="M600 254c-10-18 8-32 0-50s6-28 2-40"/>
+      </g>
+    </g>
+  </svg>
+  </div>
 
   <header>
     <div class="brand">
-      <span class="name">오징어 튜터<span>Visual Socratic Tutor</span></span>
+      <span class="name">오징어 튜터</span>
+      <span class="sub">Visual Socratic Tutor</span>
     </div>
-    <div class="mic">
-      <div id="status">시작을 누르고 마이크를 허용한 뒤, 그냥 말하면 됩니다.</div>
-      <button id="orb" aria-label="시작">
-        <i class="dot"></i><span id="stateLabel">시작</span>
-      </button>
-      <div id="conn">연결 대기</div>
-    </div>
+    <!-- both are written by script, so both announce themselves; the turn
+         state is deliberately NOT a live region, it changes every few
+         seconds and would talk over everything else -->
+    <div id="conn" role="status">연결 대기</div>
+    <button id="hangup" type="button" hidden>연결 종료</button>
   </header>
 
   <main>
     <div class="grid">
-      <div class="centre">
-        <section id="problemCard" class="panel" hidden>
-          <span class="cardlabel">현재 문제</span>
-          <div id="problemText"></div>
-          <div id="problemEqs"></div>
-        </section>
+      <section id="board" class="panel">
+        <div id="boardHead">
+          <!-- the tutor itself: the clip when it has loaded, the drawn one
+               until then, plus the ink it writes with and the arithmetic it
+               mutters while it thinks -->
+          <div id="tutorStage">
+            <div class="avatar">
+              <svg class="squid" viewBox="0 0 120 152" aria-label="오징어 튜터"><use href="#squid"/></svg>
+              <video id="squidThinking" src="squid-thinking.webm"
+                     muted loop playsinline preload="auto" aria-hidden="true"></video>
+            </div>
+            <!-- the symbols first: :nth-of-type counts every <span> sibling,
+                 so an ink span in front of them shifts all four by one and
+                 leaves the last with no position at all -->
+            <span class="sym" aria-hidden="true">+</span>
+            <span class="sym" aria-hidden="true">√</span>
+            <span class="sym" aria-hidden="true">×</span>
+            <span class="sym" aria-hidden="true">π</span>
+            <span class="ink" aria-hidden="true"></span>
+          </div>
 
-        <div id="drop" class="panel" hidden>
-          <img id="thumb" alt="문제 사진 미리보기">
-          <div>
-            <b>문제 사진 올리기</b> · 클릭해서 고르거나, 끌어다 놓거나, Ctrl+V로 붙여넣기
-            <div id="sheetname" class="meta"></div>
+          <div class="headtext">
+            <div id="drop" tabindex="0" role="button" hidden>
+              <img id="thumb" alt="문제 사진 미리보기">
+              <div>
+                <b>문제 사진 올리기</b> · 클릭하거나, 끌어다 놓거나, Ctrl+V
+                <div id="sheetname" class="meta"></div>
+              </div>
+            </div>
+            <input type="file" id="sheet" accept="image/*">
+
+            <section id="problemCard" hidden>
+              <span class="cardlabel">지금 푸는 문제</span>
+              <div id="problemText"></div>
+              <div id="problemEqs"></div>
+            </section>
           </div>
         </div>
-        <input type="file" id="sheet" accept="image/*">
 
-        <section id="board" class="panel">
-          <div id="boardHead">
-            <svg class="squid" viewBox="0 0 120 152" aria-label="튜터"><use href="#squid"/></svg>
-            <!-- the same tutor, swimming, while the pipeline works. Played
-                 only during PROCESSING: a loop that never stops stops meaning
-                 "working". -->
-            <video id="squidThinking" src="squid-thinking.webm"
-                   muted loop playsinline preload="auto" aria-hidden="true"></video>
+        <div id="boardLines">
+          <div id="boardEmpty">
+            <b>같이 풀어 볼까요?</b>
+            문제를 보여 주면 여기에 하나씩 짚어 가며 적을게요.
           </div>
-          <div id="boardLines">
-            <div id="boardEmpty">
-              <b>같이 풀어 볼까요?</b>
-              튜터가 짚어 주는 수식이 여기에 쌓여요.
-            </div>
-          </div>
-        </section>
-      </div>
+        </div>
+      </section>
 
       <section id="chatPanel" class="panel">
-        <span class="cardlabel">대화</span>
+        <div class="chathead">
+          <span class="face" aria-hidden="true"></span>
+          <span class="who">
+            <b>오징어 튜터</b>
+            <span id="stateLabel">대기 중</span>
+          </span>
+        </div>
         <div id="chat">
           <div id="thinking" class="msg tutor" hidden>
             <div class="bubble">
@@ -675,6 +911,12 @@
               <span class="dots"><i></i><i></i><i></i></span>
             </div>
           </div>
+        </div>
+        <div class="chatfoot">
+          <button id="orb" type="button" aria-label="대화 시작">
+            <i class="dot"></i><span>대화 시작</span>
+          </button>
+          <div id="status" role="status">마이크를 허용한 뒤 그냥 말하면 됩니다.</div>
         </div>
       </section>
     </div>
@@ -802,7 +1044,28 @@ function mathify(text) {
 }
 
 // --- 1. capture: mic → worklet → 512-sample int16 frames → server ----------
+// Held so that 연결 종료 can actually let go of them: a page that closes the
+// socket but leaves the microphone open is still recording, and the browser
+// says so with a tab indicator the student cannot turn off.
+let micStream = null, audioCtx = null;
+
+// A failed start must be retryable. This listener used to be {once:true}, so a
+// dismissed microphone prompt consumed it: the button stayed lit, said 대화
+// 시작, and did nothing for the rest of the page's life. The guard below is
+// what stops a double click opening two microphones instead.
+let starting = false;
+
 async function start() {
+  if (starting || micStream) return;
+  starting = true;
+  try {
+    await openMic();
+  } finally {
+    starting = false;
+  }
+}
+
+async function openMic() {
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
@@ -810,7 +1073,8 @@ async function start() {
                channelCount: 1 },
     });
   } catch (e) {
-    setStatus("마이크 권한이 필요합니다 (localhost 또는 HTTPS에서 열어주세요): " + e.message);
+    setStatus("마이크 권한이 필요합니다 (localhost 또는 HTTPS에서 열어주세요). "
+              + "허용한 뒤 다시 눌러 주세요: " + e.message);
     return;
   }
 
@@ -818,23 +1082,57 @@ async function start() {
   const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
   if (ctx.sampleRate !== SAMPLE_RATE) {
     setStatus(`브라우저가 ${ctx.sampleRate} Hz를 반환했습니다. Chrome/Edge를 사용해 주세요.`);
+    stream.getTracks().forEach((t) => t.stop());
+    ctx.close().catch(() => {});
     return;
   }
-  await ctx.audioWorklet.addModule("worklet.js");
+  try {
+    await ctx.audioWorklet.addModule("worklet.js");
+  } catch (e) {
+    setStatus("오디오 모듈을 불러오지 못했습니다. 새로고침한 뒤 다시 시도해 주세요: " + e.message);
+    stream.getTracks().forEach((t) => t.stop());
+    ctx.close().catch(() => {});
+    return;
+  }
   const capture = new AudioWorkletNode(ctx, "pcm-capture");
   ctx.createMediaStreamSource(stream).connect(capture);
   capture.port.onmessage = (e) => onSamples(e.data);
+  micStream = stream;
+  audioCtx = ctx;
 
   const speakerReady = await unlockAudio();   // must happen inside this click
   connect();
 
-  // from here on the button is a status light, not a control
-  $("orb").disabled = true;
+  // from here on the button is a status light, not a control, and there is
+  // something running to hang up on
+  const orb = $("orb");
+  orb.disabled = true;
+  orb.querySelector("span").textContent = "마이크 켜짐";
+  orb.setAttribute("aria-label", "마이크 켜짐");
+  $("hangup").hidden = false;
   setStatus(
     speakerReady
       ? "핸즈프리로 대화하세요. 튜터 목소리는 이 기기에서 나옵니다."
       : "마이크는 열렸지만 스피커가 차단되었습니다. 페이지를 한 번 클릭해 주세요."
   );
+}
+
+/** 연결 종료: let go of everything this page took, and offer to start again. */
+function hangUp() {
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
+  if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+  stopSpeaking(false);        // hanging up is not barging in: say nothing
+  setState("");
+  swim(false);
+  const orb = $("orb");
+  orb.disabled = false;
+  orb.removeAttribute("data-state");
+  orb.querySelector("span").textContent = "다시 연결";
+  orb.setAttribute("aria-label", "다시 연결");
+  $("hangup").hidden = true;
+  setConn("연결 종료됨", "");
+  setStatus("연결을 끊었습니다. 다시 연결을 누르면 이어서 할 수 있어요.");
 }
 
 let pending = new Float32Array(0);
@@ -944,12 +1242,30 @@ function setState(s) {
 const STILL = window.matchMedia("(prefers-reduced-motion: reduce)");
 // only once it can actually show a frame does the drawn fallback stand down
 $("squidThinking").addEventListener("loadeddata", () => {
-  $("boardHead").classList.add("hasclip");
+  $("tutorStage").classList.add("hasclip");
 });
 function swim(on) {
   const clip = $("squidThinking");
-  if (on && !STILL.matches) clip.play().catch(() => {});   // blocked: it stays still
+  const play = on && !STILL.matches;
+  // the stage carries the swimming pose and the drifting symbols; the clip
+  // carries the tutor itself
+  $("tutorStage").classList.toggle("thinking", play);
+  if (play) clip.play().catch(() => {});   // blocked: it stays still
   else { clip.pause(); clip.currentTime = 0; }
+}
+
+/** The tutor runs along the top of the board and lets the ink go. One shot,
+    on the turn a line is actually written — never a loop, because a squid
+    that writes forever is writing nothing. */
+let writingTimer = null;
+function writeStroke() {
+  if (STILL.matches) return;
+  const stage = $("tutorStage");
+  stage.classList.remove("writing");
+  void stage.offsetWidth;                  // restart the animation, not extend it
+  stage.classList.add("writing");
+  clearTimeout(writingTimer);
+  writingTimer = setTimeout(() => stage.classList.remove("writing"), 1500);
 }
 
 // What the pipeline is doing right now (server `stage` events) — the screen
@@ -1006,7 +1322,7 @@ function boardClear() {
   empty.id = "boardEmpty";
   const invite = document.createElement("b");
   invite.textContent = "같이 풀어 볼까요?";
-  empty.append(invite, "튜터가 짚어 주는 수식이 여기에 쌓여요.");
+  empty.append(invite, "문제를 보여 주면 여기에 하나씩 짚어 가며 적을게요.");
   lines.appendChild(empty);
 }
 
@@ -1069,6 +1385,7 @@ function boardWrite(item) {
   const note = ((typeof item === "string" ? "" : item && item.note) || "").trim();
   if (!expr || boardSeen.has(expr)) return;
   boardSeen.add(expr);
+  writeStroke();                         // the tutor goes and writes it
   const lines = $("boardLines");
   const empty = document.getElementById("boardEmpty");
   if (empty) empty.remove();
@@ -1207,8 +1524,10 @@ function playNext() {
   });
 }
 
-/** The student cut in. Stop mid-word and drop everything not yet played. */
-function stopSpeaking() {
+/** The student cut in. Stop mid-word and drop everything not yet played.
+    `announce` is false when the page itself is stopping (연결 종료), because
+    "끼어들기" is a report about the student and they did not do it. */
+function stopSpeaking(announce = true) {
   const player = $("player");
   const dropped = audioQueue.length + ttsStreams.size;
   audioQueue = [];
@@ -1222,7 +1541,8 @@ function stopSpeaking() {
   player.removeAttribute("src");
   player.load();
   // Deliberately no playback_done: the server already knows, it told us to stop.
-  addTurn("err", dropped ? `끼어들기: 재생을 멈추고 대기 중이던 ${dropped}개를 지웠어요` : "끼어들기: 재생을 멈췄어요");
+  if (announce)
+    addTurn("err", dropped ? `끼어들기: 재생을 멈추고 대기 중이던 ${dropped}개를 지웠어요` : "끼어들기: 재생을 멈췄어요");
 }
 
 // --- 4. the worksheet photo ------------------------------------------------
@@ -1248,6 +1568,11 @@ async function useWorksheet(file) {
 
 $("sheet").addEventListener("change", (e) => useWorksheet(e.target.files[0]));
 $("drop").addEventListener("click", () => $("sheet").click());
+// It advertises itself as a button and takes tab focus, so Enter and Space
+// have to work: a div with role="button" gets no synthesised click.
+$("drop").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("sheet").click(); }
+});
 
 for (const type of ["dragenter", "dragover"]) {
   $("drop").addEventListener(type, (e) => {
@@ -1317,20 +1642,25 @@ function note(text) {
   scrollChat();
 }
 
-$("orb").addEventListener("click", start, { once: true });
+// NOT {once:true}: a denied microphone prompt would consume the listener and
+// leave an enabled button wired to nothing. start() guards itself instead, and
+// the button is disabled for the whole time a session is actually running.
+$("orb").addEventListener("click", start);
+$("hangup").addEventListener("click", hangUp);
 
 // --- 6. the water ----------------------------------------------------------
-// Six bubbles, sized and paced apart so they never read as a row. Built here
-// rather than in markup because the only thing that varies is numbers, and
-// the CSS keyframe is already gated on prefers-reduced-motion.
+// Eight bubbles, sized and paced apart so they never read as a row, and kept
+// away from the middle where the board sits. Built here rather than in markup
+// because the only thing that varies is numbers, and the CSS keyframe is
+// already gated on prefers-reduced-motion.
 for (const [size, left, seconds, delay] of
-     [[14, 8, 22, 0], [8, 19, 28, 6], [20, 34, 25, 12],
-      [10, 63, 30, 3], [16, 78, 21, 15], [7, 91, 26, 9]]) {
+     [[13, 5, 24, 0], [7, 12, 30, 7], [18, 21, 26, 13], [9, 30, 33, 4],
+      [11, 70, 28, 18], [16, 81, 23, 9], [7, 88, 31, 2], [12, 95, 27, 15]]) {
   const bubble = document.createElement("i");
   bubble.style.cssText =
     `width:${size}px;height:${size}px;left:${left}%;` +
     `animation-duration:${seconds}s;animation-delay:-${delay}s`;
-  $("water").appendChild(bubble);
+  document.querySelector(".bubbles").appendChild(bubble);
 }
 </script>
 </body>
