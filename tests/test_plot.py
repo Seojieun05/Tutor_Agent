@@ -90,3 +90,63 @@ class TestItStaysASketch:
         svg = function_svg(["1/(x - 0.01)"])
         ticks = re.findall(r'<text[^>]*>(-?\d+\.?\d*)</text>', svg)
         assert ticks and max(abs(float(t)) for t in ticks) < 1000
+
+
+def tick_step(svg: str) -> tuple[float, float]:
+    """(x step, y step) as drawn. The x labels sit under the axis, the y
+    labels to its left, so their anchors tell them apart."""
+    xs = sorted(float(v) for v in re.findall(
+        r'<text x="[\d.]+" y="[\d.]+" text-anchor="middle">(-?[\d.]+)</text>', svg))
+    ys = sorted(float(v) for v in re.findall(
+        r'<text x="[\d.-]+" y="[\d.]+" text-anchor="end">(-?[\d.]+)</text>', svg))
+    return xs[1] - xs[0], ys[1] - ys[0]
+
+
+class TestTheAxesStayComparable:
+    """Live, on problem 13: x counted by 1 and y by 50, because g(x) swings
+    through 200 over the six units the tangent lines live in."""
+
+    SCENE = None  # built per-test; Curve is imported lazily like the other tests
+
+    def scene(self, *specs):
+        from tutor.hints.illustrator import Curve
+
+        return [Curve(expr=e, label=n, role=r) for e, n, r in specs]
+
+    def test_a_scaffold_does_not_set_the_window(self):
+        """The window belongs to what the question is about. A construction
+        line running off the top of the frame is what a sketch looks like."""
+        svg = function_svg(
+            self.scene(
+                ("-2*x - 4", "l", "target"),
+                ("(x**3 - 2*x)*(x**2 - 4*x - 3)", "g", "scaffold"),
+            ),
+            (-2.0, 4.0),
+        )
+        x_step, y_step = tick_step(svg)
+        assert y_step <= 4 * x_step, f"y counts by {y_step} where x counts by {x_step}"
+
+    def test_a_tall_scene_widens_x_instead_of_squashing_y(self):
+        """Two tangents cover 30 in y over 6 in x. Widening is the safe side:
+        nothing already drawn leaves the frame."""
+        scene = self.scene(
+            ("-2*x - 4", "l", "target"),
+            ("-4*x + 10", "m", "target"),
+        )
+        svg = function_svg(scene, (-2.0, 4.0))
+        x_step, y_step = tick_step(svg)
+        assert y_step <= 4 * x_step
+        xs = [float(v) for v in re.findall(
+            r'<text x="[\d.]+" y="[\d.]+" text-anchor="middle">(-?[\d.]+)</text>', svg)]
+        assert min(xs) < -2 and max(xs) > 4, "the x window was not widened"
+
+    def test_a_scene_that_is_already_square_is_left_alone(self):
+        svg = function_svg(self.scene(("x", "y=x", "target")), (-4.0, 4.0))
+        xs = [float(v) for v in re.findall(
+            r'<text x="[\d.]+" y="[\d.]+" text-anchor="middle">(-?[\d.]+)</text>', svg)]
+        assert max(xs) <= 4 and min(xs) >= -4
+
+    def test_scaffolds_alone_still_get_a_window(self):
+        """No target in the scene: everything votes, as before."""
+        svg = function_svg(self.scene(("x**2 - 4*x - 3", "f", "scaffold")), (-2.0, 6.0))
+        assert "<polyline" in svg

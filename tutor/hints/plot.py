@@ -29,6 +29,11 @@ DEFAULT_SPAN = (-6.0, 6.0)
 # Past this the curve is a vertical wall, not a shape: clip and break the line
 # so an asymptote reads as an asymptote instead of a spike across the frame.
 MAX_ABS_Y = 1e4
+# How much taller than wide the picture may be in UNITS before the x-axis is
+# given more room. The frame itself is about 1.9:1, so this is already a tall
+# picture; past it the two axes stop being comparable and the grid reads as a
+# mistake — which is how a live sketch ended up counting by 1 across and 50 up.
+ASPECT_CAP = 3.0
 # What the question is about is drawn like it matters; what only exists to
 # get there is drawn like a construction line, so a glance sorts them.
 TARGETS = ("var(--accent-deep)", "var(--err)")
@@ -73,6 +78,25 @@ def _window(series: list[list[tuple[float, float | None]]]) -> tuple[float, floa
     return lo - margin, hi + margin
 
 
+def _widen_to_aspect(
+    span: tuple[float, float], y0: float, y1: float
+) -> tuple[float, float]:
+    """Give the x-axis room when the y-range towers over it.
+
+    Two tangent lines over x ∈ (-2, 4) span 30 in y and 6 in x, which the tick
+    chooser answers honestly and unreadably: 1 on one axis, 5 on the other,
+    and one live scene came out 1 against 50. Widening x is the safe side of
+    the fix — nothing already drawn leaves the frame.
+    """
+    x0, x1 = span
+    width, height = x1 - x0, y1 - y0
+    if width <= 0 or height <= ASPECT_CAP * width:
+        return span
+    want = height / ASPECT_CAP
+    middle = (x0 + x1) / 2
+    return middle - want / 2, middle + want / 2
+
+
 def _ticks(lo: float, hi: float, want: int = 8) -> list[float]:
     span = hi - lo
     if span <= 0:
@@ -100,18 +124,37 @@ def function_svg(
     `curves` are objects with .expr and optionally .label/.role, or plain
     expression strings.
     """
-    series: list[tuple[object, list[tuple[float, float | None]]]] = []
-    for curve in list(curves)[:4]:
-        text = curve if isinstance(curve, str) else curve.expr
-        try:
-            series.append((curve, _sample(text, *span)))
-        except Exception as e:  # noqa: BLE001 — an unplottable hint still speaks
-            log.info("not plotting %r: %s", text, e)
+    def sample_all(window: tuple[float, float]):
+        out: list[tuple[object, list[tuple[float, float | None]]]] = []
+        for curve in list(curves)[:4]:
+            text = curve if isinstance(curve, str) else curve.expr
+            try:
+                out.append((curve, _sample(text, *window)))
+            except Exception as e:  # noqa: BLE001 — an unplottable hint still speaks
+                log.info("not plotting %r: %s", text, e)
+        return out
+
+    series = sample_all(span)
     if not series:
         return None
 
+    def is_target(curve) -> bool:
+        return not isinstance(curve, str) and getattr(curve, "role", "") == "target"
+
+    # The window belongs to what the question is ABOUT. g(x) over x ∈ (-2, 4)
+    # swings through 200 while the tangent lines the student is looking for
+    # cover 30, and letting the construction line vote flattens both of them
+    # into the same horizontal smear. A scaffold running off the top of the
+    # frame is what a sketch on a real board looks like.
+    aimed = [s for curve, s in series if is_target(curve)]
+    y0, y1 = _window(aimed or [s for _, s in series])
+
+    widened = _widen_to_aspect(span, y0, y1)
+    if widened != span:
+        log.info("widening x to %.1f..%.1f for a y-range of %.1f", *widened, y1 - y0)
+        span = widened
+        series = sample_all(span) or series
     x0, x1 = span
-    y0, y1 = _window([s for _, s in series])
     px = lambda x: PAD + (x - x0) / (x1 - x0) * (WIDTH - 2 * PAD)      # noqa: E731
     py = lambda y: HEIGHT - PAD - (y - y0) / (y1 - y0) * (HEIGHT - 2 * PAD)  # noqa: E731
 
