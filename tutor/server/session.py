@@ -345,11 +345,12 @@ class Session:
             self._spawn(self._handle_utterance(pcm, frame.header.sample_rate))
 
     async def _handle_utterance(self, pcm: bytes, sample_rate: int) -> None:
+        heard = ""
         try:
             transcript = await asyncio.to_thread(
                 self.deps.transcriber.transcribe, pcm, sample_rate
             )
-            text = transcript.text
+            text, heard = transcript.text, transcript.language
         except Exception:
             log.exception("STT failed; asking the student to repeat")
             text = ""  # graded as "unclear" below, so the student hears back
@@ -357,7 +358,7 @@ class Session:
         # Quality gate: noise transcribed as glyphs, silence, or a hesitation
         # sound is not an answer. Ask again instead of grading it — and leave
         # any pending hint pending, so the real answer still lands on it.
-        quality = classify_transcript(text)
+        quality = classify_transcript(text, heard)
         if quality != "ok":
             log.info("utterance rejected (%s): %r", quality, text)
             await self._send_transcript(text, True)

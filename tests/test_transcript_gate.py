@@ -68,6 +68,36 @@ class TestClassifier:
         assert classify_transcript("5를 빼면 돼요 好") == "ok"
 
 
+class TestHeardKoreanWroteEnglish:
+    """The student said "마이너스 2x 마이너스 4" over the tutor's voice and the
+    STT returned "The equation is minus 2x squared" — graded INCORRECT, ladder
+    escalated twice. The endpoint reports the language it HEARD, so Korean
+    audio that comes back as English words is the model translating."""
+
+    def test_korean_audio_returned_as_english_is_not_an_answer(self):
+        assert classify_transcript(
+            "The equation is minus 2x squared.", "ko"
+        ) == "unclear"
+
+    def test_a_bilingual_students_english_answer_still_lands(self):
+        """English AUDIO reports "en": it is the student, not the microphone."""
+        assert classify_transcript("I think it is five", "en") == "ok"
+
+    def test_no_language_evidence_means_no_language_rule(self):
+        """An STT that reports nothing must not have opinions read into it."""
+        assert classify_transcript("I think it is five") == "ok"
+
+    @pytest.mark.parametrize(
+        "text", ["y = -2x - 4", "5", "x = 7", "2**(5/2)", "OK"]
+    )
+    def test_an_answer_without_korean_words_survives(self, text):
+        """Maths is not English prose: these have no WORDS in them."""
+        assert classify_transcript(text, "ko") == "ok"
+
+    def test_one_korean_syllable_is_enough(self):
+        assert classify_transcript("l은 minus 2x minus 4예요", "ko") == "ok"
+
+
 REFERENCE = ReferenceSolution(
     steps=[SolutionStep(idx=1, description="양변에서 5를 뺀다", expression="3*x = 15")],
     final_answer=Answer(kind="SCALAR", value="5"),

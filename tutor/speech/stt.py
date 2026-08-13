@@ -61,11 +61,21 @@ def _collapse(token: str) -> str:
     return re.sub(r"(.)\1+", r"\1", token)
 
 
-def classify_transcript(text: str) -> TranscriptQuality:
+def _english_words(text: str) -> int:
+    """Word-shaped Latin tokens. 'x' and the 'x' inside '2x' are not words."""
+    return sum(1 for t in re.split(r"[^A-Za-z]+", text) if len(t) >= 2)
+
+
+def classify_transcript(text: str, heard_language: str = "") -> TranscriptQuality:
     """Is this worth running the tutor pipeline on?
 
-    "unclear"     — empty, punctuation only, lone jamo, or mostly characters
-                    that are neither Korean, English nor digits (STT noise).
+    `heard_language` is what the STT says the AUDIO was, not what we asked for
+    — the two disagreeing is the whole point of passing it. Empty means no
+    evidence either way, and the language rule below stays out of it.
+
+    "unclear"     — empty, punctuation only, lone jamo, mostly characters that
+                    are neither Korean, English nor digits (STT noise), or
+                    Korean speech that came back as English words.
     "filler_only" — real speech, but only hesitation sounds.
     "ok"          — everything else, including a bare number like "5".
     """
@@ -84,6 +94,21 @@ def classify_transcript(text: str) -> TranscriptQuality:
     tokens = [t for t in re.split(r"[^\w]+", stripped) if t]
     if tokens and all(_collapse(t).lower() in _FILLERS for t in tokens):
         return "filler_only"
+
+    # Heard Korean, wrote English: the model translated instead of transcribing.
+    # A student who talked over the tutor had 4.1s of mixed audio come back as
+    # "The equation is minus 2x squared" — graded INCORRECT, and the ladder
+    # escalated twice against someone who had said the right thing in Korean.
+    # The endpoint reports the language it HEARD (measured: English audio comes
+    # back "en" even when the request asks for "ko"), so a bilingual student's
+    # real English answer arrives as "en" and is not caught here. Numbers
+    # survive too: "y = -2x - 4" contains no English WORDS.
+    if (
+        heard_language == "ko"
+        and not any(_is_hangul(ch) for ch in stripped)
+        and _english_words(stripped) >= 2
+    ):
+        return "unclear"
     return "ok"
 
 
@@ -113,8 +138,16 @@ class XaiTranscriber:
         resp.raise_for_status()
         data = resp.json()
         text = self._extract_text(data)
+        # What it HEARD, not what we asked for. The request already says
+        # language=ko and the endpoint still answers "en" for English audio, so
+        # this field is evidence rather than an echo — and it is the only way to
+        # tell a bilingual student's English answer from Korean speech that came
+        # back translated. Absent (or a plain-string response) → no evidence.
+        heard = data.get("language", "") if isinstance(data, dict) else ""
+        if heard and heard != self.settings.tutor_language:
+            log.info("STT heard %s, not %s", heard, self.settings.tutor_language)
         log.info("STT transcript: %r", text)
-        return Transcript(text=text, language=self.settings.tutor_language)
+        return Transcript(text=text, language=str(heard or ""))
 
     @staticmethod
     def _extract_text(data) -> str:
