@@ -47,13 +47,16 @@ from tutor.vision.recognizer import Recognizer
 log = logging.getLogger(__name__)
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
-# An explicit map, not a path join: nothing outside these two files is servable.
+# An explicit map, not a path join: nothing outside these files is servable.
 STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/index.html": ("index.html", "text/html; charset=utf-8"),
     "/worklet.js": ("worklet.js", "text/javascript; charset=utf-8"),
     "/phone": ("phone.html", "text/html; charset=utf-8"),
     "/phone.html": ("phone.html", "text/html; charset=utf-8"),
+    # the tutor, swimming, for the seconds it is thinking. VP9 with a real
+    # alpha channel, so it drops onto the board with no background to strip.
+    "/squid-thinking.webm": ("squid-thinking.webm", "video/webm"),
 }
 
 

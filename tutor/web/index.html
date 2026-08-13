@@ -285,8 +285,17 @@
     background-position:12px 12px, 0 0;
   }
   /* the tutor sits in the corner of its own board, no title needed */
-  #boardHead { flex:none; display:flex; align-items:center; padding-bottom:.2rem; }
+  #boardHead {
+    flex:none; display:flex; align-items:center; min-height:74px; padding-bottom:.2rem;
+  }
   #boardHead svg { width:56px; height:auto; }
+  /* The clip IS the tutor here, paused on its first frame when idle and
+     playing while the pipeline works, so the squid on the board is the same
+     squid either way and moving means thinking. The drawn one underneath is
+     the fallback, and stays if the video never loads. */
+  #boardHead video { width:72px; height:auto; display:none; margin-left:-8px; }
+  #boardHead.hasclip svg { display:none; }
+  #boardHead.hasclip video { display:block; }
   #boardLines {
     flex:1 1 auto; min-height:0; overflow-y:auto; padding-top:.2rem; scrollbar-width:thin;
     /* A board fills downward and scrolls, so the line at the top edge is
@@ -642,6 +651,11 @@
         <section id="board" class="panel">
           <div id="boardHead">
             <svg class="squid" viewBox="0 0 120 152" aria-label="튜터"><use href="#squid"/></svg>
+            <!-- the same tutor, swimming, while the pipeline works. Played
+                 only during PROCESSING: a loop that never stops stops meaning
+                 "working". -->
+            <video id="squidThinking" src="squid-thinking.webm"
+                   muted loop playsinline preload="auto" aria-hidden="true"></video>
           </div>
           <div id="boardLines">
             <div id="boardEmpty">
@@ -911,6 +925,7 @@ function setState(s) {
   }[s] || "대기";
   $("stateLabel").textContent = label;
   orb.setAttribute("aria-label", label);
+  swim(s === "PROCESSING");
   const thinking = $("thinking");
   thinking.hidden = s !== "PROCESSING";
   if (!thinking.hidden) {
@@ -919,6 +934,22 @@ function setState(s) {
   }
   if (s === "LISTENING")                 // a fresh turn starts generic
     $("stageText").textContent = "튜터가 생각하는 중이에요";
+}
+
+// The tutor swims while the pipeline works, and only then: a loop that never
+// stops stops meaning "working". Paused it sits on its first frame, so the
+// squid in the corner is the same squid whether or not it is moving. Under
+// prefers-reduced-motion it never plays and the stage line carries the
+// progress instead.
+const STILL = window.matchMedia("(prefers-reduced-motion: reduce)");
+// only once it can actually show a frame does the drawn fallback stand down
+$("squidThinking").addEventListener("loadeddata", () => {
+  $("boardHead").classList.add("hasclip");
+});
+function swim(on) {
+  const clip = $("squidThinking");
+  if (on && !STILL.matches) clip.play().catch(() => {});   // blocked: it stays still
+  else { clip.pause(); clip.currentTime = 0; }
 }
 
 // What the pipeline is doing right now (server `stage` events) — the screen
