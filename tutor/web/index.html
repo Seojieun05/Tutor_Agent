@@ -55,8 +55,12 @@
   :root {
     /* The surface of the water. Every colour here is a variable because the
        server names four of them when it draws a curve (tutor/hints/plot.py). */
-    --bg:#c6ddf5; --bg-far:#96c2ea; --bg-near:#e9f4ff;
-    --surface:rgba(255,255,255,.66); --surface-solid:#f4f9ff;
+    --bg:#bad6f0; --bg-far:#93b9e2; --bg-near:#e6f1fd;
+    --surface:rgba(255,255,255,.62); --surface-solid:#f4f9ff;
+    /* the glass: a lit top edge, a white rim, and the water blurred behind */
+    --glass:linear-gradient(158deg, rgba(255,255,255,.70), rgba(255,255,255,.46));
+    --glass-rim:rgba(255,255,255,.62);
+    --glass-lip:inset 0 1px 0 rgba(255,255,255,.9);
     --line:#c2d9f0;
     --text:#2c4d7e; --dim:#6f92c0;
     --accent:#5b86d6; --accent-deep:#39619f;
@@ -77,6 +81,9 @@
     :root {
       --bg:#12293f; --bg-far:#0a1a2b; --bg-near:#1b3a58;
       --surface:rgba(226,240,255,.07); --surface-solid:#173049;
+      --glass:linear-gradient(158deg, rgba(190,220,255,.13), rgba(190,220,255,.05));
+      --glass-rim:rgba(200,226,255,.18);
+      --glass-lip:inset 0 1px 0 rgba(220,238,255,.20);
       --line:#2b4d70;
       --text:#dceaf9; --dim:#8fb2d8;
       --accent:#6f9fe8; --accent-deep:#a8c9f6;
@@ -91,10 +98,12 @@
   body {
     margin:0; min-height:100dvh; display:flex; flex-direction:column;
     color:var(--text); font:15px/1.6 var(--font);
+    /* the light comes from the upper right and the floor falls away to the
+       left, as it does in the photograph */
     background:
-      radial-gradient(120% 80% at 12% -10%, var(--bg-near), transparent 60%),
-      radial-gradient(140% 90% at 88% 108%, var(--bg-far), transparent 62%),
-      linear-gradient(180deg, var(--bg), var(--bg-far));
+      radial-gradient(90% 70% at 88% -6%, var(--bg-near), transparent 62%),
+      radial-gradient(120% 90% at 6% 104%, var(--bg-far), transparent 58%),
+      linear-gradient(168deg, var(--bg), var(--bg-far));
     background-attachment:fixed;
   }
   /* light through water: one slow band across the top, never in the way */
@@ -104,22 +113,24 @@
                transparent 58%, rgba(255,255,255,.18) 70%, transparent 82%);
     pointer-events:none;
   }
-  /* the floor, far below: one soft rise so the water has a bottom */
+  /* the sandbank sweeping in from the right, and the floor it rises from */
   body::after {
-    content:""; position:fixed; left:-15%; right:-15%; bottom:-42vh; height:70vh;
+    content:""; position:fixed; left:-15%; right:-30%; bottom:-46vh; height:78vh;
     z-index:0; border-radius:50% 50% 0 0; pointer-events:none;
-    background:radial-gradient(60% 100% at 50% 100%, var(--bg-near), transparent 72%);
-    opacity:.75;
+    transform:rotate(-4deg);
+    background:radial-gradient(58% 100% at 62% 100%, var(--bg-near), transparent 70%);
+    opacity:.8;
   }
   /* the reef, along the bottom edge. Soft and out of focus on purpose: it is
      scenery, and the panels above it carry the lesson. */
-  /* width:100% explicitly: an <svg> is a replaced element, so left:0 with
-     right:0 sizes it from the viewBox ratio instead of stretching, and the
-     right-hand coral stand walks off a narrow screen */
+  /* width:100% with height:auto, so the reef keeps its own proportions: a
+     branching coral squashed to fit a fixed height stops being a coral and
+     becomes a worm. It is taller than the strip left for it on purpose, and
+     the glass above blurs the part it overlaps, which is what a panel
+     floating over a reef should look like. */
   #reef {
-    position:fixed; left:0; bottom:0; z-index:0; width:100%;
-    height:clamp(120px, 17vh, 190px);
-    pointer-events:none; opacity:.8; filter:blur(.6px);
+    position:fixed; left:0; bottom:0; z-index:0; width:100%; height:auto;
+    pointer-events:none; opacity:.85; filter:blur(.5px);
   }
   @media (prefers-color-scheme: dark) {
     body::before { opacity:.28; }
@@ -156,11 +167,17 @@
     padding:.7rem 1.5rem;
   }
   .brand { display:flex; align-items:baseline; gap:.5rem; min-width:0; }
+  /* The reference sets its title in white script over the water. At 120px it
+     can; at 17px white on pale blue is about 1.6:1, so the shape of that type
+     is borrowed and the colour is not: soft, wide-spaced, and dark enough to
+     read. */
   .brand .name {
-    font-size:1.05rem; font-weight:800; letter-spacing:-.02em; color:var(--accent-deep);
+    font-size:1.15rem; font-weight:800; letter-spacing:-.01em; color:var(--accent-deep);
+    text-shadow:0 1px 0 rgba(255,255,255,.55);
   }
   .brand .name span {
-    margin-left:.5rem; font-size:.72rem; font-weight:600; color:var(--dim); letter-spacing:.02em;
+    margin-left:.6rem; font-size:.66rem; font-weight:600; color:var(--dim);
+    letter-spacing:.16em; text-transform:uppercase;
   }
   .mic { display:flex; align-items:center; gap:.7rem; min-width:0; }
   #status {
@@ -200,7 +217,7 @@
   main {
     flex:1 1 auto; min-height:0; width:100%;
     display:flex; justify-content:center;
-    padding:.4rem 1.5rem 5.5rem;
+    padding:.4rem 1.5rem 7rem;
   }
   .grid {
     width:100%; max-width:1400px; min-height:0;
@@ -210,12 +227,15 @@
   .centre { min-height:0; display:flex; flex-direction:column; gap:.8rem; }
 
   .panel {
-    background:var(--surface); border:1px solid var(--line);
-    border-radius:var(--radius); box-shadow:var(--shadow);
-    backdrop-filter:blur(14px);
+    background:var(--glass); border:1px solid var(--glass-rim);
+    border-radius:var(--radius); box-shadow:var(--glass-lip), var(--shadow);
+    backdrop-filter:blur(20px) saturate(150%);
   }
   @media (prefers-reduced-transparency: reduce) {
-    .panel, .brand .mark, #conn { background:var(--surface-solid); backdrop-filter:none; }
+    .panel, #conn, #orb {
+      background:var(--surface-solid); border-color:var(--line);
+      box-shadow:var(--shadow); backdrop-filter:none;
+    }
   }
   .cardlabel {
     display:inline-block; font-size:.72rem; font-weight:700;
@@ -255,11 +275,14 @@
   #board {
     flex:1 1 auto; min-height:0; display:flex; flex-direction:column;
     padding:1rem 1.4rem 1.2rem;
-    /* the dot grid a whiteboard has; the panel's own surface shows through it,
-       so the board is not a second layer of white over the water */
-    background-image:radial-gradient(circle, var(--line) 1.1px, transparent 1.1px);
-    background-size:24px 24px;
-    background-position:12px 12px;
+    /* the dot grid a whiteboard has, over the panel's own glass. The glass
+       layer is repeated here because background-image replaces .panel's, and
+       without it the board is a hole straight through to the water. */
+    background-image:
+      radial-gradient(circle, var(--line) 1.1px, transparent 1.1px),
+      var(--glass);
+    background-size:24px 24px, auto;
+    background-position:12px 12px, 0 0;
   }
   /* the tutor sits in the corner of its own board, no title needed */
   #boardHead { flex:none; display:flex; align-items:center; padding-bottom:.2rem; }
@@ -464,60 +487,122 @@
        and leaves a row of flat sticks. Soft organic shapes do not mind the
        vertical stretch; the tube tops read as ellipses, which is what they are
        in the reference anyway. -->
-  <svg id="reef" viewBox="0 0 1440 300" preserveAspectRatio="none"
-       aria-hidden="true" focusable="false">
+  <svg id="reef" viewBox="0 0 1440 260" aria-hidden="true" focusable="false">
     <defs>
-      <radialGradient id="cr1" cx="34%" cy="10%" r="88%">
-        <stop offset="0" stop-color="#ffe9dc"/><stop offset="58%" stop-color="#f9c3ce"/>
-        <stop offset="100%" stop-color="#e79aad"/>
-      </radialGradient>
-      <radialGradient id="cr2" cx="34%" cy="10%" r="88%">
-        <stop offset="0" stop-color="#fff0d8"/><stop offset="58%" stop-color="#f8cdae"/>
-        <stop offset="100%" stop-color="#e5a68c"/>
-      </radialGradient>
-      <radialGradient id="cr3" cx="34%" cy="10%" r="88%">
-        <stop offset="0" stop-color="#efeaff"/><stop offset="58%" stop-color="#cfc8f4"/>
-        <stop offset="100%" stop-color="#aca4e0"/>
-      </radialGradient>
-      <radialGradient id="cr4" cx="34%" cy="10%" r="88%">
-        <stop offset="0" stop-color="#e4f8ee"/><stop offset="58%" stop-color="#bde5d5"/>
-        <stop offset="100%" stop-color="#95cdb9"/>
-      </radialGradient>
-      <radialGradient id="reefFloor" cx="50%" cy="100%" r="70%">
-        <stop offset="0" stop-color="#ffffff" stop-opacity=".55"/>
+      <!-- Every one of these is userSpaceOnUse, and it has to be: a coral stem
+           is a straight vertical stroke, whose bounding box is zero wide, and
+           an objectBoundingBox gradient on a zero-width box is simply not
+           painted. The trunks vanished and left the branches floating. The
+           coordinates below are the reef's own, before each cluster's scale. -->
+      <!-- the anemone's fingers: pink tips, grey-lavender where they crowd -->
+      <linearGradient id="anem" gradientUnits="userSpaceOnUse" x1="0" y1="85" x2="0" y2="250">
+        <stop offset="0" stop-color="#f6c3d2"/><stop offset="42%" stop-color="#dbb4cd"/>
+        <stop offset="100%" stop-color="#a3a2c6"/>
+      </linearGradient>
+      <linearGradient id="anemBack" gradientUnits="userSpaceOnUse" x1="0" y1="85" x2="0" y2="250">
+        <stop offset="0" stop-color="#e2b6c8"/><stop offset="100%" stop-color="#9695bb"/>
+      </linearGradient>
+      <!-- the tulip cones: cream lit from above, lavender in the shade -->
+      <linearGradient id="tulip" gradientUnits="userSpaceOnUse" x1="600" y1="110" x2="700" y2="245">
+        <stop offset="0" stop-color="#fdedd6"/><stop offset="46%" stop-color="#f2d3cd"/>
+        <stop offset="100%" stop-color="#bdb0d8"/>
+      </linearGradient>
+      <linearGradient id="tulipBack" gradientUnits="userSpaceOnUse" x1="600" y1="110" x2="700" y2="245">
+        <stop offset="0" stop-color="#f6e2ce"/><stop offset="100%" stop-color="#ada2cc"/>
+      </linearGradient>
+      <!-- the staghorns: ivory with the faintest green in the branches -->
+      <linearGradient id="horn" gradientUnits="userSpaceOnUse" x1="0" y1="95" x2="0" y2="255">
+        <stop offset="0" stop-color="#fdf7e6"/><stop offset="52%" stop-color="#f6efd2"/>
+        <stop offset="100%" stop-color="#e7dcc0"/>
+      </linearGradient>
+      <linearGradient id="hornCool" gradientUnits="userSpaceOnUse" x1="0" y1="95" x2="0" y2="255">
+        <stop offset="0" stop-color="#f7f6e4"/><stop offset="55%" stop-color="#e9f0d6"/>
+        <stop offset="100%" stop-color="#d9e2c4"/>
+      </linearGradient>
+      <radialGradient id="sand" cx="42%" cy="100%" r="72%">
+        <stop offset="0" stop-color="#ffffff" stop-opacity=".5"/>
         <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
       </radialGradient>
     </defs>
-    <ellipse cx="720" cy="300" rx="820" ry="120" fill="url(#reefFloor)"/>
-    <!-- left stand -->
-    <g>
-      <ellipse cx="215" cy="292" rx="215" ry="20" fill="#7ba6d4" opacity=".18"/>
-      <rect x="46"  y="150" width="62" height="152" rx="31" fill="url(#cr3)"/>
-      <rect x="104" y="96"  width="78" height="206" rx="39" fill="url(#cr1)"/>
-      <rect x="176" y="164" width="56" height="138" rx="28" fill="url(#cr2)"/>
-      <rect x="228" y="118" width="70" height="184" rx="35" fill="url(#cr3)"/>
-      <rect x="292" y="182" width="52" height="120" rx="26" fill="url(#cr1)"/>
+
+    <ellipse cx="560" cy="262" rx="760" ry="120" fill="url(#sand)"/>
+
+    <!-- the long shadows the light throws to the right, on the floor -->
+    <g fill="#7ea7d2" opacity=".2">
+      <ellipse cx="300" cy="243" rx="180" ry="12" transform="rotate(-3 300 243)"/>
+      <ellipse cx="720" cy="240" rx="150" ry="11" transform="rotate(-3 720 240)"/>
+      <ellipse cx="520" cy="252" rx="230" ry="13" transform="rotate(-2 520 252)"/>
+      <ellipse cx="1230" cy="246" rx="185" ry="11" transform="rotate(-3 1230 246)"/>
     </g>
-    <!-- a branching coral, further along -->
-    <g>
-      <ellipse cx="470" cy="294" rx="105" ry="14" fill="#7ba6d4" opacity=".15"/>
-      <g fill="url(#cr2)">
-        <rect x="452" y="140" width="38" height="162" rx="19"/>
-        <path d="M470 190c-26-16-46-46-70-34-22 11-10 44 14 52 18 6 38 4 56-2z"/>
-        <path d="M470 152c24-20 48-44 70-28 20 15 4 44-20 50-16 4-34 0-50-4z"/>
-        <rect x="404" y="196" width="32" height="106" rx="16"/>
-        <rect x="506" y="176" width="32" height="126" rx="16"/>
+
+    <!-- Each cluster is scaled about its own base, so it shrinks to scenery
+         size without a branch ever being squashed out of shape. -->
+    <!-- BACK LEFT: the anemone, a crowd of round-tipped fingers in an arc -->
+    <g transform="translate(170 242) scale(.58) translate(-170 -242)"
+       fill="none" stroke-linecap="round" stroke-width="15">
+      <g stroke="url(#anemBack)" opacity=".75">
+        <path d="M62 238V126"/>  <path d="M92 238V108"/>  <path d="M122 238V96"/>
+        <path d="M152 238V90"/>  <path d="M182 238V92"/>  <path d="M212 238V102"/>
+        <path d="M242 238V118"/> <path d="M272 238V140"/>
+      </g>
+      <g stroke="url(#anem)">
+        <path d="M76 242V136"/>  <path d="M106 242V116"/> <path d="M136 242V102"/>
+        <path d="M166 242V96"/>  <path d="M196 242V100"/> <path d="M226 242V112"/>
+        <path d="M256 242V130"/> <path d="M286 242V154"/>
       </g>
     </g>
-    <!-- right stand, a little further away -->
-    <g opacity=".9">
-      <ellipse cx="1240" cy="292" rx="215" ry="20" fill="#7ba6d4" opacity=".18"/>
-      <rect x="1074" y="176" width="54" height="126" rx="27" fill="url(#cr4)"/>
-      <rect x="1124" y="112" width="74" height="190" rx="37" fill="url(#cr3)"/>
-      <rect x="1192" y="158" width="58" height="144" rx="29" fill="url(#cr1)"/>
-      <rect x="1244" y="196" width="64" height="106" rx="32" fill="url(#cr4)"/>
-      <rect x="1302" y="134" width="52" height="168" rx="26" fill="url(#cr2)"/>
-      <rect x="1348" y="190" width="60" height="112" rx="30" fill="url(#cr1)"/>
+
+    <!-- BACK CENTRE: the tulips, wide at the lip and narrowing to the floor -->
+    <g transform="translate(730 240) scale(.58) translate(-730 -240)">
+      <g fill="url(#tulipBack)" opacity=".85">
+        <path d="M596 236l8-96a24 24 0 0 1 48 0l8 96z"/>
+        <path d="M676 236l7-112a25 25 0 0 1 50 0l7 112z"/>
+        <path d="M756 236l8-92a23 23 0 0 1 46 0l8 92z"/>
+      </g>
+      <g fill="url(#tulip)">
+        <path d="M632 240l9-84a26 26 0 0 1 52 0l9 84z"/>
+        <path d="M716 240l8-104a27 27 0 0 1 54 0l8 104z"/>
+        <path d="M800 240l9-78a25 25 0 0 1 50 0l9 78z"/>
+      </g>
+    </g>
+
+    <!-- FRONT: the staghorns, branching into round-tipped fingers -->
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round"
+       transform="translate(560 252) scale(.58) translate(-560 -252)">
+      <g stroke="url(#hornCool)" stroke-width="26" opacity=".92">
+        <path d="M340 250v-64"/>
+        <path d="M340 200l-26-38"/> <path d="M340 196l24-42"/>
+        <path d="M436 250v-86"/>
+        <path d="M436 186l-30-44"/> <path d="M436 178l28-46"/> <path d="M406 160l-6-30"/>
+      </g>
+      <g stroke="url(#horn)" stroke-width="30">
+        <path d="M386 252v-96"/>
+        <path d="M386 176l-32-48"/> <path d="M386 168l30-50"/> <path d="M354 132l-4-34"/>
+        <path d="M500 252v-72"/>
+        <path d="M500 196l-28-40"/> <path d="M500 190l26-44"/>
+        <path d="M556 252v-54"/>   <path d="M556 210l-22-32"/>
+      </g>
+      <g stroke="url(#horn)" stroke-width="24" opacity=".95">
+        <path d="M900 250v-58"/>  <path d="M900 206l-22-34"/> <path d="M900 200l20-36"/>
+        <path d="M962 250v-78"/>  <path d="M962 190l-26-40"/> <path d="M962 184l24-40"/>
+        <path d="M1016 250v-46"/> <path d="M1016 214l-18-28"/>
+      </g>
+    </g>
+
+    <!-- RIGHT, further off: one small anemone and a pair of staghorns -->
+    <g opacity=".8" transform="translate(1260 245) scale(.52) translate(-1260 -245)">
+      <g fill="none" stroke="url(#anemBack)" stroke-linecap="round" stroke-width="13">
+        <path d="M1186 240V152"/> <path d="M1212 240V136"/> <path d="M1238 240V128"/>
+        <path d="M1264 240V134"/> <path d="M1290 240V148"/>
+      </g>
+      <g fill="url(#tulipBack)">
+        <path d="M1114 238l7-78a21 21 0 0 1 42 0l7 78z"/>
+      </g>
+      <g fill="none" stroke="url(#horn)" stroke-linecap="round" stroke-linejoin="round"
+         stroke-width="22">
+        <path d="M1340 250v-62"/> <path d="M1340 202l-20-32"/> <path d="M1340 196l18-34"/>
+        <path d="M1400 250v-44"/>
+      </g>
     </g>
   </svg>
 
