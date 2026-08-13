@@ -89,3 +89,20 @@ class SessionStore:
                 self._history[i] = replace(h, effective=effective)
                 return
         raise KeyError(f"no hint record with id {hint_id}")
+
+    def unresolve_hint(self, hint_id: int) -> None:
+        """Put a hint back on the table, as if it had never been answered.
+
+        For turns the student never heard: a reply cut off by a barge-in
+        resolved a question that, from where the student sits, is still the
+        one being asked.
+        """
+        for i, h in enumerate(self._history):
+            if h.id == hint_id:
+                self._history[i] = replace(h, effective=None)
+                return
+        raise KeyError(f"no hint record with id {hint_id}")
+
+    def drop_hint(self, hint_id: int) -> None:
+        """Erase a hint that was generated but never spoken."""
+        self._history = [h for h in self._history if h.id != hint_id]

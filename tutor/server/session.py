@@ -254,6 +254,9 @@ class Session:
         self._capture_seq = 0
         self._audio_buffers: dict[str, list[bytes]] = {}
         self._busy = False
+        # Which pending hint THIS turn answered, so a turn the student never
+        # hears can put it back. Per turn: cleared when one starts.
+        self._resolved_hint: int | None = None
         self._tasks: set[asyncio.Task] = set()
         self._filler: asyncio.Task | None = None
         self._filler_spoke = False
@@ -587,6 +590,7 @@ class Session:
             log.info("hint request ignored: already handling one")
             return
         self._busy = True
+        self._resolved_hint = None
         # a work check earns its own opener: they asked about THEIR page, and
         # "네, 지금 쓴 풀이를 확인하고 있어요" answers that before the camera has
         # moved. Rotated, because the fifth identical opener sounds like a machine.
@@ -625,6 +629,7 @@ class Session:
             log.info("answer ignored: a turn is already running")
             return
         self._busy = True
+        self._resolved_hint = None
         # the echo IS the acknowledgement of having heard them — and it plays
         # while the evaluator is still grading the very value it echoes
         core = answer_core(transcript)
@@ -730,7 +735,7 @@ class Session:
                     }
                 )
             )
-            self.store.mark_hint_effective(pending.id, True)
+            self._resolve_hint(pending.id, True)
             # Completion is never reached by running ahead: closing a problem
             # wipes the student's context, and one spoken sentence is not
             # enough evidence to do that. Only answering the LAST step's own
@@ -749,7 +754,7 @@ class Session:
                     }
                 )
             )
-            self.store.mark_hint_effective(pending.id, False)
+            self._resolve_hint(pending.id, False)
         else:
             # UNCLEAR: no evidence either way. Leaving the hint unresolved is
             # what makes the policy re-ask at the same level (R9).
@@ -899,8 +904,9 @@ class Session:
         ):
             log.warning("reaction leaked the answer; staying quiet instead")
             return False
-        await self._speak(feedback)
-        return True
+        # What _speak reports, not an assumption: a reaction dropped whole by a
+        # barge-in was not heard, so the hint after it keeps its own opening.
+        return await self._speak(feedback)
 
     async def _handle_hint_request(self, question: str | None = None) -> None:
         """Capture → recognize → diagnose → hint, over a fresh photo.
@@ -1046,7 +1052,7 @@ class Session:
                 "helped" if effective else "did not help",
                 prev_state.status, prev_state.last_correct_step,
             )
-            self.store.mark_hint_effective(pending.id, effective)
+            self._resolve_hint(pending.id, effective)
 
         # Always read state/history through the store right before the policy.
         current = self.store.get_state() or new_state
@@ -1221,17 +1227,21 @@ class Session:
         task.add_done_callback(done)
         return task
 
-    async def _speak(self, text: str) -> None:
+    async def _speak(self, text: str) -> bool:
         """Say something to the student, after the filler has had its say.
 
         `text` stays ORIGINAL all the way to _say: the ear and the eye part
         ways there, and nowhere earlier — the hint history, the leak guard and
         the TTS cache keys all see what was actually generated.
+
+        Returns whether the student heard any of it — False only when the line
+        was dropped whole, which is a barge-in that started before this one
+        did. A line cut off halfway was still said.
         """
         await self._settle_filler()
         # TTS is part of the wait, and a cached phrase is not — worth telling apart.
         with timing.stage("speak"):
-            await self._say(text)
+            return await self._say(text) is not False
 
     # --- filling the thinking silence ----------------------------------------
 
@@ -1395,6 +1405,12 @@ class Session:
             f", wiped {gone}" if gone else "", spec.why[:60],
         )
 
+    def _resolve_hint(self, hint_id: int, effective: bool) -> None:
+        """Answer a pending hint, remembering which one — so a turn the student
+        never hears can put it back."""
+        self.store.mark_hint_effective(hint_id, effective)
+        self._resolved_hint = hint_id
+
     async def _deliver(
         self, decision: Decision, text: str, problem_hash: str = "",
         board: tuple[str, ...] = (), student_said: str | None = None,
@@ -1417,7 +1433,18 @@ class Session:
             self._spawn(
                 self._illustrate(decision, text, board, problem_hash, student_said)
             )
-            await self._speak(text)
+            if not await self._speak(text):
+                # The student talked over this whole turn, so _say skipped every
+                # line of it: this hint exists only in the log. Recording it
+                # would escalate the ladder for a question that was never asked
+                # — measured live, a student jumped L1 to L3 having heard only
+                # L1. And the hint it answered is, from where they sit, still
+                # the question on the table: put it back.
+                log.info("L%d not delivered (barge-in): not recorded", decision.level)
+                if self._resolved_hint is not None:
+                    self.store.unresolve_hint(self._resolved_hint)
+                    self._resolved_hint = None
+                return
         self.store.append_hint(
             problem_hash=problem_hash,
             step=decision.target_step,

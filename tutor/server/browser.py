@@ -230,14 +230,15 @@ class BrowserSession(Session):
 
         return queue, stop, asyncio.create_task(asyncio.to_thread(pump))
 
-    async def _say(self, text: str) -> None:
+    async def _say(self, text: str) -> bool:
+        """Returns whether the student heard any of this line — see _speak."""
         # a hint_request can arrive before any audio (button-driven client)
         taker = await self._ensure_taker()
         if self._interrupted:
             # Already cut off in this turn. Whatever else it was going to say —
             # the closing praise, a second sentence — is not said over someone.
             log.info("skipping speech after a barge-in: %r", text[:40])
-            return
+            return False
         # The ear and the eye part ways HERE: the TTS gets "f 프라임 1", the
         # transcript panel gets f'(1) — as 2·x², not as programmer ASCII.
         started = time.monotonic()
@@ -246,7 +247,7 @@ class BrowserSession(Session):
         if self._interrupted:  # interrupted while the first chunk was rendering
             stop.set()
             await pump_task
-            return
+            return False
         await self.ws.send(make_event("tutor_says", {"text": mathspeak.displayable(text)}))
 
         if first is None:  # echo mode / no TTS configured: text only, keep talking
