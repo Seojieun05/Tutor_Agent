@@ -43,7 +43,7 @@ FILLER_PHRASES: tuple[str, ...] = (
     "네, 잠깐 확인하고 있어요.",
     "잠시만요, 보고 있어요.",
     "음, 어떻게 도와줄지 생각하고 있어요.",
-    "지금 문제를 보고 있어요.",
+    "네, 지금 확인해 볼게요.",
 )
 
 # The work-check wait, narrated. NO LONGER SPOKEN by default: the screen's
