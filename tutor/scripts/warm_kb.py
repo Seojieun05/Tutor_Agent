@@ -1,7 +1,8 @@
 """Fill the knowledge DB ahead of a lesson, so the first turn is not the slow one.
 
     python -m tutor.scripts.warm_kb                 # concept lines + their audio
-    python -m tutor.scripts.warm_kb --solve 12      # ...and pre-solve a problem
+    python -m tutor.scripts.warm_kb --solve 12      # ...and pre-store a problem
+    python -m tutor.scripts.warm_kb --solve all --concepts   # every entry, no lines
 
 Two kinds of warming, both writing to data/knowledge.db (which survives
 restarts) and data/tts_cache:
@@ -11,25 +12,54 @@ restarts) and data/tts_cache:
                   doing it here means the FIRST problem of a kind already has
                   the good line instead of the generic opening.
 
-  a solved problem  A problem stored with a machine-checked solution matches
-                  EXACT, so the solver never runs for it and a work check can
-                  be graded the moment the photo is read. Worth it for a
-                  problem you know you are about to show.
+  a stored problem  A problem stored with a checked solution matches EXACT, so
+                  the solver never runs for it and a work check can be graded
+                  the moment the photo is read. Worth it for a problem you
+                  know you are about to show.
 
-THIS SPENDS REAL API CALLS: one per concept, plus TTS for each line.
+The problems themselves live in data/presolve.json — next to the database they
+are loaded into, not in this file. They are lesson material, like the DB and
+the captures: what the tutor is being prepared for on one machine is not part
+of the program. An entry:
+
+    {"problem_type": "...", "problem_text": "...",
+     "equations": [["..."], ["...", "..."]],      // one list per VLM reading
+     "concepts": ["..."],
+     "answer": {"kind": "SCALAR", "value": "24/7"},
+     "steps": [{"description": "...", "expression": "..."}, ...]}   // optional
+
+With "steps" the entry is CURATED: the solution is stored as written (spending
+no API call) and the answer is the entry's own. Without them the solver writes
+the steps and the run refuses to store unless the solver's answer agrees with
+the entry's. The optional top-level "hint_templates" list seeds concept-level
+hint lines the tutor can speak without any model call:
+
+    {"id": "...", "concept_id": "...", "level": 1, "template_text": "... {step} ..."}
+
+Concept lines and TTS SPEND REAL API CALLS; curated problems do not.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
-from tutor.config import load_settings
+from tutor.config import PROJECT_ROOT, load_settings
 from tutor.console import say, soften_stdout
 from tutor.knowledge.db import KnowledgeDB
 from tutor.knowledge.mathnorm import normalize_text, verify_answer
-from tutor.knowledge.models import Answer, Problem, ReferenceSolution
+from tutor.knowledge.models import (
+    Answer,
+    HintTemplate,
+    Problem,
+    ReferenceSolution,
+    SolutionStep,
+)
+
+PRESOLVE_PATH = PROJECT_ROOT / "data" / "presolve.json"
 
 # The high-school and 수능 range: what a demo or a study session actually
 # lands on. Grade-school concepts stay unwarmed — the tutor writes their line
@@ -64,28 +94,12 @@ COMMON_CONCEPTS = [
     "set", "set_operations", "proposition", "necessary_sufficient_condition",
 ]
 
-# Problems worth having solved before the lesson starts, by the name you call
-# them. Equations are what EXACT matching keys on, so they must be written the
-# way the VLM reads them off the page.
-PRESOLVE = {
-    "12": {
-        "problem_type": "geometric_sequence",
-        "problem_text": (
-            "12. 등비수열 {a_n}이 2(a_1 + a_4 + a_7) = a_4 + a_7 + a_10 = 6 을 "
-            "만족시킬 때, a_10의 값은? [4점]"
-        ),
-        # EXACT matching compares equation lists pairwise and demands the same
-        # LENGTH, and this problem is read both ways in practice: the chain as
-        # one line, or split at the middle equals. Both are the same problem
-        # and both are stored, or the demo depends on which way the VLM felt.
-        "equations": [
-            ["2*(a_1 + a_4 + a_7) = a_4 + a_7 + a_10 = 6"],
-            ["2*(a_1 + a_4 + a_7) = a_4 + a_7 + a_10", "a_4 + a_7 + a_10 = 6"],
-        ],
-        "concepts": ["geometric_sequence"],
-        "answer": Answer(kind="SCALAR", value="24/7"),
-    },
-}
+def load_presolve() -> dict:
+    """The lesson material, from beside the DB it fills. Missing file → {}."""
+    if not PRESOLVE_PATH.exists():
+        return {}
+    data = json.loads(PRESOLVE_PATH.read_text(encoding="utf-8"))
+    return data if isinstance(data, dict) else {}
 
 
 def build(settings):
@@ -143,44 +157,54 @@ def warm_concepts(db, gen, speaker, concept_ids: list[str], workers: int = 5) ->
     return written
 
 
-def presolve(db, llm, key: str) -> bool:
+def presolve(db, llm, key: str, entries: dict) -> bool:
     from tutor.knowledge.matching import problem_hash
-    from tutor.solver.grok_solver import GrokSolver
     from tutor.vision.recognizer import Recognition
 
-    spec = PRESOLVE.get(key)
+    spec = entries.get(key)
     if spec is None:
-        say(f"no pre-solve entry named {key!r}; known: {sorted(PRESOLVE)}")
+        say(f"no pre-solve entry named {key!r}; known: {sorted(entries)}")
         return False
 
     variants = spec["equations"]
-    rec = Recognition(
-        problem_text=spec["problem_text"],
-        equations=variants[0],
-        problem_type=spec["problem_type"],
-        concepts=spec["concepts"],
-    )
-    say(f"solving {key}...")
-    solution = GrokSolver(llm, db).solve(rec, f"presolved-{key}")
-    say(f"  answer: {solution.final_answer.kind} {solution.final_answer.value}")
-    for step in solution.steps:
-        say(f"    {step.idx}. {step.description} | {step.expression}")
+    expected = Answer.model_validate(spec["answer"])
 
-    # The gate is agreement with the answer written down here, not the sympy
-    # check: substituting into a chain equality cannot confirm this kind of
-    # problem, and a check that cannot run is not a verdict.
-    expected = spec["answer"]
-    if (solution.final_answer.kind, str(solution.final_answer.value)) != (
-        expected.kind, str(expected.value)
-    ):
-        say(f"  ! solver says {solution.final_answer.value}, expected {expected.value}"
-            " — NOT stored. Fix the expected answer or re-run.")
-        return False
+    if spec.get("steps"):
+        # CURATED: the steps were written by hand from a worked solution, so
+        # there is nothing to ask a model and nothing that can disagree.
+        steps = [
+            SolutionStep(idx=i + 1, **s) for i, s in enumerate(spec["steps"])
+        ]
+        say(f"storing {key} (curated, {len(steps)} steps)...")
+    else:
+        from tutor.solver.grok_solver import GrokSolver
+
+        rec = Recognition(
+            problem_text=spec["problem_text"],
+            equations=variants[0],
+            problem_type=spec["problem_type"],
+            concepts=spec["concepts"],
+        )
+        say(f"solving {key}...")
+        solution = GrokSolver(llm, db).solve(rec, f"presolved-{key}")
+        say(f"  answer: {solution.final_answer.kind} {solution.final_answer.value}")
+        for step in solution.steps:
+            say(f"    {step.idx}. {step.description} | {step.expression}")
+        # The gate is agreement with the answer written down here, not the
+        # sympy check: substituting into a chain equality cannot confirm this
+        # kind of problem, and a check that cannot run is not a verdict.
+        if (solution.final_answer.kind, str(solution.final_answer.value)) != (
+            expected.kind, str(expected.value)
+        ):
+            say(f"  ! solver says {solution.final_answer.value}, expected "
+                f"{expected.value} — NOT stored. Fix the expected answer or re-run.")
+            return False
+        steps = solution.steps
     if verify_answer(variants[0], expected.kind, expected.value):
         say("  sympy agrees with the answer too")
 
     reference = ReferenceSolution(
-        steps=solution.steps, final_answer=expected,
+        steps=steps, final_answer=expected,
         concepts=spec["concepts"], verified=True, origin="db",
     )
     for i, equations in enumerate(variants):
@@ -204,31 +228,119 @@ def presolve(db, llm, key: str) -> bool:
             text_hash=problem_hash(shape),
             verified=True,
         )
+        # replace, not append: re-running after editing the entry must leave
+        # ONE solution, or verified_solution picks whichever row it meets first
+        db._conn.execute("DELETE FROM solutions WHERE problem_id = ?", (pid,))
         db.insert_solution(pid, reference, verified=True)
         say(f"  stored {pid}: {len(equations)} equation(s)")
     say(f"  {key} is verified KB now — the solver will not run for it again")
     return True
 
 
+def seed_hint_templates(db, entries: dict) -> int:
+    """Concept-level hint lines from the presolve file, idempotently.
+
+    A hint the DB can answer is a hint no model is asked to write — the
+    template path in HintGenerator.generate runs before the phrase call, so
+    every line seeded here turns a measured ~7s of phrasing into nothing.
+    """
+    n = 0
+    for spec in entries.get("hint_templates", []):
+        db.insert_hint_template(HintTemplate.model_validate(spec))
+        n += 1
+    if n:
+        say(f"seeded {n} hint template(s)")
+    return n
+
+
+def extend_semantic_index(db, stored_ids: list[str]) -> None:
+    """Append the newly stored problems to the embedding index, if it exists.
+
+    EXACT matching does not need this; it is the safety net underneath it —
+    if the VLM's reading wobbles past every stored variant, the SEMANTIC tier
+    should still surface the right problem instead of a middle-school
+    lookalike. Appending is cheap (a handful of passages); a full rebuild is
+    tutor.scripts.build_embeddings.
+    """
+    from tutor.retrieval.semantic import DEFAULT_INDEX_PATH
+
+    if not DEFAULT_INDEX_PATH.exists() or not stored_ids:
+        return
+    try:
+        import numpy as np
+        from tutor.retrieval.semantic import MODEL_NAME, get_embedding_model
+    except Exception as e:  # noqa: BLE001 — the index is optional, so is this
+        say(f"  (semantic index not extended: {e})")
+        return
+
+    data = np.load(DEFAULT_INDEX_PATH)
+    ids = data["ids"].astype(str)
+    have = set(ids)
+    todo = [pid for pid in stored_ids if pid not in have]
+    if not todo:
+        return
+    by_id = {p.id: p for p in db.all_problems()}
+    passages = []
+    for pid in todo:
+        p = by_id[pid]
+        text = p.problem_text
+        if p.equations:
+            text += "\n수식: " + " ; ".join(p.equations)
+        passages.append("passage: " + text)
+    model = get_embedding_model(MODEL_NAME)
+    fresh = model.encode(
+        passages, normalize_embeddings=True, convert_to_numpy=True
+    ).astype(np.float32)
+    np.savez(
+        DEFAULT_INDEX_PATH,
+        ids=np.concatenate([ids, np.array(todo)]),
+        embeddings=np.concatenate([data["embeddings"].astype(np.float32), fresh]),
+    )
+    say(f"  semantic index: +{len(todo)} → {len(ids) + len(todo)} passages")
+
+
 def main(argv: list[str] | None = None) -> int:
     soften_stdout()
+    entries = load_presolve()
+    known = sorted(k for k in entries if k != "hint_templates")
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--solve", action="append", default=[],
-                    help=f"pre-solve a known problem ({sorted(PRESOLVE)})")
+                    help=f"pre-store a problem from {PRESOLVE_PATH.name} "
+                         f"({known or 'none found'}), or 'all'")
     ap.add_argument("--concepts", nargs="*", default=None,
-                    help="concept ids to write lines for (default: the common set)")
+                    help="concept ids to write lines for (default: the common "
+                         "set; pass with no ids to skip)")
     args = ap.parse_args(argv)
 
     settings = load_settings()
-    if settings.echo_mode:
+    curated_only = bool(args.solve) and all(
+        entries.get(k, {}).get("steps") for k in
+        (known if "all" in args.solve else args.solve)
+    )
+    if settings.echo_mode and not curated_only:
         say("echo mode: no API key loaded, nothing to warm")
         return 1
-    db, llm, gen, speaker = build(settings)
 
-    warm_concepts(db, gen, speaker,
-                  args.concepts if args.concepts is not None else COMMON_CONCEPTS)
-    for key in args.solve:
-        presolve(db, llm, key)
+    if curated_only and args.concepts == []:
+        # nothing here needs a model or a voice: skip the whole server build
+        db, llm, gen, speaker = KnowledgeDB(settings.db_path), None, None, None
+    else:
+        db, llm, gen, speaker = build(settings)
+
+    if gen is not None:
+        warm_concepts(db, gen, speaker,
+                      args.concepts if args.concepts is not None else COMMON_CONCEPTS)
+    seed_hint_templates(db, entries)
+    keys = known if "all" in args.solve else args.solve
+    stored: list[str] = []
+    for key in keys:
+        if presolve(db, llm, key, entries):
+            stored.append(f"presolved-{key}")
+            stored.extend(
+                f"presolved-{key}-v{i}"
+                for i in range(1, len(entries[key]["equations"]))
+            )
+    extend_semantic_index(db, stored)
     say(f"knowledge DB: {settings.db_path}")
     return 0
 
