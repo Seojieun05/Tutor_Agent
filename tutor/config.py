@@ -75,6 +75,14 @@ class Settings:
     # 4.0s — a narrow structured job the small model does just as well.
     illustrate_provider: str = "grok"
     gemini_illustrate_model: str = "gemini-3.5-flash-lite"
+    # The intent gate is the FIRST model call of every ambiguous turn, and it
+    # runs before any filler or stage line exists to cover it: the student has
+    # stopped talking and nothing on screen moves until this returns. Measured
+    # live on grok-4.5 it took 9.0s to decide the tutor should say NOTHING —
+    # nine seconds of dead air for a one-word label. It is the same shape of
+    # narrow classification the illustrator runs on flash-lite in 1.3s.
+    intent_provider: str = "grok"
+    gemini_intent_model: str = "gemini-3.5-flash-lite"
     tts_voice: str = "eve"
     # "ws" holds one bidirectional TTS socket open and reuses it per utterance
     # (~0.3s to first audio instead of ~1.3s per-request HTTP). Any websocket
@@ -207,6 +215,14 @@ def load_settings(env_file: Path | None = None) -> Settings:
     s.gemini_illustrate_model = (
         os.getenv("GEMINI_ILLUSTRATE_MODEL", s.gemini_illustrate_model).strip()
         or s.gemini_illustrate_model
+    )
+    s.intent_provider = (
+        os.getenv("INTENT_PROVIDER", s.intent_provider).strip().lower()
+        or s.intent_provider
+    )
+    s.gemini_intent_model = (
+        os.getenv("GEMINI_INTENT_MODEL", s.gemini_intent_model).strip()
+        or s.gemini_intent_model
     )
     s.tts_transport = (
         os.getenv("TTS_TRANSPORT", s.tts_transport).strip().lower() or s.tts_transport

@@ -259,3 +259,56 @@ class TestInTheSession:
 
         assert speaker.spoken == ["그래프의 개형을 떠올려 볼까요?"]
         assert "figure" not in session.ws.names()
+
+
+class TestTheStudentsWindow:
+    """The zoom buttons on the page: `figure_zoom` widens or narrows the
+    window of the scene already on the board, and the choice sticks to the
+    problem so the next turn's redraw keeps it."""
+
+    async def drawn(self, db):
+        session, llm, speaker = build(db, [{
+            "curves": [{"expr": "x**2 - 4*x + 3", "label": "f", "role": "target"}],
+            "x_min": -1, "x_max": 5, "caption": "x축과 만나는 곳", "why": "t",
+        }])
+        await session._deliver(a_hint(), "x축과 만나는 점을 생각해 볼까요?", "p1")
+        await asyncio.gather(*[t for t in session._tasks if not t.done()])
+        return session
+
+    async def test_zoom_out_redraws_the_same_scene_wider(self, db):
+        session = await self.drawn(db)
+        before = len([e for e in session.ws.events if e["event"] == "figure"])
+
+        await session.on_frame(json.dumps(
+            {"type": "EVENT", "event": "figure_zoom", "data": {"dir": 1}}))
+        await asyncio.gather(*[t for t in session._tasks if not t.done()])
+
+        figures = [e for e in session.ws.events if e["event"] == "figure"]
+        assert len(figures) == before + 1
+        assert figures[-1]["data"]["id"] == "p1"          # same canvas, replaced
+        assert figures[-1]["data"]["zoom"] == 1.4
+        assert figures[-1]["data"]["note"] == "x축과 만나는 곳"
+        assert session.ctx.zoom == 1.4                    # sticks to the problem
+
+    async def test_zoom_is_clamped(self, db):
+        session = await self.drawn(db)
+        for _ in range(10):
+            await session.on_frame(json.dumps(
+                {"type": "EVENT", "event": "figure_zoom", "data": {"dir": 1}}))
+            await asyncio.gather(*[t for t in session._tasks if not t.done()])
+        assert session.ctx.zoom == 4.0
+
+    async def test_zoom_with_no_scene_says_nothing(self, db):
+        session, llm, speaker = build(db, [])
+        await session.on_frame(json.dumps(
+            {"type": "EVENT", "event": "figure_zoom", "data": {"dir": 1}}))
+        await asyncio.gather(*[t for t in session._tasks if not t.done()])
+        assert "figure" not in session.ws.names()
+
+    async def test_garbage_direction_is_ignored(self, db):
+        session = await self.drawn(db)
+        before = len(session.ws.events)
+        await session.on_frame(json.dumps(
+            {"type": "EVENT", "event": "figure_zoom", "data": {"dir": "sideways"}}))
+        await asyncio.gather(*[t for t in session._tasks if not t.done()])
+        assert len(session.ws.events) == before

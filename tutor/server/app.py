@@ -108,6 +108,7 @@ class Shared:
     estimate_llm: object
     illustrate_llm: object
     solve_llm: object
+    intent_llm: object
     eval_second_llm: object | None
 
 
@@ -150,6 +151,7 @@ def build_shared(settings: Settings) -> Shared:
     estimate_llm = build_estimate_llm(settings, llm, registry)
     illustrate_llm = build_illustrate_llm(settings, llm)
     solve_llm = build_solve_llm(settings, llm, registry)
+    intent_llm = build_intent_llm(settings, llm)
     # One log line per model call, always on. The tutor's latency is almost
     # entirely other people's servers, so the only useful question is which
     # call — and that is not answerable after the fact without this.
@@ -165,6 +167,7 @@ def build_shared(settings: Settings) -> Shared:
         estimate_llm=timed(estimate_llm),
         illustrate_llm=timed(illustrate_llm),
         solve_llm=timed(solve_llm),
+        intent_llm=timed(intent_llm),
         eval_second_llm=(
             timed(eval_second_llm) if eval_second_llm is not None else None
         ),
@@ -272,6 +275,20 @@ def build_illustrate_llm(settings: Settings, llm):
                       settings.gemini_illustrate_model, "ILLUSTRATE_PROVIDER")
 
 
+def build_intent_llm(settings: Settings, llm):
+    """Whichever model gates the turn. Only the intent classifier sees it.
+
+    Toolless and tiny by design: it reads one transcript plus two yes/no facts
+    and returns one word, and it runs BEFORE anything on screen moves — the
+    silence the student feels between finishing a sentence and the tutor
+    reacting is mostly this call. The rules still decide every confident case
+    for free; only the ambiguous remainder pays this model, and _enforce
+    re-checks whatever it says.
+    """
+    return _gemini_or(settings, llm, settings.intent_provider,
+                      settings.gemini_intent_model, "INTENT_PROVIDER")
+
+
 def build_solve_llm(settings: Settings, llm, registry=None):
     """Whichever model writes the reference solution. Only the solver sees it.
 
@@ -326,7 +343,7 @@ def _gemini_or(settings: Settings, llm, provider: str, model: str, knob: str,
 def make_deps(
     settings: Settings, db, llm, transcriber, speaker, semantic=None, cameras=None,
     vision_llm=None, hint_llm=None, eval_llm=None, estimate_llm=None,
-    illustrate_llm=None, eval_second_llm=None, solve_llm=None,
+    illustrate_llm=None, eval_second_llm=None, solve_llm=None, intent_llm=None,
 ) -> Deps:
     """Per-connection dependencies (fresh SessionStore each time)."""
     return Deps(
@@ -344,7 +361,7 @@ def make_deps(
         evaluator=AnswerEvaluator(eval_llm or llm, db, second_opinion=eval_second_llm),
         cameras=cameras,
         fillers=FillerBank() if settings.filler_enabled else None,
-        classifier=IntentClassifier(llm),
+        classifier=IntentClassifier(intent_llm or llm),
         store=SessionStore(),
     )
 
@@ -423,7 +440,7 @@ async def amain(settings: Settings) -> None:
             settings, db, llm, transcriber, speaker, shared.semantic, cameras,
             shared.vision_llm, shared.hint_llm, shared.eval_llm,
             shared.estimate_llm, shared.illustrate_llm, shared.eval_second_llm,
-            shared.solve_llm,
+            shared.solve_llm, shared.intent_llm,
         )
         if path.rstrip("/") == "/browser":
             from tutor.server.browser import BrowserSession

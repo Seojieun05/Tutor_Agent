@@ -263,3 +263,50 @@ def test_the_classifier_dependency_works_without_an_llm():
     assert classifier.classify("풀이 맞아?", has_problem=True, has_pending=True) == (
         "WORK_CHECK"
     )
+
+
+# --- "…음, 뭐지?" — working aloud and losing the thread ------------------------
+# A live session: "그럼 m의 기울기는 거기에 1을 대입하면 되니까, 음, 뭐지?" was
+# classified NONE and the tutor sat silent at exactly the moment a person would
+# have leaned in. The transcript only exists because the student went quiet
+# after it (the VAD waited out the silence), so an utterance that DIES on a
+# lost self-question is a student stuck, not muttering that will recover.
+
+LOST = [
+    "그럼 m의 기울기는 거기에 1을 대입하면 되니까, 음, 뭐지?",
+    "여기서 어떻게 하더라",
+    "다음에 뭐를 해야 하지... 뭐더라?",
+    "이거 공식이 뭐였지",
+]
+
+
+@pytest.mark.parametrize("text", LOST)
+def test_trailing_off_lost_is_a_hint_request(text):
+    assert rule_intent(text, has_problem=True, has_pending=False) == "HINT_REQUEST"
+
+
+@pytest.mark.parametrize("text", LOST)
+def test_trailing_off_lost_never_pays_for_a_classifier_call(text):
+    llm = RecordingLLM("NONE")  # the live failure: the model said NONE
+    assert classify(text, has_problem=True, has_pending=False, llm=llm) == "HINT_REQUEST"
+    assert llm.calls == 0
+
+
+@pytest.mark.parametrize("text", LOST)
+def test_trailing_off_lost_against_a_pending_question_is_the_answer(text):
+    # same routing as 모르겠어요: the evaluator reads it as "escalate"
+    assert rule_intent(text, has_problem=True, has_pending=True) == "ANSWER"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # the sentence RECOVERS: the self-question is in the middle, not the end
+        "이게 뭐지 싶었는데 이제 알겠어요",
+        "뭐더라 했다가 기억났어요",
+        # complete thoughts that happen to end in ~지
+        "이렇게 하면 되겠지",
+    ],
+)
+def test_a_sentence_that_recovers_is_not_a_hint_request(text):
+    assert rule_intent(text, has_problem=True, has_pending=False) is None

@@ -150,3 +150,44 @@ class TestTheAxesStayComparable:
         """No target in the scene: everything votes, as before."""
         svg = function_svg(self.scene(("x**2 - 4*x - 3", "f", "scaffold")), (-2.0, 6.0))
         assert "<polyline" in svg
+
+
+class TestTheStudentsOwnWindow:
+    """The automatic window is a guess — the middle 90% of the target's
+    values — and a curve whose interesting part it cut off looked simply
+    broken, with no way to say "wider". `zoom` is that way: it scales the
+    window itself, so what was clipped is actually re-sampled and drawn."""
+
+    def x_extent(self, svg: str) -> float:
+        xs = [float(v) for v in re.findall(
+            r'<text x="[\d.]+" y="[\d.]+" text-anchor="middle">(-?[\d.]+)</text>', svg)]
+        return max(xs) - min(xs)
+
+    def y_extent(self, svg: str) -> float:
+        ys = [float(v) for v in re.findall(
+            r'<text x="[\d.-]+" y="[\d.]+" text-anchor="end">(-?[\d.]+)</text>', svg)]
+        return max(ys) - min(ys)
+
+    def test_zooming_out_shows_more_of_both_axes(self):
+        near = function_svg(["x**3 - 3*x**2 + 2"], span=(-3, 3))
+        wide = function_svg(["x**3 - 3*x**2 + 2"], span=(-3, 3), zoom=2.0)
+        assert self.x_extent(wide) > self.x_extent(near)
+        assert self.y_extent(wide) > self.y_extent(near)
+
+    def test_zooming_in_moves_closer(self):
+        near = function_svg(["x**3 - 3*x**2 + 2"], span=(-3, 3), zoom=0.5)
+        base = function_svg(["x**3 - 3*x**2 + 2"], span=(-3, 3))
+        assert self.x_extent(near) < self.x_extent(base)
+
+    def test_the_wider_window_is_really_sampled(self):
+        # the extra plane must carry curve, not blank margin: the widened span
+        # is re-sampled, so the polyline reaches x values the near window
+        # never contained
+        wide = function_svg(["x**2"], span=(-2, 2), zoom=2.0)
+        xs = [float(v) for v in re.findall(
+            r'<text x="[\d.]+" y="[\d.]+" text-anchor="middle">(-?[\d.]+)</text>', wide)]
+        assert max(xs) >= 3          # the (-2,2) span could never label x=3
+
+    def test_zoom_is_clamped_not_trusted(self):
+        # a runaway zoom must not sample the plane to death: 1000 is 4
+        assert function_svg(["x**2"], span=(-2, 2), zoom=1000) ==                function_svg(["x**2"], span=(-2, 2), zoom=4.0)

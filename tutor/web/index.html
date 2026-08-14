@@ -605,7 +605,27 @@
   }
 
   /* a function sketched on the board: axes, a light grid, the curve */
-  .boardfigure { padding:.4rem 0 .2rem; }
+  .boardfigure { position:relative; padding:.4rem 0 .2rem; }
+  /* The window controls: the automatic window is a guess about what matters,
+     and these are how the student overrules it. − widens (more of the plane,
+     the fix when a curve runs out of the frame), + moves closer. Quiet until
+     hovered, because they sit on the sketch itself. */
+  .figzoom {
+    position:absolute; top:.55rem; right:.15rem; z-index:1;
+    display:flex; gap:.3rem; opacity:.55; transition:opacity .18s;
+  }
+  .boardfigure:hover .figzoom, .figzoom:focus-within { opacity:1; }
+  .figzoom button {
+    width:1.7rem; height:1.7rem; display:grid; place-items:center;
+    font:700 1.05rem var(--font); line-height:1;
+    color:var(--text-mid); background:var(--panel-solid);
+    border:1px solid var(--line); border-radius:var(--r-btn);
+    cursor:pointer; box-shadow:0 1px 3px rgb(var(--sink) / .10);
+    transition:color .15s, border-color .15s, background .15s;
+  }
+  .figzoom button:hover { color:var(--accent-deep); border-color:var(--accent-line); }
+  .figzoom button:active { transform:translateY(1px); }
+  .figzoom button:focus-visible { outline:2px solid var(--accent-deep); outline-offset:2px; }
   @media (prefers-reduced-motion: no-preference) {
     .boardfigure { transition:opacity .18s ease; }
     .boardfigure.fading { opacity:.15; }
@@ -2031,10 +2051,14 @@ function boardDraw(d) {
   const svg = d && d.svg;
   if (!svg) return;
   const id = `fig:${d.id || d.of || "scene"}`;
-  const key = `${id}|${d.of}|${d.note || ""}`;
+  // zoom is part of the key: the same scene through a different window IS a
+  // change, or the redraw the zoom buttons ask for would be dropped here
+  const key = `${id}|${d.of}|${d.note || ""}|${d.zoom || 1}`;
   if (boardSeen.has(key)) return;      // the same scene twice is not a change
   boardSeen.add(key);
-  goWrite();
+  // a zoom redraw is the student adjusting their view, not the tutor writing:
+  // the character stays where it is
+  if (!d.zoom || d.zoom === 1) goWrite();
 
   let box = document.querySelector(`[data-figure="${CSS.escape(id)}"]`);
   const fresh = !box;
@@ -2044,16 +2068,37 @@ function boardDraw(d) {
     box = document.createElement("div");
     box.className = "boardfigure";
     box.dataset.figure = id;
+    // The window controls, OUTSIDE the part a redraw repaints — the same
+    // buttons keep keyboard focus across every redraw they cause. The server
+    // owns the window (it has the samples); these only ask.
+    const zoom = document.createElement("div");
+    zoom.className = "figzoom";
+    for (const [glyph, dir, label] of [
+      ["−", +1, "그래프 범위 넓히기"],   // minus = smaller picture = MORE plane
+      ["+", -1, "그래프 범위 좁히기"],
+    ]) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = glyph;
+      b.setAttribute("aria-label", label);
+      b.title = label;
+      b.addEventListener("click", () => sendEvent("figure_zoom", { dir }));
+      zoom.appendChild(b);
+    }
+    const body = document.createElement("div");
+    body.className = "figbody";
+    box.append(zoom, body);
     $("boardLines").appendChild(box);
   }
+  const body = box.querySelector(".figbody");
   const paint = () => {
-    box.innerHTML = svg;
+    body.innerHTML = svg;
     if (d.note) {
       // what to look at, in the same margin voice the written lines use
       const label = document.createElement("div");
       label.className = "note";
       label.textContent = d.note;
-      box.appendChild(label);
+      body.appendChild(label);
     }
     box.classList.remove("fading");
     // Show the picture from ITS top, not the board's bottom. The sketch now

@@ -163,13 +163,27 @@ def _legend_svg(rows, series, px, py) -> str:
 
 
 def function_svg(
-    curves, span: tuple[float, float] = DEFAULT_SPAN
+    curves, span: tuple[float, float] = DEFAULT_SPAN, zoom: float = 1.0
 ) -> str | None:
     """Markup for the scene, or None when nothing in it can be drawn.
 
     `curves` are objects with .expr and optionally .label/.role, or plain
     expression strings.
+
+    `zoom` scales the WINDOW, not the picture: >1 shows more of the plane,
+    <1 moves closer. It exists because the automatic window is a guess about
+    what matters — the middle 90% of the target's values — and the student is
+    the one who knows whether the part it cut off is the part they need. The
+    x-span is scaled before sampling (a wider window has to be sampled to be
+    drawn) and the y-window after it is chosen, because the y-window is
+    derived from the samples and would otherwise re-trim whatever the zoom
+    let in.
     """
+    zoom = min(4.0, max(0.4, float(zoom or 1.0)))
+    if zoom != 1.0:
+        mid = (span[0] + span[1]) / 2
+        half = (span[1] - span[0]) / 2 * zoom
+        span = (mid - half, mid + half)
     def sample_all(window: tuple[float, float]):
         out: list[tuple[object, list[tuple[float, float | None]]]] = []
         for curve in list(curves)[:4]:
@@ -194,6 +208,9 @@ def function_svg(
     # frame is what a sketch on a real board looks like.
     aimed = [s for curve, s in series if is_target(curve)]
     y0, y1 = _window(aimed or [s for _, s in series])
+    if zoom != 1.0:
+        cy, hy = (y0 + y1) / 2, (y1 - y0) / 2 * zoom
+        y0, y1 = cy - hy, cy + hy
 
     widened = _widen_to_aspect(span, y0, y1)
     if widened != span:

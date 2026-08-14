@@ -191,6 +191,13 @@ class ProblemContext:
     # scaffold curve disappears once the thing it produced is on the board.
     scene: tuple = ()
     span: tuple[float, float] | None = None
+    # The student's own window. The automatic one is a guess (the middle 90%
+    # of the target's values), and a curve whose interesting part it cut off
+    # looked simply broken with no way to say "wider". Set from the page's
+    # zoom buttons, kept for the rest of the problem so the next turn's
+    # redraw does not snap the window back.
+    zoom: float = 1.0
+    caption: str = ""
 
     def reference_if_ready(self) -> ReferenceSolution | None:
         """The reference if it exists RIGHT NOW; never waits.
@@ -320,6 +327,16 @@ class Session:
             future = self._captures.get(capture_id)
             if future is not None and not future.done():
                 future.set_result(None)
+        elif ev.event == "figure_zoom":
+            # The zoom buttons on the board's sketch. Independent of the turn:
+            # re-rendering a scene that already passed the leak gate reads
+            # nothing new and says nothing, so it may run while _busy.
+            try:
+                direction = int(ev.data.get("dir", 0))
+            except (TypeError, ValueError):
+                direction = 0
+            if direction:
+                self._spawn(self._refigure(direction))
         elif ev.event == "error":
             log.warning("device error: %s", ev.data)
         else:
@@ -1374,7 +1391,7 @@ class Session:
         span = ctx.span or plot.DEFAULT_SPAN
         if spec.x_min is not None and spec.x_max is not None and spec.x_min < spec.x_max:
             span = (spec.x_min, spec.x_max)
-        svg = await asyncio.to_thread(plot.function_svg, spec.curves, span)
+        svg = await asyncio.to_thread(plot.function_svg, spec.curves, span, ctx.zoom)
         if not svg:
             return
         # The turn moved on while we drew: a picture of the last hint landing
@@ -1387,7 +1404,7 @@ class Session:
             return
         gone = [c.label or c.expr for c in ctx.scene
                 if c.expr not in {n.expr for n in spec.curves}]
-        ctx.scene, ctx.span = tuple(spec.curves), span
+        ctx.scene, ctx.span, ctx.caption = tuple(spec.curves), span, spec.caption
         try:
             await self.ws.send(make_event("figure", {
                 # one canvas per problem: the page replaces it in place, so
@@ -1396,6 +1413,7 @@ class Session:
                 "svg": svg,
                 "of": ", ".join(c.expr for c in spec.curves),
                 "note": spec.caption,
+                "zoom": round(ctx.zoom, 2),
             }))
         except Exception:
             log.debug("could not send figure event (connection gone)")
@@ -1404,6 +1422,38 @@ class Session:
             [f"{c.label or '?'}={c.expr}({c.role})" for c in spec.curves], span,
             f", wiped {gone}" if gone else "", spec.why[:60],
         )
+
+    async def _refigure(self, direction: int) -> None:
+        """The same scene through a window the student chose.
+
+        `direction` +1 widens (more of the plane), -1 moves closer. Nothing
+        else changes: the curves already passed the leak gate when they were
+        first drawn, the caption is the one the illustrator wrote, and the new
+        zoom sticks to the problem so the next turn's redraw keeps it.
+        """
+        ctx = self.ctx
+        if ctx is None or not ctx.scene:
+            return
+        step = 1.4 if direction > 0 else 1 / 1.4
+        zoom = min(4.0, max(0.4, ctx.zoom * step))
+        if zoom == ctx.zoom:
+            return
+        ctx.zoom = zoom
+        span = ctx.span or plot.DEFAULT_SPAN
+        svg = await asyncio.to_thread(plot.function_svg, list(ctx.scene), span, zoom)
+        if not svg or self.ctx is not ctx:
+            return
+        try:
+            await self.ws.send(make_event("figure", {
+                "id": ctx.hash or "scene",
+                "svg": svg,
+                "of": ", ".join(c.expr for c in ctx.scene),
+                "note": ctx.caption,
+                "zoom": round(zoom, 2),
+            }))
+        except Exception:
+            log.debug("could not send the rezoomed figure (connection gone)")
+        log.info("figure zoom -> %.2f over %s", zoom, span)
 
     def _resolve_hint(self, hint_id: int, effective: bool) -> None:
         """Answer a pending hint, remembering which one — so a turn the student

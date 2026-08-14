@@ -64,6 +64,24 @@ _CHECK_WORDS = ("맞", "봐", "보", "확인", "틀", "어때")
 # reported, so the answer is an explanation, not another photo of the same page.
 _ABOUT_THE_VERDICT = ("어디가", "어디서", "어느 부분", "왜 ", "왜냐", "무엇이 잘못", "뭐가 잘못")
 
+# "…대입하면 되니까, 음, 뭐지?" — the sentence walks through a step and DIES on a
+# self-question. By the time this transcript exists the student has also gone
+# quiet (the VAD waited out the silence before endpointing), so this is not
+# muttering that will resolve itself: it is the thread being lost, out loud,
+# followed by nothing. Classified NONE, the tutor sat silent at exactly the
+# moment a person would have leaned in — a live session did, and the student's
+# next words were about the tutor, not the maths. Trailing position only:
+# "이게 뭐지 싶었는데 알았어요" sails past, because the sentence recovers.
+_LOST_TRAILING = re.compile(
+    r"(뭐지|뭐더라|뭐였지|뭐였더라|뭘까|어떻게 하더라|어떻게 했더라|어떻게 하지|"
+    r"어떻게 되더라|기억이 안\s*나)\s*[?.!…~요]*$"
+)
+
+
+def trails_off_lost(text: str) -> bool:
+    """Did the utterance end on a lost self-question and then stop?"""
+    return bool(_LOST_TRAILING.search(text.strip()))
+
 
 def asks_about_the_verdict(text: str) -> bool:
     return _has(text, _ABOUT_THE_VERDICT)
@@ -97,7 +115,11 @@ Return exactly one intent:
 
 - "HINT_REQUEST" — they want help getting started or getting unstuck on the
   problem itself. "이 문제 힌트 줄래?", "도와줘", "이거 어떻게 풀어요?",
-  "무슨 공식 써요?". The tutor must look at the problem.
+  "무슨 공식 써요?". The tutor must look at the problem. An utterance that
+  works through a step and then DIES on a lost self-question — "…대입하면
+  되니까, 음, 뭐지?", "여기서 어떻게 하더라?" — is also a HINT_REQUEST: the
+  student has lost the thread and gone quiet, and the silence after it is
+  them waiting.
 - "WORK_CHECK" — they explicitly NAME their written work (풀이, 내가 쓴 것) and
   ask you to judge it. "풀이 맞아요?", "풀이 확인해줘", "제 풀이 봐 주세요",
   "내가 쓴 거 봐줘". Taking a photo costs the student a pause, so this label
@@ -108,8 +130,10 @@ Return exactly one intent:
   or "힌트 더 주세요" (declining to answer is still answering). Nothing new is
   written, so no photo is needed. A plain "네, 맞아요" or "그렇게 하면 돼요" is
   an ANSWER — the student is agreeing with you, not asking you to look.
-- "NONE" — not addressed to the tutor: thinking out loud, muttering, small talk,
-  or a fragment that asks for nothing. The tutor stays quiet and keeps listening.
+- "NONE" — not addressed to the tutor: thinking out loud that CARRIES ON or
+  lands somewhere ("아 이렇게 하면 되는구나"), muttering, small talk, or a
+  fragment that asks for nothing. The tutor stays quiet and keeps listening.
+  An utterance that ENDS lost is not NONE — see HINT_REQUEST.
 
 Two hard constraints, given to you as facts in the context:
 - If no question is pending, "ANSWER" is impossible — there is nothing to answer.
@@ -161,6 +185,10 @@ def rule_intent(text: str, *, has_problem: bool, has_pending: bool) -> Intent | 
     if wants_hint(text):  # 힌트 / 도와 / 모르겠 / hint / help
         # "모르겠어요" against a pending question is an answer — the evaluator
         # reads it as "escalate", which is the behaviour that already works.
+        return "ANSWER" if has_pending else "HINT_REQUEST"
+    if trails_off_lost(text):
+        # Same routing as 모르겠어요, for the student who never says the word:
+        # working aloud, losing the thread, and stopping IS being stuck.
         return "ANSWER" if has_pending else "HINT_REQUEST"
     if has_pending:
         # A question is on the table and they said something that does not point
