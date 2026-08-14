@@ -1,4 +1,31 @@
-"""Speech-to-text via the xAI /v1/stt endpoint (multipart, no model name)."""
+"""Speech-to-text via the xAI /v1/stt endpoint (multipart, no model name).
+
+THE ENDPOINT DETECTS THE LANGUAGE AND CANNOT BE TOLD. Measured against the
+live API: the same audio sent with language=ko, ja, en, zh, with no language
+at all, and under `lang`, `source_language`, `audio_language`,
+`language_code`, `detect_language`, `task` and a deliberately invented field
+all came back byte-identical, and /v1/audio/transcriptions and its neighbours
+are 404. The field we send is a report, never an instruction.
+
+That matters because of what a maths student says out loud. Read a line of
+working aloud — "마이너스 이 엑스 마이너스 삼이요" — and almost every syllable is a
+loanword or a Sino-Korean numeral, which is to say it is very nearly the same
+sound as the Japanese for the same thing. The detector picks ja and writes
+perfectly good phonetics in the wrong script: マイナス二エックスマイナス三よ.
+Measured over 28 spoken answers, 7 to 10 came back Japanese, including a bare
+"네". Everything with ordinary Korean grammar in it — 답은…입니다, 기울기가…
+나왔어요 — was detected correctly every time.
+
+So the repair is to put some ordinary Korean in the audio. A fixed carrier
+phrase is spliced in front of the utterance, the detector hears Korean and
+decodes the WHOLE buffer as Korean, and the carrier is cut back off using the
+word timings the response already carries. With the carrier, all 28 were
+detected as Korean and none was lost to the cut.
+
+It is a RETRY rather than something done to every utterance: the carrier
+slightly colours the word right after the seam (루트 → 로트, 파이 → 화이), which
+is not worth paying on the three quarters of turns that never needed it.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +33,8 @@ import io
 import logging
 import re
 import wave
+from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 import httpx
@@ -14,6 +43,12 @@ from pydantic import BaseModel
 from tutor.config import Settings
 
 log = logging.getLogger(__name__)
+
+# The words in carrier_ko.wav, kept here so a leaked fragment can be recognised
+# and taken off the front. 1.4s of 16 kHz mono, ending in a short silence.
+CARRIER_PATH = Path(__file__).with_name("carrier_ko.wav")
+CARRIER_TEXT = "자, 대답할게요."
+CARRIER_RATE = 16000
 
 HINT_KEYWORDS = ("힌트", "도와", "모르겠", "hint", "help")
 
@@ -66,6 +101,26 @@ def _english_words(text: str) -> int:
     return sum(1 for t in re.split(r"[^A-Za-z]+", text) if len(t) >= 2)
 
 
+def _foreign_ratio(text: str) -> float:
+    """How much of this is written in a script the student does not use.
+
+    Korean, English and digits are what a Korean maths answer is made of;
+    kana, kanji and Cyrillic are either room noise or — far more often — the
+    right sounds written in the wrong alphabet.
+    """
+    stripped = text.strip()
+    expected = sum(1 for ch in stripped if _is_expected(ch))
+    foreign = sum(1 for ch in stripped if ch.isalpha() and not _is_expected(ch))
+    if not (expected or foreign):
+        return 0.0
+    return foreign / (expected + foreign)
+
+
+def wrong_script(text: str) -> bool:
+    """Worth asking the endpoint again with a Korean phrase in front of it."""
+    return bool(text.strip()) and _foreign_ratio(text) > _FOREIGN_RATIO
+
+
 def classify_transcript(text: str, heard_language: str = "") -> TranscriptQuality:
     """Is this worth running the tutor pipeline on?
 
@@ -83,12 +138,10 @@ def classify_transcript(text: str, heard_language: str = "") -> TranscriptQualit
     if not stripped:
         return "unclear"
 
-    expected = sum(1 for ch in stripped if _is_expected(ch))
-    # letters from another script (Chinese, Japanese, Cyrillic, bare jamo …)
-    foreign = sum(1 for ch in stripped if ch.isalpha() and not _is_expected(ch))
-    if expected == 0:
+    if not any(_is_expected(ch) for ch in stripped):
         return "unclear"
-    if foreign and foreign / (expected + foreign) > _FOREIGN_RATIO:
+    # letters from another script (Chinese, Japanese, Cyrillic, bare jamo …)
+    if _foreign_ratio(stripped) > _FOREIGN_RATIO:
         return "unclear"
 
     tokens = [t for t in re.split(r"[^\w]+", stripped) if t]
@@ -122,32 +175,107 @@ def pcm_to_wav(pcm: bytes, sample_rate: int = 16000, bits: int = 16, channels: i
     return buf.getvalue()
 
 
+@lru_cache(maxsize=1)
+def carrier_pcm() -> bytes:
+    """The Korean phrase spliced in front of a mis-detected utterance."""
+    with wave.open(str(CARRIER_PATH), "rb") as w:
+        if (w.getframerate(), w.getnchannels(), w.getsampwidth()) != (CARRIER_RATE, 1, 2):
+            raise ValueError(f"{CARRIER_PATH.name} must be 16 kHz mono 16-bit")
+        return w.readframes(w.getnframes())
+
+
+def _strip_carrier(text: str) -> str:
+    """Take the carrier off the front if the timings let a piece of it through."""
+    bare = re.sub(r"[^\w]", "", CARRIER_TEXT)
+    seen, kept = "", 0
+    for i, ch in enumerate(text):
+        if re.match(r"\w", ch):
+            seen += ch
+            if not bare.startswith(seen):
+                return text
+            kept = i + 1
+            if seen == bare:
+                return text[kept:].lstrip(" ,.…")
+    return text
+
+
+def _after(data: dict, seconds: float) -> str:
+    """What was said after the carrier ended.
+
+    A word is kept when it ENDS after the seam, not when it starts there: the
+    splice is sample-exact, so nothing of the student's can end before it,
+    while a word that straddles the join is theirs. Erring this way leaks a
+    carrier fragment at worst; erring the other way eats the first word of the
+    answer, and for "네" that is the whole answer.
+    """
+    words = data.get("words") if isinstance(data, dict) else None
+    if not isinstance(words, list) or not words:
+        return _strip_carrier(XaiTranscriber._extract_text(data))
+    kept = [
+        str(w.get("text", ""))
+        for w in words
+        if isinstance(w, dict) and float(w.get("end", 0) or 0) > seconds
+    ]
+    return _strip_carrier(" ".join(kept).strip())
+
+
 class XaiTranscriber:
     def __init__(self, settings: Settings):
         self.settings = settings
 
-    def transcribe(self, pcm: bytes, sample_rate: int = 16000) -> Transcript:
-        wav = pcm_to_wav(pcm, sample_rate)
+    def _post(self, pcm: bytes, sample_rate: int) -> dict:
         resp = httpx.post(
             f"{self.settings.xai_base_url.rstrip('/')}/stt",
             headers={"Authorization": f"Bearer {self.settings.xai_api_key}"},
-            data={"language": "ko"},
-            files={"file": ("utterance.wav", wav, "audio/wav")},
+            # Sent for the record, not for effect — see the module docstring:
+            # the endpoint gives the same answer whatever this says.
+            data={"language": self.settings.tutor_language},
+            files={"file": ("utterance.wav", pcm_to_wav(pcm, sample_rate), "audio/wav")},
             timeout=60,
         )
         resp.raise_for_status()
         data = resp.json()
+        return data if isinstance(data, dict) else {"text": data}
+
+    def transcribe(self, pcm: bytes, sample_rate: int = 16000) -> Transcript:
+        data = self._post(pcm, sample_rate)
         text = self._extract_text(data)
-        # What it HEARD, not what we asked for. The request already says
-        # language=ko and the endpoint still answers "en" for English audio, so
-        # this field is evidence rather than an echo — and it is the only way to
-        # tell a bilingual student's English answer from Korean speech that came
-        # back translated. Absent (or a plain-string response) → no evidence.
-        heard = data.get("language", "") if isinstance(data, dict) else ""
+        # What it HEARD, not what we asked for — the request cannot ask. It is
+        # the only way to tell a bilingual student's English answer from Korean
+        # speech that came back in the wrong alphabet.
+        heard = str(data.get("language", "") or "")
         if heard and heard != self.settings.tutor_language:
             log.info("STT heard %s, not %s", heard, self.settings.tutor_language)
+
+        if wrong_script(text):
+            again = self._with_carrier(pcm, sample_rate)
+            if again is not None:
+                text, heard = again
         log.info("STT transcript: %r", text)
-        return Transcript(text=text, language=str(heard or ""))
+        return Transcript(text=text, language=heard)
+
+    def _with_carrier(self, pcm: bytes, sample_rate: int) -> tuple[str, str] | None:
+        """Ask again with a Korean phrase in front, and cut the phrase back off.
+
+        None when this cannot be done or did not help, so the caller keeps the
+        first answer and the quality gate deals with it as it always has.
+        """
+        if sample_rate != CARRIER_RATE:
+            log.info("no carrier for %d Hz audio; keeping the first transcript", sample_rate)
+            return None
+        try:
+            head = carrier_pcm()
+            data = self._post(head + pcm, sample_rate)
+        except Exception:  # noqa: BLE001 — the first transcript is still there
+            log.warning("carrier retry failed; keeping the first transcript", exc_info=True)
+            return None
+        text = _after(data, len(head) / 2 / CARRIER_RATE)
+        heard = str(data.get("language", "") or "")
+        if wrong_script(text):
+            log.info("carrier retry still came back %s: %r", heard or "?", text)
+            return None
+        log.info("carrier retry recovered %s: %r", heard or "?", text)
+        return text, heard
 
     @staticmethod
     def _extract_text(data) -> str:
