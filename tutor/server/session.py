@@ -1208,6 +1208,17 @@ class Session:
         # downstream (matching, RAG, hint phrasing) reads them off the
         # Recognition, and the cached branch above keeps them stable per problem.
         match = await asyncio.to_thread(self.deps.matcher.match, rec)
+        # The one line that says whether this turn runs on curated knowledge
+        # or on a model. When a rehearsal problem comes back NEW, the fix is
+        # in the log two lines up: "recognized: … equations=[…]" is the exact
+        # variant to add to the presolve entry.
+        log.info(
+            "match tier=%s problem=%s reference=%s",
+            match.tier.value,
+            getattr(match.problem, "id", None),
+            "verified" if match.reference is not None and match.reference.verified
+            else ("yes" if match.reference is not None else "none"),
+        )
         reference = match.reference
         solving = None
         if reference is None:

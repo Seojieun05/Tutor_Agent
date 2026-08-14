@@ -18,6 +18,7 @@ The verdict drives the existing policy through the store, with no new rules:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Literal
 
 from pydantic import BaseModel
@@ -29,6 +30,11 @@ from tutor.state.models import Status
 log = logging.getLogger(__name__)
 
 Verdict = Literal["CORRECT", "INCORRECT", "UNCLEAR"]
+
+# What a student who just said "모르겠어요" hears — warmth, never "think more".
+# A module constant so the TTS cache can pre-render it like the other fixed
+# lines: this is the one reaction that should never keep anyone waiting.
+SURRENDER_FEEDBACK = "괜찮아요, 어려울 수 있어요. 같이 짚어 볼게요."
 Intent = Literal["ANSWER", "QUESTION", "WORK_CHECK"]
 
 _SYSTEM = """You grade a student's SPOKEN answer to a tutor's Socratic question.
@@ -134,6 +140,9 @@ class AnswerEvaluator:
         target_step: int,
         transcript: str,
     ) -> AnswerVerdict:
+        surrendered = self._gave_up(transcript)
+        if surrendered is not None:
+            return surrendered
         context = self._context(problem_text, reference, question, target_step, transcript)
         verdict = self._judge(self.llm, context)
         log.info(
@@ -161,6 +170,32 @@ class AnswerEvaluator:
                 log.info("the second opinion overturns it: the answer was right")
                 return better
         return verdict
+
+    # "잘 모르겠는데", "모르겠어요", "힌트 주세요" — surrender, not an attempt.
+    # Nothing here needs a model: the verdict is INCORRECT by construction
+    # (the pending hint did not land → same step, one level up, exactly the
+    # policy that already exists) and no attempt means nothing to grade wrong,
+    # so the LLM judge AND the second opinion are skipped. Measured live, the
+    # pair cost 2.8s to reach this same conclusion — and then reacted with
+    # "조금 더 생각해 볼까요?", which tells a student who just said they cannot
+    # think of anything to think harder, immediately before helping anyway.
+    _SURRENDER_RE = re.compile(r"모르겠|모르는|힌트|도와|도움|어떻게 하는지|hint|help", re.I)
+    # an attempt that CONTAINS doubt still gets graded: "5인 것 같은데
+    # 모르겠어요" carries a value, and grading it is kinder than ignoring it
+    _CARRIES_AN_ATTEMPT = re.compile(r"\d|[=+*/^√]|(?<![가-힣])[a-zA-Z](?![a-zA-Z])")
+
+    def _gave_up(self, transcript: str) -> AnswerVerdict | None:
+        text = transcript.strip()
+        if not text or not self._SURRENDER_RE.search(text):
+            return None
+        if self._CARRIES_AN_ATTEMPT.search(text):
+            return None
+        log.info("surrender, not an attempt: %r — escalating without a judge", text[:40])
+        return AnswerVerdict(
+            intent="ANSWER",
+            verdict="INCORRECT",
+            feedback=SURRENDER_FEEDBACK,
+        )
 
     def _judge(self, llm: LLMClient, context: str) -> AnswerVerdict:
         return llm.run_with_tools(

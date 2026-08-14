@@ -575,3 +575,56 @@ class TestAnEquationStepHidesItsContent:
     def test_a_bare_variable_name_is_not_content(self):
         # "y를 구해 볼까요?" must not trip on the "y" left of the equals sign
         assert not leaks_answer("y를 어떻게 구할까요?", self.TANGENT_REF, 5)
+
+
+class TestATemplateNeverWearsASentence:
+    """Live: a solver-written reference had steps like "함수 f(x)의 도함수
+    f'(x)를 구합니다." and the concept template glued a particle straight onto
+    it — "…구합니다.가 먼저예요". A step that reads as a sentence cannot fill
+    {step}; the template is skipped and the phrasing model, which can inflect,
+    gets the turn instead."""
+
+    def db_with_template(self):
+        from tutor.knowledge.db import KnowledgeDB
+        from tutor.knowledge.models import HintTemplate
+        db = KnowledgeDB(":memory:")
+        db.insert_concept("differentiation", "미분")
+        db.insert_hint_template(HintTemplate(
+            id="t1", concept_id="differentiation", level=2,
+            template_text="{step}가 먼저예요.",
+        ))
+        return db
+
+    def reference(self, description):
+        return ReferenceSolution(
+            steps=[SolutionStep(idx=1, description=description, expression="f'(x) = 2*x - 4")],
+            final_answer=Answer(kind="SCALAR", value="49"),
+            concepts=["differentiation"], verified=True, origin="db",
+        )
+
+    def generate(self, db, reference):
+        from tutor.hints.generator import HintGenerator
+        from tutor.knowledge.models import MatchResult, Tier
+        from tutor.policy.engine import Action, Decision
+        from tutor.vision.recognizer import Recognition
+        gen = HintGenerator(EchoLLMClient(), db)
+        return gen.generate(
+            Decision(Action.CONCEPT_HINT, 2, 1, None, "t"),
+            MatchResult(tier=Tier.EXACT, concepts=["differentiation"], reference=reference),
+            reference, Recognition(problem_text="p"), [],
+        )
+
+    def test_a_sentence_step_skips_the_template(self):
+        db = self.db_with_template()
+        text = self.generate(db, self.reference("함수 f(x)의 도함수 f'(x)를 구합니다."))
+        assert "구합니다.가" not in text and "구합니다가" not in text
+
+    def test_a_noun_step_still_rides_it(self):
+        db = self.db_with_template()
+        text = self.generate(db, self.reference("접선 l의 기울기 구하기"))
+        assert text == "접선 l의 기울기 구하기가 먼저예요."
+
+    def test_trailing_punctuation_is_stripped_either_way(self):
+        db = self.db_with_template()
+        text = self.generate(db, self.reference("접선 l의 기울기 구하기."))
+        assert text == "접선 l의 기울기 구하기가 먼저예요."

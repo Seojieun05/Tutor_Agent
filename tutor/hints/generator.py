@@ -14,6 +14,13 @@ import re
 from pydantic import BaseModel, field_validator
 
 from tutor.hints.guard import leaks_answer
+
+# the verbal endings a Korean sentence closes on; a step description carrying
+# one cannot take a particle, so it may not fill a hint template's {step}
+_SENTENCE_STEP_RE = re.compile(
+    r"(?:습니다|ㅂ니다|합니다|입니다|한다|이다|된다|간다|온다|"
+    r"어요|아요|여요|해요|예요|에요|돼요|네요|세요|하죠|이죠|죠)$"
+)
 from tutor.knowledge import mathnorm
 from tutor.knowledge.db import KnowledgeDB
 from tutor.knowledge.models import MatchResult, ReferenceSolution
@@ -337,6 +344,20 @@ class HintGenerator:
         # ends up asking the same question after the student has progressed.
         given = {h.hint_text for h in history if h.hint_text}
 
+        # A template glues Korean onto its slots, so a slot has to be a NOUN.
+        # Step descriptions are only nouns when they were written for this
+        # ("접선 l의 기울기 구하기"); a solver writes sentences ("f'(x)를
+        # 구합니다."), and a live hint came out "…구합니다.가 먼저예요" — a
+        # sentence wearing a particle. A step that reads as a sentence is
+        # withheld from the templates (they skip on the missing slot) and the
+        # phrasing model, which can inflect, gets it instead.
+        template_slots = dict(slots)
+        step = template_slots.get("step", "").strip().rstrip(" .!?…")
+        if step and _SENTENCE_STEP_RE.search(step):
+            del template_slots["step"]
+        elif step:
+            template_slots["step"] = step
+
         # 1) Verified DB pedagogy first (spec rule 1) — concept/misconception
         # specific templates only; fully-generic ones stay the last resort.
         for template in self.db.hint_templates_for(
@@ -345,7 +366,7 @@ class HintGenerator:
             if template.concept_id is None and template.misconception_id is None:
                 continue
             try:
-                text = template.template_text.format(**slots)
+                text = template.template_text.format(**template_slots)
             except (KeyError, IndexError):
                 continue  # a slot we cannot fill
             if text in given:

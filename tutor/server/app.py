@@ -191,9 +191,11 @@ def wrap_with_cache(settings: Settings, speaker):
         WORK_CONFIRMED,
     )
     from tutor.speech.filler import FILLER_PHRASES, WORK_CHECK_NARRATIONS, CachedSpeech
+    from tutor.state.answer import SURRENDER_FEEDBACK
 
     repeated = [
         *FILLER_PHRASES,
+        SURRENDER_FEEDBACK,
         *(t for t in FIXED_ACTIONS.values() if t),
         *RETRY_PROMPTS.values(),
         PROBLEM_DONE,

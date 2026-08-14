@@ -530,3 +530,47 @@ class TestStudentQuestions:
         history = session.store.get_history(problem_hash="p1")
         assert history[0].effective is True      # the original question resolved
         assert history[-1].step == 2             # and we moved on
+
+
+class TestSurrenderIsNotGraded:
+    """Live: "음, 잘 모르겠는데." went to the judge, the judge said INCORRECT,
+    the second opinion spent 2.8s agreeing, and the feedback told a student
+    who had just said they cannot think of anything to think a bit more —
+    immediately before helping anyway. A surrender is not an attempt: nothing
+    needs a model, and the reaction must be warmth, not a nudge."""
+
+    class NoJudge:
+        def run_with_tools(self, **kw):
+            raise AssertionError("the judge was consulted for a surrender")
+
+    def evaluator(self):
+        from tutor.state.answer import AnswerEvaluator
+        return AnswerEvaluator(self.NoJudge(), second_opinion=self.NoJudge())
+
+    @pytest.mark.parametrize("said", [
+        "음, 잘 모르겠는데.",
+        "모르겠어요",
+        "힌트 주세요",
+        "어떻게 하는지 모르겠어요...",
+        "미분해야 하는지 모르겠어요",   # not knowing the APPROACH is being stuck
+    ])
+    def test_a_surrender_escalates_without_a_judge(self, said):
+        from tutor.state.answer import SURRENDER_FEEDBACK
+        v = self.evaluator().evaluate(
+            problem_text="p", reference=REFERENCE, question="q",
+            target_step=1, transcript=said,
+        )
+        assert v.verdict == "INCORRECT"          # the pending hint failed
+        assert v.intent == "ANSWER"
+        assert v.feedback == SURRENDER_FEEDBACK  # warmth, never "think more"
+
+    @pytest.mark.parametrize("said", [
+        "5인 것 같은데 잘 모르겠어요",             # carries a value: grade it
+        "x는 2 아닌가요? 모르겠네요",
+    ])
+    def test_an_attempt_wearing_doubt_still_reaches_the_judge(self, said):
+        with pytest.raises(AssertionError, match="judge was consulted"):
+            self.evaluator().evaluate(
+                problem_text="p", reference=REFERENCE, question="q",
+                target_step=1, transcript=said,
+            )
