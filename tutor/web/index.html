@@ -587,7 +587,7 @@
        52.4–100%: it never quite finished uncovering and never quite started
        covered, which is a wipe that does not wipe. */
     .boardline.laying, .boardfigure.laying {
-      animation:inked 0s both, laydown var(--lay, .62s) cubic-bezier(.3,.6,.35,1) both;
+      animation:inked 0s both, laydown var(--lay, .46s) cubic-bezier(.3,.6,.35,1) both;
       -webkit-mask-image:linear-gradient(90deg, #000 0 34%, transparent 66%);
               mask-image:linear-gradient(90deg, #000 0 34%, transparent 66%);
       -webkit-mask-size:300% 100%;   mask-size:300% 100%;
@@ -599,8 +599,8 @@
       -webkit-mask-image:none; mask-image:none;
     }
     @keyframes laydown {
-      from { -webkit-mask-position:100% 0; mask-position:100% 0; opacity:1; }
-      to   { -webkit-mask-position:0% 0;   mask-position:0% 0;   opacity:1; }
+      from { -webkit-mask-position:100% 0; mask-position:100% 0; }
+      to   { -webkit-mask-position:0% 0;   mask-position:0% 0; }
     }
   }
 
@@ -851,9 +851,16 @@
      holds ONE pose and the pose is aimed along the path. */
   #tutor.flying .clip { opacity:0; }
   #tutor.flying .still { opacity:1; }
-  /* waiting: it floats, the way anything neutrally buoyant does. On the
-     INNER element, because the outer one is carrying the flight. */
-  #tutor .float { position:absolute; inset:0; }
+  /* Waiting: it floats, the way anything neutrally buoyant does. On the INNER
+     element, because the outer one is carrying the flight — and during a pass
+     this same element carries the PULSE.
+     transform-origin matches #tutor's, so both turn about the character rather
+     than about a corner of empty water. Because #tutor already holds the
+     rotation, this element's own y-axis IS the direction of travel: scaleY < 1
+     is literally "contracted along travel" and needs no trigonometry. */
+  #tutor .float {
+    position:absolute; inset:0; transform-origin:35.2% 51.4%;
+  }
   @media (prefers-reduced-motion: no-preference) {
     #tutor .float { animation:bob 5.4s ease-in-out infinite; }
     @keyframes bob {
@@ -1530,6 +1537,7 @@ function onBinary(buffer) {
 // held up by an animation.
 // ===========================================================================
 const tutor = $("tutor");
+const float = tutor.querySelector(".float");
 
 // Where the character sits inside its own frame when it is standing still,
 // measured off the asset (tools that cut it print this). It is also the
@@ -1561,11 +1569,27 @@ function goHome(ms = 620) {
 // board WAS. If the window changes size mid-flight there is nothing live to
 // measure, so the trip is abandoned and the character goes home.
 function reperch() {
+  // A flight is checked FIRST, but only against the rect it was actually
+  // built from. Its path, the ink under it and every line's reveal delay came
+  // out of one measurement of the writing area, so if that area has moved
+  // there is nothing left to correct the trip to and it is abandoned. If it
+  // has NOT moved this is just noise — the ResizeObserver fires every time a
+  // line is appended, and treating that as a resize destroyed the pass on its
+  // own first line.
+  if (flight) {
+    const now = document.querySelector(".writing").getBoundingClientRect();
+    const moved = ["left", "top", "width", "height"]
+      .some((k) => Math.abs(now[k] - passRect[k]) > 1);
+    if (!moved) return;
+    clearInk();
+    goHome(0);
+    return;
+  }
   if (perch.anchor && perch.anchor.isConnected) {
     land(perch.anchor, { ...perch, ms: 0 });
     return;
   }
-  clearInk();                            // drop the rest of a trip mid-flight
+  clearInk();
   goHome(0);
 }
 
@@ -1643,7 +1667,9 @@ function setStage(text) {
 // glide are not an easing anyone chose by eye.
 let wroteThisTurn = false;
 let inkTimers = [];
-let flight = null;                     // the WAAPI animation carrying the pass
+let flight = null;                     // where the character is, and its heading
+let passRect = { left: 0, top: 0, width: 0, height: 0 };  // what it was built from
+let pulse = null;                      // what shape it is in, on its own clock
 
 // The reference's own jet, normalised: distance covered by the fraction of the
 // stroke elapsed, sampled at 40 ms. Fed to the keyframes as offsets, so the
@@ -1654,13 +1680,20 @@ const JET = [
   .648, .715, .776, .830, .873, .915, .945, .970, .982, .994, 1,
 ];
 
-// A shallow descent right across the area, so the stroke passes near EVERY
-// line rather than diving under them: the ink is what the writing comes out
-// of, so it has to have been where the writing is.
-// It has to descend past the LAST line, or every line below where the stroke
-// levels out is reached at the same moment and the stagger collapses.
+// RIGHT to left, and that is not a compositional preference — it is the only
+// way the approach is a movement at all. The tutor lives in the chat header on
+// the right; launching from the left meant crossing the whole window to get
+// there, measured at 1035 px in 220 ms, whose peak frame moved the character
+// 216 px — nearly three times its own length in one frame, with seven frames
+// over a full body length. That is a teleport with an easing curve on it, and
+// it is also two crossings of the text for one gesture. Launching near the
+// right of the writing area makes the approach about 300 px and leaves exactly
+// one crossing.
+//
+// It descends past the LAST line, or every line below where the stroke levels
+// out is reached at the same moment and the stagger collapses.
 const PASS = {                         // the stroke, in fractions of the area
-  from: { x: .03, y: .13 }, ctrl: { x: .48, y: .34 }, to: { x: .92, y: .84 },
+  from: { x: .90, y: .10 }, ctrl: { x: .50, y: .30 }, to: { x: .10, y: .84 },
 };
 // Short. This plays on the way to an answer the student is waiting for, and
 // the first line is readable a third of a second in.
@@ -1673,6 +1706,9 @@ const PUFFS = 12;
 const LOOK = .12;
 // Nothing the tutor wrote waits longer than this to start being readable.
 const LAY_LATEST = 620;
+// the least a line waits behind the one above it, so a cramped board still
+// reads as one thing being written after another
+const LAY_STEP = 130;
 
 /** A point on the stroke, and the direction it is heading there. */
 function onPass(s, w, h) {
@@ -1705,6 +1741,7 @@ function clearInk() {
   inkTimers.forEach(clearTimeout);
   inkTimers = [];
   if (flight) { flight.cancel(); flight = null; }
+  if (pulse) { pulse.cancel(); pulse = null; }
   tutor.classList.remove("flying");
   $("boardInk").classList.remove("wet");
   $("inkPuffs").textContent = "";
@@ -1735,6 +1772,8 @@ function inkPass() {
   const r = area.getBoundingClientRect();
   if (!r.width) return;
   clearInk();
+  // remembered so a later resize can tell a real one from ResizeObserver noise
+  passRect = { left: r.left, top: r.top, width: r.width, height: r.height };
 
   if (STILL.matches) {                   // no flight, no ink: just be there
     perch = { anchor: $("squidBoard"), scale: 1.05, tilt: 0 };
@@ -1766,9 +1805,12 @@ function inkPass() {
   // properties would let them arrive at different moments.
   const home = $("squidHome").getBoundingClientRect();
   const box = { w: tutor.offsetWidth, h: tutor.offsetHeight };
-  const put = (x, y, deg, sc) =>
+  // Position and heading only. The SHAPE lives on .float, on its own clock:
+  // welding them together is what makes a character turn hardest exactly when
+  // it is moving fastest, which is a cursor's behaviour and not an animal's.
+  const put = (x, y, deg) =>
     `translate3d(${(x - box.w * SQ_CX).toFixed(1)}px, ` +
-    `${(y - box.h * SQ_CY).toFixed(1)}px, 0) rotate(${deg.toFixed(1)}deg) scale(${sc})`;
+    `${(y - box.h * SQ_CY).toFixed(1)}px, 0) rotate(${deg.toFixed(1)}deg)`;
   const at = (s) => {
     const p = onPass(s, r.width, r.height);
     return { ...p, vx: r.left + p.x, vy: r.top + p.y };
@@ -1777,6 +1819,15 @@ function inkPass() {
   const total = BEATS.reach + BEATS.coil + BEATS.jet + BEATS.settle;
   const f0 = at(0), f1 = at(1);
   const head0 = aim(f0.dx, f0.dy);
+  // UNIT vectors. The curve's derivative is in pixels-per-unit-of-s and runs
+  // to several hundred, so offsetting by a fraction of it made the recoil
+  // scale with the width of the board: 11% of the tangent was a 75 px pull
+  // back, which the first frame of the thrust then snapped across in one go.
+  // The recoil belongs to the ANIMAL, so it is measured in its own body.
+  const unit = (v) => { const m = Math.hypot(v.dx, v.dy) || 1;
+                        return { x: v.dx / m, y: v.dy / m }; };
+  const u0 = unit(f0), u1 = unit(f1);
+  const BODY = box.h * .9;             // the character's own length, near enough
   let last = 0;                        // the previous heading, for unwrapping
   const heading = (s) => {
     // aimed where it is GOING, not where it is: LOOK ahead on the stroke
@@ -1785,36 +1836,58 @@ function inkPass() {
   };
   const frames = [];
   // where it is coming from, already turning to face the way it will go
-  frames.push({ offset: 0, easing: "cubic-bezier(.3,0,.35,1)",
-                transform: put(home.left + home.width / 2, home.top + home.height / 2,
-                               0, 1) });
+  frames.push({ offset: 0, easing: "cubic-bezier(.32,.04,.28,1)",
+                transform: put(home.left + home.width / 2,
+                               home.top + home.height / 2, 0) });
   // arrives just short of the start, ALREADY aimed — the turn belongs to the
   // coast, so that the thrust itself is pure acceleration with no turn in it
-  frames.push({ offset: BEATS.reach / total, easing: "cubic-bezier(.4,0,.6,1)",
-                transform: put(f0.vx - f0.dx * .04, f0.vy - f0.dy * .04,
-                               (last = near(head0, 0)), 1.14) });
-  // the coil: a small recoil BACKWARD along its own heading, and a squeeze.
-  // Anticipation is what makes the launch read as effort rather than teleport.
+  frames.push({ offset: BEATS.reach / total, easing: "cubic-bezier(.55,0,.85,.4)",
+                transform: put(f0.vx - u0.x * BODY * .12, f0.vy - u0.y * BODY * .12,
+                               (last = near(head0, 0))) });
+  // the intake: it opens, takes water in, and the inflow pushes it BACKWARD
+  // along its own heading. The one slow beat in the pass, and the reason the
+  // next 620 ms reads as an impulse instead of a slide.
   frames.push({ offset: (BEATS.reach + BEATS.coil) / total, easing: "linear",
-                transform: put(f0.vx - f0.dx * .10, f0.vy - f0.dy * .10, last - 5, 0.96) });
+                transform: put(f0.vx - u0.x * BODY * .34, f0.vy - u0.y * BODY * .34,
+                               last - 5) });
   // the jet: sampled along the stroke at the reference's own speed
   JET.forEach((s, i) => {
-    const p = at(s);
     const u = i / (JET.length - 1);
+    const p = at(s);
     frames.push({
       offset: (BEATS.reach + BEATS.coil + BEATS.jet * u) / total,
       easing: "linear",
-      // stretched into the thrust, easing back as it glides
-      transform: put(p.vx, p.vy, heading(s), 1.18 - .16 * s),
+      transform: put(p.vx, p.vy, heading(s)),
     });
   });
   // follow-through: it drifts a little past the end and starts to right itself
-  const settled = put(f1.vx + f1.dx * .05, f1.vy + f1.dy * .05, near(0, last) * .4, 1.02);
+  const settled = put(f1.vx + u1.x * BODY * .18, f1.vy + u1.y * BODY * .18,
+                      near(0, last) * .4);
   frames.push({ offset: 1, easing: "cubic-bezier(.2,.6,.3,1)", transform: settled });
+
+  // The PULSE, on its own clock. A squid does not change size, it changes
+  // shape: full and short across the intake, thin and long down the thrust.
+  // Because #tutor holds the rotation, y here is along travel — see .float.
+  const T = (ms) => ms / total;
+  const poseHome = "scale(1, 1)";
+  const pose = [
+    { offset: 0, transform: poseHome, easing: "cubic-bezier(.35,.05,.6,1)" },
+    { offset: T(BEATS.reach), transform: "scale(1.02, 1.06)", easing: "cubic-bezier(.55,0,.85,.4)" },
+    // squash peaks BEFORE the stroke starts: anticipation
+    { offset: T(BEATS.reach + BEATS.coil * .9), transform: "scale(1.22, .80)",
+      easing: "cubic-bezier(.1,.9,.25,1)" },
+    // and the stretch peaks a beat AFTER it: follow-through
+    { offset: T(BEATS.reach + BEATS.coil + 70), transform: "scale(.83, 1.32)",
+      easing: "cubic-bezier(.2,.7,.35,1)" },
+    { offset: T(BEATS.reach + BEATS.coil + BEATS.jet), transform: "scale(.97, 1.06)",
+      easing: "ease-out" },
+    { offset: 1, transform: poseHome },
+  ];
 
   tutor.classList.add("flying");
   tutor.style.setProperty("--fly", "0ms");   // the flight owns the transform now
   flight = tutor.animate(frames, { duration: total, fill: "forwards" });
+  pulse = float.animate(pose, { duration: total, fill: "forwards" });
 
   // --- the ink -------------------------------------------------------------
   ink.classList.add("wet");
@@ -1823,9 +1896,11 @@ function inkPass() {
     const s = (i + .5) / PUFFS;
     const p = onPass(s, r.width, r.height);
     const len = Math.hypot(p.dx, p.dy) || 1;
-    // it leaves from UNDER THE ARMS, which trail behind the mantle: back along
-    // the heading by about half the character, and a little below it
-    const back = box.w * .34;
+    // It leaves from UNDER THE ARMS, which trail behind the mantle: back along
+    // the heading, and a little below. Measured off the box's LONG axis, since
+    // that is the one the character's own length lies on — so it follows the
+    // phone breakpoint down to --sq:62 without a second number.
+    const back = box.h * .44;
     const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
     c.setAttribute("class", "puff");
     c.setAttribute("r", (7 + (i % 3) * 2.5).toFixed(1));
@@ -1876,7 +1951,9 @@ function inkPass() {
     // chat header, from before the pass — and the tutor teleports home instead
     // of swimming back.
     tutor.style.transform = settled;
+    float.style.transform = poseHome;
     if (flight) { flight.cancel(); flight = null; }
+    if (pulse) { pulse.cancel(); pulse = null; }
     tutor.classList.remove("flying");
     goHome(620);
   }, total + 180));
@@ -2001,9 +2078,11 @@ function goWrite() {
   if (wroteThisTurn) return;
   wroteThisTurn = true;
   passStartedAt = performance.now();
+  layFloor = 0;                        // a new pass starts the cascade again
   inkPass();
 }
 let passStartedAt = 0;
+let layFloor = 0;                      // the last line's moment, for the floor
 
 /** Uncover a line in the ink's wake, at the moment the ink actually gets there.
  *
@@ -2026,7 +2105,17 @@ function lay(line) {
   // LEAD it. The ink is underneath now, so the writing can start coming
   // through as the cloud arrives rather than after it has gone by, and being
   // early is the right way to be wrong when a student is waiting to read.
-  const when = inkReaches(Math.max(0, Math.min(1, mid))) - 150;
+  // Where the ink gets to this line — and never sooner than a beat after the
+  // line above it. On a tall board the geometry does all the work; on a short
+  // one every line sits within a few percent of the same height, the geometry
+  // returns nearly the same moment for all of them, and the cascade collapses
+  // into everything appearing at once. The floor keeps it a sequence exactly
+  // where there is no room for one.
+  const geometric = inkReaches(Math.max(0, Math.min(1, mid))) - 150;
+  const elapsed = performance.now() - passStartedAt;
+  layFloor = Math.max(layFloor + LAY_STEP, elapsed);
+  const when = Math.max(geometric, layFloor);
+  layFloor = when;
   // Bounded at both ends. Zero below, because a line whose moment has already
   // passed is simply shown; and a ceiling above, because the delay is derived
   // from geometry and geometry can put a line anywhere — nothing the tutor has
@@ -2034,18 +2123,23 @@ function lay(line) {
   const wait = Math.min(LAY_LATEST, Math.max(0,
     when - (performance.now() - passStartedAt)));
   line.classList.add("laying");
-  // quicker than the stroke that is uncovering it, so the writing never lags
-  // visibly behind the thing supposedly making it
+  // Quicker than the stroke that is uncovering it, so the writing never lags
+  // visibly behind the thing supposedly making it. Restarted in place first:
+  // an animation declared by a class that was added during a forced layout has
+  // been seen adopting the document's start time rather than its own, which
+  // finishes the wipe before the line is ever painted.
+  line.style.animation = "none";
+  void line.getBoundingClientRect();
+  line.style.animation = "";
   line.style.setProperty("--lay", ".46s");
   line.style.animationDelay = `0s, ${wait.toFixed(0)}ms`;
   // And the mask comes off when it has done its work, so a lesson's worth of
-  // steps is not left on a lesson's worth of composited layers.
-  //
-  // By NAME, not by "the first animationend": `.laying` declares two, and the
-  // other one is `inked 0s`, which finishes within the frame it starts in — a
-  // bare listener took the mask off before the wipe had begun and every line
-  // simply appeared. The timer is the backstop, because a backgrounded tab
-  // pauses the animation and animationend would then never come at all.
+  // steps is not left on a lesson's worth of composited layers. The timer is
+  // the backstop, because a backgrounded tab pauses the animation and onfinish
+  // would then never come at all.
+  // By NAME: `.laying` declares two animations and the other, `inked 0s`,
+  // finishes inside the frame it starts in — a bare animationend listener took
+  // the mask off before the wipe had begun and every line simply appeared.
   const done = () => line.classList.add("dry");
   line.addEventListener("animationend", (e) => {
     if (e.animationName === "laydown") done();
