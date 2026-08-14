@@ -473,27 +473,61 @@
      statement, and a squid swimming over the question it was asked is the
      one place on this page it must not be. */
   .writing { position:relative; flex:1 1 auto; min-height:0; display:flex; }
-  /* where the tutor stands when it is at the board and not moving — a real
+  /* Where the tutor stands when it is at the board and not moving — a real
      element, so a resize has something live to measure rather than a point
-     remembered from before the window changed size */
-  #squidBoard { position:absolute; left:9%; top:10%; width:0; height:0; }
+     remembered from before the window changed size. Out at the right margin,
+     not at 9%/10%: that put it directly on top of the first step it had just
+     written, which is the one place on the board it must never sit. */
+  #squidBoard { position:absolute; right:1%; top:6%; width:0; height:0; }
 
-  /* The ink the tutor lets go of as it swims across, and the trail it
-     leaves. Its viewBox is set to the area's own pixel size before each pass,
-     so one unit is one pixel: a stretched viewBox would make the dash that
-     draws the stroke a different length from the stroke itself, and the trail
-     came out as four separate smears. */
+  /* The ink. Its viewBox is set to the area's own pixel size before each pass,
+     so one unit is one pixel — a stretched viewBox made the dash that draws
+     the stroke a different length from the stroke itself, and the trail came
+     out as four separate smears.
+
+     UNDER the writing, not over it. That is both the legibility fix and the
+     whole meaning of the thing: ink on top of a formula is a smear the student
+     has to read through, ink underneath is the ground the letters rise out of
+     — which is what 먹물이 지나간 자리에 판서가 시작된다 actually describes. It also
+     buys the ink permission to be more present, since it can no longer touch
+     the contrast of anything being read.
+
+     A PLUME, not a stroke: ink in water blooms and thins, and a single even
+     line is a highlighter, which is exactly what the first attempt looked
+     like. Three things make it not one — a wide blurred bloom, a thin front so
+     the eye can see where it is coming from, and a gradient along the whole
+     length, because UNIFORMITY is the tell. The ink at the launch is the
+     oldest and most spread; the ink at the head was let go a moment ago. */
   #boardInk {
     position:absolute; inset:0; width:100%; height:100%;
-    pointer-events:none; opacity:0; z-index:2;
-    transition:opacity .45s ease;
+    pointer-events:none; opacity:0; z-index:0;
+    transition:opacity .55s ease;
   }
   #boardInk.wet { opacity:1; transition:none; }
-  #inkTrail {
-    fill:none; stroke:var(--accent-deep); stroke-linecap:round;
-    stroke-linejoin:round; stroke-width:10; opacity:.26;
+  /* Four round-capped strokes on one path instead of one blurred stroke.
+     Overlapping round caps at falling width and rising opacity give the same
+     soft shoulder, and nothing has to be re-rasterised through a filter every
+     frame — which matters because this plays while the same laptop is running
+     the VAD, an STT call and TTS. */
+  #boardInk .ink {
+    fill:none; stroke:url(#inkFade);
+    stroke-linecap:round; stroke-linejoin:round;
   }
-  #boardInk .drop { fill:var(--accent-deep); opacity:0; }
+  #inkA { stroke-width:30;  opacity:.085; }
+  #inkB { stroke-width:17;  opacity:.14; }
+  #inkC { stroke-width:8.5; opacity:.30; }
+  #inkTrail { stroke-width:3; opacity:.46; }
+  /* var() is not valid inside an SVG presentation attribute, so the stops are
+     coloured from here — where it also follows the scheme like everything else */
+  #inkFade stop, #inkPuff stop { stop-color:var(--accent-deep); }
+  /* fill-box, or the transform-origin is the whole SVG and a swelling blob
+     slides across the board instead of blooming where it was let go */
+  #boardInk .puff {
+    fill:url(#inkPuff); opacity:0;
+    transform-box:fill-box; transform-origin:50% 50%;
+  }
+  /* the writing sits above its own ink */
+  #boardLines { position:relative; z-index:1; }
 
   #boardLines {
     flex:1 1 auto; min-width:0; overflow-y:auto;
@@ -525,13 +559,48 @@
     letter-spacing:-.01em; word-break:keep-all;
   }
   @media (prefers-reduced-motion: no-preference) {
-    /* it surfaces out of the ink rather than switching on, and it is held
-       back just long enough for the stroke to have passed over it */
-    .boardline { animation:inked .55s cubic-bezier(.2,.7,.3,1) both; }
+    /* A line that arrives outside a pass simply surfaces — and it surfaces
+       out of the ink's own colour into the writing's, which is the cheapest
+       possible way of saying the ink BECAME the step. */
+    .boardline { animation:inked .5s cubic-bezier(.2,.7,.3,1) both; }
     @keyframes inked {
-      0%   { opacity:0; transform:translate(-10px, -6px); filter:blur(5px); }
-      45%  { opacity:.45; filter:blur(2px); }
-      100% { opacity:1; transform:none; filter:none; }
+      0%   { opacity:0; transform:translateY(-4px); filter:blur(3px);
+             color:var(--accent-deep); }
+      100% { opacity:1; transform:none; filter:none; color:var(--text); }
+    }
+
+    /* A line the ink is laying down is UNCOVERED left to right, in the wake of
+       the squid, so the writing looks put there rather than switched on.
+
+       The wipe is mask-position and not a registered @property: a custom
+       property needs @property to animate at all, and where that is missing
+       the mask would sit at its initial value and hide the line for good.
+       mask-position animates everywhere, and its own default — 0%, the solid
+       end of the gradient — is FULLY VISIBLE. If the animation never runs, for
+       any reason, the student still reads the step. */
+    /* The geometry has to be exact or the mechanism silently half-works. A
+       percentage mask-position lines the image's P% up with the box's P%, so
+       at 300% the box sees image fractions 0–33% at 0% and 67–100% at 100%.
+       Stops at 34% and 66% therefore put the box ENTIRELY inside the solid end
+       at one extreme and ENTIRELY inside the clear end at the other. The first
+       attempt used 210% with stops at 46/60, where the box sees 0–47.6% and
+       52.4–100%: it never quite finished uncovering and never quite started
+       covered, which is a wipe that does not wipe. */
+    .boardline.laying, .boardfigure.laying {
+      animation:inked 0s both, laydown var(--lay, .62s) cubic-bezier(.3,.6,.35,1) both;
+      -webkit-mask-image:linear-gradient(90deg, #000 0 34%, transparent 66%);
+              mask-image:linear-gradient(90deg, #000 0 34%, transparent 66%);
+      -webkit-mask-size:300% 100%;   mask-size:300% 100%;
+      -webkit-mask-repeat:no-repeat; mask-repeat:no-repeat;
+    }
+    /* and the mask comes OFF when it is done: a board holding a lesson's worth
+       of steps should not keep every one of them on its own composited layer */
+    .boardline.dry, .boardfigure.dry {
+      -webkit-mask-image:none; mask-image:none;
+    }
+    @keyframes laydown {
+      from { -webkit-mask-position:100% 0; mask-position:100% 0; opacity:1; }
+      to   { -webkit-mask-position:0% 0;   mask-position:0% 0;   opacity:1; }
     }
   }
 
@@ -776,6 +845,12 @@
      swap never moves the character */
   #tutor.busy .still { opacity:0; }
   #tutor.busy .clip { opacity:1; }
+  /* Except while it is crossing the board. The loop is a squid tumbling on the
+     spot; rotating a tumbling squid along a flight path is two motions arguing,
+     and it was most of why the pass read as a sprite being dragged. Flying, it
+     holds ONE pose and the pose is aimed along the path. */
+  #tutor.flying .clip { opacity:0; }
+  #tutor.flying .still { opacity:1; }
   /* waiting: it floats, the way anything neutrally buoyant does. On the
      INNER element, because the outer one is carrying the flight. */
   #tutor .float { position:absolute; inset:0; }
@@ -785,8 +860,9 @@
       0%, 100% { transform:translateY(0) rotate(0deg); }
       50%      { transform:translateY(-7px) rotate(-2.5deg); }
     }
-    /* the clip is already swimming, so the float would be swimming twice */
-    #tutor.busy .float { animation:none; }
+    /* the clip is already swimming, so the float would be swimming twice —
+       and neither belongs under a flight that is carrying its own motion */
+    #tutor.busy .float, #tutor.flying .float { animation:none; }
   }
 
   /* the maths it is chewing on, drifting round it. Placed on the character's
@@ -804,8 +880,9 @@
   /* Shown only where they can drift. Without the animation all six sit on the
      same point, which is not a quieter version of the effect but a pile of
      glyphs on the character's face. */
+  #tutor.flying .halo { opacity:0; }
   @media (prefers-reduced-motion: no-preference) {
-    #tutor.busy .halo { opacity:1; }
+    #tutor.busy:not(.flying) .halo { opacity:1; }
     #tutor.busy .halo i { animation:mutter 5.2s ease-in-out infinite both; }
     /* six of them, each on its own arc and its own clock, so they never line
        up into a ring */
@@ -1082,12 +1159,31 @@
             </div>
           </div>
 
-          <!-- the ink the tutor trails as it swims across to write; the
-               viewBox is rewritten to the area's pixel size before each pass -->
+          <!-- The ink the tutor trails as it jets across to write; the viewBox
+               is rewritten to the area's pixel size before each pass. Twelve
+               blobs is enough for the trail to read as continuous at the speed
+               it moves, and few enough to leave the compositor alone. -->
           <svg id="boardInk" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
-            <path id="inkTrail" d=""/>
-            <circle class="drop"/><circle class="drop"/>
-            <circle class="drop"/><circle class="drop"/>
+            <defs>
+              <!-- stop-color comes from the stylesheet: see #inkFade stop -->
+              <radialGradient id="inkPuff">
+                <stop offset="0" stop-opacity=".55"/>
+                <stop offset="45%" stop-opacity=".30"/>
+                <stop offset="100%" stop-opacity="0"/>
+              </radialGradient>
+              <!-- along the stroke, launch to head: userSpaceOnUse because the
+                   two ends are written as pixel coordinates each pass -->
+              <linearGradient id="inkFade" gradientUnits="userSpaceOnUse">
+                <stop offset="0" stop-opacity=".26"/>
+                <stop offset="55%" stop-opacity=".72"/>
+                <stop offset="100%" stop-opacity="1"/>
+              </linearGradient>
+            </defs>
+            <path id="inkA" class="ink" d=""/>
+            <path id="inkB" class="ink" d=""/>
+            <path id="inkC" class="ink" d=""/>
+            <path id="inkTrail" class="ink" d=""/>
+            <g id="inkPuffs"></g>
           </svg>
           <div id="squidBoard"></div>
         </div>
@@ -1526,96 +1622,275 @@ function setStage(text) {
 }
 
 // --- the trip to the board --------------------------------------------------
-// The tutor goes over when there is something to write, swims from the top
-// left of the writing area down to the right letting the ink go, the lines
-// surface in the wake, and it comes back to the conversation — where, a
-// moment later, it starts talking. One trip per turn: a squid that shuttles
-// for every line of a four-line answer is a squid nobody can read past.
+// The tutor goes over when there is something to write, JETS across the
+// writing area letting the ink go behind it, the lines are uncovered in its
+// wake, and it comes back to the conversation — where, a moment later, it
+// starts talking. One trip per turn: a squid that shuttles for every line of a
+// four-line answer is a squid nobody can read past.
+//
+// A squid does not swim, it pulses: it fills its mantle, squeezes, and the
+// water leaving pushes it the other way — mantle first, arms streaming behind,
+// the jet coming out from under the arms. The first version of this had the
+// character sliding along a path at a constant speed with its tentacles
+// pointing at the floor the whole way, which is why it read as a sprite being
+// dragged rather than as an animal moving.
+//
+// So two things carry it. The character is AIMED: its rotation is the tangent
+// of the path it is on, plus the 90° that turns the drawn upright pose into a
+// swimming one. And its SPEED is the reference clip's own, measured off it
+// frame by frame — the leading edge of the drawn squid, every 40 ms, through
+// one jet — so the build, the peak at about 40% of the stroke and the long
+// glide are not an easing anyone chose by eye.
 let wroteThisTurn = false;
 let inkTimers = [];
-let inkOrder = 0, inkOrderAt = 0;      // this batch's place in the stagger
+let flight = null;                     // the WAAPI animation carrying the pass
 
-const PASS = [           // the sweep, in fractions of the writing area
-  { x: .09, y: .10 }, { x: .40, y: .38 }, { x: .72, y: .66 },
+// The reference's own jet, normalised: distance covered by the fraction of the
+// stroke elapsed, sampled at 40 ms. Fed to the keyframes as offsets, so the
+// browser interpolates a path position and the character accelerates exactly
+// as the reference does. Peak speed lands at sample 9 of 23.
+const JET = [
+  0, .006, .030, .061, .097, .145, .200, .267, .339, .424, .503, .576,
+  .648, .715, .776, .830, .873, .915, .945, .970, .982, .994, 1,
 ];
+
+// A shallow descent right across the area, so the stroke passes near EVERY
+// line rather than diving under them: the ink is what the writing comes out
+// of, so it has to have been where the writing is.
+// It has to descend past the LAST line, or every line below where the stroke
+// levels out is reached at the same moment and the stagger collapses.
+const PASS = {                         // the stroke, in fractions of the area
+  from: { x: .03, y: .13 }, ctrl: { x: .48, y: .34 }, to: { x: .92, y: .84 },
+};
+// Short. This plays on the way to an answer the student is waiting for, and
+// the first line is readable a third of a second in.
+const BEATS = { reach: 220, coil: 90, jet: 620, settle: 170 };
+const PUFFS = 12;
+// How far ahead on the stroke the character looks. A squid aims while it is
+// still coasting and contracts once it is pointed; rotating and translating on
+// the same clock means it turns hardest exactly when it is moving fastest,
+// which is what a cursor does and not what an animal does.
+const LOOK = .12;
+// Nothing the tutor wrote waits longer than this to start being readable.
+const LAY_LATEST = 620;
+
+/** A point on the stroke, and the direction it is heading there. */
+function onPass(s, w, h) {
+  const { from: a, ctrl: b, to: c } = PASS;
+  const u = 1 - s;
+  return {
+    x: (u * u * a.x + 2 * u * s * b.x + s * s * c.x) * w,
+    y: (u * u * a.y + 2 * u * s * b.y + s * s * c.y) * h,
+    // the derivative of the same quadratic: the tangent, in pixels
+    dx: (2 * u * (b.x - a.x) + 2 * s * (c.x - b.x)) * w,
+    dy: (2 * u * (b.y - a.y) + 2 * s * (c.y - b.y)) * h,
+  };
+}
+
+/** The rotation that points the drawn squid along a heading.
+ *
+ *  The art is upright — mantle at the top, arms hanging down — so it already
+ *  "points" at -90°. Adding 90° to the heading turns that into mantle-first.
+ */
+const aim = (dx, dy) => Math.atan2(dy, dx) * 180 / Math.PI + 90;
+
+/** The same angle, expressed nearest to where the character already is.
+ *
+ *  Without this a heading of 190° followed by one of -170° is a 360° spin
+ *  rather than the 20° it really is, and coming home from a leftward pass
+ *  turns the tutor round the long way. */
+const near = (deg, to) => deg + 360 * Math.round((to - deg) / 360);
 
 function clearInk() {
   inkTimers.forEach(clearTimeout);
   inkTimers = [];
+  if (flight) { flight.cancel(); flight = null; }
+  tutor.classList.remove("flying");
   $("boardInk").classList.remove("wet");
+  $("inkPuffs").textContent = "";
+  // Whatever was mid-wipe is now simply shown. Dropping the timers above took
+  // the backstop with them, and a step left under a half-finished mask is the
+  // one outcome this whole mechanism is not allowed to have.
+  for (const el of document.querySelectorAll(".laying:not(.dry)"))
+    el.classList.add("dry");
 }
 
-/** Go over to the writing area and sweep across it once. */
-function inkPass() {
-  const r = document.querySelector(".writing").getBoundingClientRect();
-  if (!r.width) return;
-  const at = (p) => ({ left: r.left + r.width * p.x, top: r.top + r.height * p.y,
-                       width: 0, height: 0,
-                       getBoundingClientRect() { return this; } });
+/** When the ink passes a height in the writing area, in ms from the pass start.
+ *
+ *  The stroke descends monotonically, so the sample whose y first reaches this
+ *  height is the moment — and because the samples ARE the reference's speed,
+ *  the answer is in real time and not in path length.  */
+function inkReaches(yFraction) {
+  for (let i = 1; i < JET.length; i++) {
+    if (onPass(JET[i], 1, 1).y >= yFraction) {
+      return BEATS.reach + BEATS.coil + BEATS.jet * (i / (JET.length - 1));
+    }
+  }
+  return BEATS.reach + BEATS.coil + BEATS.jet;
+}
 
+/** Go over to the writing area and jet across it once. */
+function inkPass() {
+  const area = document.querySelector(".writing");
+  const r = area.getBoundingClientRect();
+  if (!r.width) return;
   clearInk();
 
-  if (STILL.matches) {                   // no flight, no stroke: just be there
-    perch = { anchor: $("squidBoard"), scale: 1.1, tilt: 0 };
+  if (STILL.matches) {                   // no flight, no ink: just be there
+    perch = { anchor: $("squidBoard"), scale: 1.05, tilt: 0 };
     land(perch.anchor, { ...perch, ms: 0 });
     return;
   }
 
   const ink = $("boardInk");
   const trail = $("inkTrail");
+  const strokes = [...ink.querySelectorAll(".ink")];
   // one unit, one pixel — see the note on #boardInk
   ink.setAttribute("viewBox", `0 0 ${r.width.toFixed(0)} ${r.height.toFixed(0)}`);
-  const px = (p) => [r.width * p.x, r.height * p.y];
-  const [ax, ay] = px(PASS[0]), [bx, by] = px(PASS[1]), [cx, cy] = px(PASS[2]);
-  trail.setAttribute("d",
-    `M${ax.toFixed(0)} ${ay.toFixed(0)} Q${bx.toFixed(0)} ${(by - r.height * .06).toFixed(0)} ` +
-    `${cx.toFixed(0)} ${cy.toFixed(0)}`);
-  const len = trail.getTotalLength();
-  trail.style.transition = "none";
-  trail.style.strokeDasharray = len;
-  trail.style.strokeDashoffset = len;
-  ink.classList.add("wet");
 
-  // The drops fall from where the tentacles were, a beat behind the stroke.
-  // cy, not a transform: cy is a CSS geometry property and eases like any
-  // other, and it stays in the same pixel space as everything else here.
-  const drops = [...ink.querySelectorAll(".drop")];
-  drops.forEach((c, i) => {
-    const t = (i + 1) / (drops.length + 1);
-    c.setAttribute("r", [5, 8, 4, 6][i % 4]);
-    c.setAttribute("cx", (ax + (cx - ax) * t).toFixed(0));
-    c.dataset.y = (ay + (cy - ay) * t).toFixed(0);
-    c.style.transition = "none";
-    c.style.opacity = 0;
-    c.setAttribute("cy", c.dataset.y);
+  const start = onPass(0, r.width, r.height);
+  const end = onPass(1, r.width, r.height);
+  const d = `M${start.x.toFixed(1)} ${start.y.toFixed(1)} ` +
+            `Q${(PASS.ctrl.x * r.width).toFixed(1)} ${(PASS.ctrl.y * r.height).toFixed(1)} ` +
+            `${end.x.toFixed(1)} ${end.y.toFixed(1)}`;
+  strokes.forEach((s) => s.setAttribute("d", d));
+  // the gradient runs launch → head, so the oldest ink is the thinnest
+  const fade = $("inkFade");
+  fade.setAttribute("x1", start.x.toFixed(1)); fade.setAttribute("y1", start.y.toFixed(1));
+  fade.setAttribute("x2", end.x.toFixed(1));   fade.setAttribute("y2", end.y.toFixed(1));
+
+  // --- the character's own flight ------------------------------------------
+  // One animation, four beats, driven by keyframes whose offsets carry the
+  // measured speed. The transform is written whole each time because scale and
+  // rotation change together with position and a transition on three separate
+  // properties would let them arrive at different moments.
+  const home = $("squidHome").getBoundingClientRect();
+  const box = { w: tutor.offsetWidth, h: tutor.offsetHeight };
+  const put = (x, y, deg, sc) =>
+    `translate3d(${(x - box.w * SQ_CX).toFixed(1)}px, ` +
+    `${(y - box.h * SQ_CY).toFixed(1)}px, 0) rotate(${deg.toFixed(1)}deg) scale(${sc})`;
+  const at = (s) => {
+    const p = onPass(s, r.width, r.height);
+    return { ...p, vx: r.left + p.x, vy: r.top + p.y };
+  };
+
+  const total = BEATS.reach + BEATS.coil + BEATS.jet + BEATS.settle;
+  const f0 = at(0), f1 = at(1);
+  const head0 = aim(f0.dx, f0.dy);
+  let last = 0;                        // the previous heading, for unwrapping
+  const heading = (s) => {
+    // aimed where it is GOING, not where it is: LOOK ahead on the stroke
+    const p = onPass(Math.min(1, s + LOOK), r.width, r.height);
+    return (last = near(aim(p.dx, p.dy), last));
+  };
+  const frames = [];
+  // where it is coming from, already turning to face the way it will go
+  frames.push({ offset: 0, easing: "cubic-bezier(.3,0,.35,1)",
+                transform: put(home.left + home.width / 2, home.top + home.height / 2,
+                               0, 1) });
+  // arrives just short of the start, ALREADY aimed — the turn belongs to the
+  // coast, so that the thrust itself is pure acceleration with no turn in it
+  frames.push({ offset: BEATS.reach / total, easing: "cubic-bezier(.4,0,.6,1)",
+                transform: put(f0.vx - f0.dx * .04, f0.vy - f0.dy * .04,
+                               (last = near(head0, 0)), 1.14) });
+  // the coil: a small recoil BACKWARD along its own heading, and a squeeze.
+  // Anticipation is what makes the launch read as effort rather than teleport.
+  frames.push({ offset: (BEATS.reach + BEATS.coil) / total, easing: "linear",
+                transform: put(f0.vx - f0.dx * .10, f0.vy - f0.dy * .10, last - 5, 0.96) });
+  // the jet: sampled along the stroke at the reference's own speed
+  JET.forEach((s, i) => {
+    const p = at(s);
+    const u = i / (JET.length - 1);
+    frames.push({
+      offset: (BEATS.reach + BEATS.coil + BEATS.jet * u) / total,
+      easing: "linear",
+      // stretched into the thrust, easing back as it glides
+      transform: put(p.vx, p.vy, heading(s), 1.18 - .16 * s),
+    });
+  });
+  // follow-through: it drifts a little past the end and starts to right itself
+  const settled = put(f1.vx + f1.dx * .05, f1.vy + f1.dy * .05, near(0, last) * .4, 1.02);
+  frames.push({ offset: 1, easing: "cubic-bezier(.2,.6,.3,1)", transform: settled });
+
+  tutor.classList.add("flying");
+  tutor.style.setProperty("--fly", "0ms");   // the flight owns the transform now
+  flight = tutor.animate(frames, { duration: total, fill: "forwards" });
+
+  // --- the ink -------------------------------------------------------------
+  ink.classList.add("wet");
+  const puffs = $("inkPuffs");
+  for (let i = 0; i < PUFFS; i++) {
+    const s = (i + .5) / PUFFS;
+    const p = onPass(s, r.width, r.height);
+    const len = Math.hypot(p.dx, p.dy) || 1;
+    // it leaves from UNDER THE ARMS, which trail behind the mantle: back along
+    // the heading by about half the character, and a little below it
+    const back = box.w * .34;
+    const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    c.setAttribute("class", "puff");
+    c.setAttribute("r", (7 + (i % 3) * 2.5).toFixed(1));
+    c.setAttribute("cx", (p.x - p.dx / len * back).toFixed(1));
+    c.setAttribute("cy", (p.y - p.dy / len * back + 3).toFixed(1));
+    puffs.appendChild(c);
+    // born as the arms pass, then it blooms, drifts back and thins away
+    c.animate([
+      { offset: 0, opacity: 0, transform: "scale(.35)" },
+      { offset: .18, opacity: .85, transform: "scale(1)" },
+      // it drifts back against the direction of travel and SINKS, which is
+      // both what ink does and what puts it over the line about to be written
+      { offset: 1, opacity: 0,
+        transform: `translate(${(-p.dx / len * 9).toFixed(1)}px, ` +
+                   `${(-p.dy / len * 9 + 17).toFixed(1)}px) scale(2.6)` },
+    ], {
+      duration: 950,
+      delay: BEATS.reach + BEATS.coil + BEATS.jet * jetTimeFor(s),
+      easing: "cubic-bezier(.15,.7,.4,1)", fill: "both",
+    });
+  }
+
+  // The trail, drawn exactly as fast as the squid moves. Each layer's head
+  // lags a little further behind the one above it, so the wide diffuse edge
+  // trails the sharp one instead of arriving with it — which is what makes
+  // four hard strokes read as one soft plume.
+  const len = trail.getTotalLength();
+  strokes.forEach((path, i) => {
+    const lag = [74, 58, 46, 0][i];
+    path.style.transition = "none";
+    path.style.strokeDasharray = len;
+    path.style.strokeDashoffset = len;
+    path.animate(
+      JET.map((s, k) => ({
+        offset: k / (JET.length - 1),
+        strokeDashoffset: Math.min(len, Math.max(0, len * (1 - s) + lag)).toFixed(1),
+        easing: "linear",
+      })),
+      { duration: BEATS.jet, delay: BEATS.reach + BEATS.coil, fill: "forwards" });
   });
 
-  perch = { anchor: at(PASS[0]), scale: 1.2, tilt: -14 };
-  land(perch.anchor, { ...perch, ms: 360 });
-  inkTimers.push(setTimeout(() => {
-    trail.style.transition = "stroke-dashoffset .74s cubic-bezier(.35,.1,.3,1)";
-    trail.style.strokeDashoffset = 0;
-    perch = { anchor: at(PASS[1]), scale: 1.1, tilt: 16 };
-    land(perch.anchor, { ...perch, ms: 380 });
-    drops.forEach((c, i) => {
-      inkTimers.push(setTimeout(() => {
-        c.style.transition = "opacity .7s ease, cy .7s cubic-bezier(.3,0,.6,1)";
-        c.style.opacity = .30;
-        c.style.cy = (+c.dataset.y + 22) + "px";
-        inkTimers.push(setTimeout(() => { c.style.opacity = 0; }, 380));
-      }, 90 * i));
-    });
-  }, 340));
-  inkTimers.push(setTimeout(() => {
-    perch = { anchor: at(PASS[2]), scale: 1.05, tilt: 4 };
-    land(perch.anchor, { ...perch, ms: 420 });
-  }, 720));
   // and back to the conversation, which is where it is about to start talking
   inkTimers.push(setTimeout(() => {
-    trail.style.transition = "opacity .5s ease";
     ink.classList.remove("wet");
-    goHome(700);
-  }, 1280));
+    // The transform has to be HANDED OVER before the animation is dropped. A
+    // filled animation is not the element's style, it is layered on top of it,
+    // so cancelling one reverts to whatever the inline style still says — the
+    // chat header, from before the pass — and the tutor teleports home instead
+    // of swimming back.
+    tutor.style.transform = settled;
+    if (flight) { flight.cancel(); flight = null; }
+    tutor.classList.remove("flying");
+    goHome(620);
+  }, total + 180));
+}
+
+/** The fraction of the jet's DURATION at which the stroke reaches s. */
+function jetTimeFor(s) {
+  for (let i = 1; i < JET.length; i++) {
+    if (JET[i] >= s) {
+      const span = JET[i] - JET[i - 1] || 1;
+      return (i - 1 + (s - JET[i - 1]) / span) / (JET.length - 1);
+    }
+  }
+  return 1;
 }
 
 // --- the problem card and the board ----------------------------------------
@@ -1710,6 +1985,9 @@ function boardDraw(d) {
     const lines = $("boardLines");
     lines.scrollTop +=
       box.getBoundingClientRect().top - lines.getBoundingClientRect().top - 6;
+    // a sketch is something the tutor drew too, so the ink lays it down as
+    // well — otherwise a figure appears with no relation to the pass at all
+    if (fresh) lay(box);
   };
   if (fresh) return paint();
   // redrawing an existing grid: fade out the old scene so a curve leaving is
@@ -1722,7 +2000,57 @@ function boardDraw(d) {
 function goWrite() {
   if (wroteThisTurn) return;
   wroteThisTurn = true;
+  passStartedAt = performance.now();
   inkPass();
+}
+let passStartedAt = 0;
+
+/** Uncover a line in the ink's wake, at the moment the ink actually gets there.
+ *
+ *  Not a fixed stagger. The stroke crosses the writing area diagonally, so it
+ *  arrives at the top line before the bottom one by an amount that depends on
+ *  where the lines happen to sit — which is what "먹물이 지나간 자리에" means. The
+ *  geometry is read once, here, off the element that was just laid out.
+ *
+ *  Nothing about the TEXT waits on this: it is already in the document, and a
+ *  line whose moment has passed is simply shown. */
+function lay(line) {
+  if (STILL.matches) return;             // no wipe: .boardline is plain and visible
+  const area = document.querySelector(".writing");
+  if (!area) return;
+  const box = area.getBoundingClientRect();
+  const here = line.getBoundingClientRect();
+  if (!box.height || !here.height) return;
+  // the middle of the line, as a fraction of the area the stroke crosses
+  const mid = (here.top + here.height / 2 - box.top) / box.height;
+  // LEAD it. The ink is underneath now, so the writing can start coming
+  // through as the cloud arrives rather than after it has gone by, and being
+  // early is the right way to be wrong when a student is waiting to read.
+  const when = inkReaches(Math.max(0, Math.min(1, mid))) - 150;
+  // Bounded at both ends. Zero below, because a line whose moment has already
+  // passed is simply shown; and a ceiling above, because the delay is derived
+  // from geometry and geometry can put a line anywhere — nothing the tutor has
+  // written may sit invisible for most of a second waiting for a squid.
+  const wait = Math.min(LAY_LATEST, Math.max(0,
+    when - (performance.now() - passStartedAt)));
+  line.classList.add("laying");
+  // quicker than the stroke that is uncovering it, so the writing never lags
+  // visibly behind the thing supposedly making it
+  line.style.setProperty("--lay", ".46s");
+  line.style.animationDelay = `0s, ${wait.toFixed(0)}ms`;
+  // And the mask comes off when it has done its work, so a lesson's worth of
+  // steps is not left on a lesson's worth of composited layers.
+  //
+  // By NAME, not by "the first animationend": `.laying` declares two, and the
+  // other one is `inked 0s`, which finishes within the frame it starts in — a
+  // bare listener took the mask off before the wipe had begun and every line
+  // simply appeared. The timer is the backstop, because a backgrounded tab
+  // pauses the animation and animationend would then never come at all.
+  const done = () => line.classList.add("dry");
+  line.addEventListener("animationend", (e) => {
+    if (e.animationName === "laydown") done();
+  });
+  inkTimers.push(setTimeout(done, wait + 1200));
 }
 
 /** The board shows ONLY what the tutor deliberately wrote (the `board`
@@ -1741,17 +2069,6 @@ function boardWrite(item) {
   if (empty) empty.remove();
   const line = document.createElement("div");
   line.className = "boardline key";
-  // Held back just long enough for the ink to have passed over the spot, and
-  // then one after another down the board, because the stroke reaches them one
-  // after another. Capped, so a six-line answer does not end in a queue. The
-  // CONTENT is in the DOM either way — a slow machine shows it early, never
-  // late, and a screen reader never waits at all.
-  if (!STILL.matches) {
-    const now = performance.now();
-    inkOrder = now - inkOrderAt > 500 ? 0 : inkOrder + 1;
-    inkOrderAt = now;
-    line.style.animationDelay = (.26 + .13 * Math.min(inkOrder, 4)).toFixed(2) + "s";
-  }
   const math = document.createElement("div");
   math.append(mathify(expr).frag);
   line.appendChild(math);
@@ -1763,7 +2080,11 @@ function boardWrite(item) {
     line.appendChild(label);
   }
   lines.appendChild(line);
+  // scroll FIRST. lay() keys the reveal to where the line is on screen, and
+  // scrolling to the foot of the board moves it — measuring before the scroll
+  // keyed every reveal to a position the next statement invalidated.
   lines.scrollTop = lines.scrollHeight;
+  lay(line);
 }
 
 // --- 3. playback: the tutor's audio, then tell the server we are done ------
@@ -2108,6 +2429,14 @@ for (const [size, left, seconds, delay] of
 // to place it again — without a transition, or the character would swim to
 // catch up with a window that has already stopped moving.
 goHome(0);
+// Two ways the pass can be left half-finished, and both end with something
+// unreadable if nothing catches them: a backgrounded tab pauses CSS
+// animations while the mask that is hiding a line stays exactly where it is,
+// and toggling the OS motion preference mid-flight leaves the character
+// somewhere no rule owns. Both land the same way — stop, show everything, go
+// home.
+addEventListener("visibilitychange", () => { if (document.hidden) clearInk(); });
+STILL.addEventListener("change", () => { clearInk(); goHome(0); });
 addEventListener("resize", reperch);
 new ResizeObserver(reperch).observe($("chatPanel"));
 // the panels are inside a scrolling page under 1000px
