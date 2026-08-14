@@ -54,9 +54,12 @@ STATIC = {
     "/worklet.js": ("worklet.js", "text/javascript; charset=utf-8"),
     "/phone": ("phone.html", "text/html; charset=utf-8"),
     "/phone.html": ("phone.html", "text/html; charset=utf-8"),
-    # the tutor, swimming, for the seconds it is thinking. VP9 with a real
-    # alpha channel, so it drops onto the board with no background to strip.
-    "/squid-thinking.webm": ("squid-thinking.webm", "video/webm"),
+    # The tutor: one still for every state it is not thinking in, and the
+    # tumbling loop for the seconds it is. Both are animated/still WebP with a
+    # real alpha channel, cut from the same clip under the same crop so
+    # swapping between them never moves the character.
+    "/squid.webp": ("squid.webp", "image/webp"),
+    "/squid-thinking.webp": ("squid-thinking.webp", "image/webp"),
 }
 
 
