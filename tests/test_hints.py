@@ -538,3 +538,40 @@ class TestVisibleNumbersAreNotSecrets:
             [],
         )
         assert "5를 어떻게 없애면" in text
+
+
+class TestAnEquationStepHidesItsContent:
+    """Live, on problem 13: the reference's later step read "m: y = -13x + 19"
+    and the illustrator drew the curve "-13*x + 19" — the student was still
+    deriving m. The guard skipped every step containing "=", so the RHS of a
+    step the student had not reached passed as long as it was not spelled
+    verbatim. An equation step is now checked piece by piece."""
+
+    TANGENT_REF = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="미분", expression="f'(x) = 3*x**2 - 6*x"),
+            SolutionStep(idx=5, description="기울기", expression="f'(1) = -3"),
+            SolutionStep(idx=6, description="접선 m", expression="m: y = -13*x + 19"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="27/4"),
+        concepts=["tangent_line"],
+        verified=True,
+        origin="db",
+    )
+
+    def test_the_live_leak_is_caught(self):
+        # the exact expression the illustrator sent to the plot
+        assert leaks_answer("-13*x + 19", self.TANGENT_REF, 5)
+
+    def test_a_rewrite_of_the_rhs_is_caught_too(self):
+        assert leaks_answer("19 - 13*x", self.TANGENT_REF, 5)
+
+    def test_the_reached_step_is_still_allowed(self):
+        # idx=5 IS the target step: naming its content is the L4 privilege,
+        # filtered upstream, not the guard's business
+        assert not leaks_answer("-3", self.TANGENT_REF, 5)
+        assert not leaks_answer("3*x**2 - 6*x", self.TANGENT_REF, 5)
+
+    def test_a_bare_variable_name_is_not_content(self):
+        # "y를 구해 볼까요?" must not trip on the "y" left of the equals sign
+        assert not leaks_answer("y를 어떻게 구할까요?", self.TANGENT_REF, 5)

@@ -191,12 +191,16 @@ class ProblemContext:
     # scaffold curve disappears once the thing it produced is on the board.
     scene: tuple = ()
     span: tuple[float, float] | None = None
-    # The student's own window. The automatic one is a guess (the middle 90%
-    # of the target's values), and a curve whose interesting part it cut off
-    # looked simply broken with no way to say "wider". Set from the page's
-    # zoom buttons, kept for the rest of the problem so the next turn's
-    # redraw does not snap the window back.
-    zoom: float = 1.0
+    # The student's own window: (x0, x1, y0, y1), or None while the automatic
+    # guess (the middle 90% of the target's values) is still in charge. The
+    # first pan or zoom materializes the guess into this rectangle and every
+    # adjustment after that moves THE RECTANGLE — not the guess, which would
+    # recompute under their hands — and the illustrator's own redraws keep it,
+    # so the next turn does not snap the window back. view_rev counts the
+    # student's adjustments; the page uses it to tell a new render of the same
+    # scene from a duplicate.
+    view: tuple[float, float, float, float] | None = None
+    view_rev: int = 0
     caption: str = ""
 
     def reference_if_ready(self) -> ReferenceSolution | None:
@@ -327,16 +331,11 @@ class Session:
             future = self._captures.get(capture_id)
             if future is not None and not future.done():
                 future.set_result(None)
-        elif ev.event == "figure_zoom":
-            # The zoom buttons on the board's sketch. Independent of the turn:
-            # re-rendering a scene that already passed the leak gate reads
-            # nothing new and says nothing, so it may run while _busy.
-            try:
-                direction = int(ev.data.get("dir", 0))
-            except (TypeError, ValueError):
-                direction = 0
-            if direction:
-                self._spawn(self._refigure(direction))
+        elif ev.event in ("figure_zoom", "figure_pan", "figure_reset"):
+            # The view controls on the board's sketch. Independent of the
+            # turn: re-rendering a scene that already passed the leak gate
+            # reads nothing new and says nothing, so they may run while _busy.
+            self._spawn(self._adjust_view(ev.event, ev.data))
         elif ev.event == "error":
             log.warning("device error: %s", ev.data)
         else:
@@ -1391,7 +1390,11 @@ class Session:
         span = ctx.span or plot.DEFAULT_SPAN
         if spec.x_min is not None and spec.x_max is not None and spec.x_min < spec.x_max:
             span = (spec.x_min, spec.x_max)
-        svg = await asyncio.to_thread(plot.function_svg, spec.curves, span, ctx.zoom)
+        # through the student's own window when they have chosen one — the
+        # next turn's redraw must not snap their view back to the guess
+        svg = await asyncio.to_thread(
+            plot.function_svg, spec.curves, span, view=ctx.view
+        )
         if not svg:
             return
         # The turn moved on while we drew: a picture of the last hint landing
@@ -1413,7 +1416,7 @@ class Session:
                 "svg": svg,
                 "of": ", ".join(c.expr for c in spec.curves),
                 "note": spec.caption,
-                "zoom": round(ctx.zoom, 2),
+                "v": ctx.view_rev,
             }))
         except Exception:
             log.debug("could not send figure event (connection gone)")
@@ -1423,24 +1426,66 @@ class Session:
             f", wiped {gone}" if gone else "", spec.why[:60],
         )
 
-    async def _refigure(self, direction: int) -> None:
-        """The same scene through a window the student chose.
+    async def _adjust_view(self, event: str, data: dict) -> None:
+        """The same scene through the window the student is choosing.
 
-        `direction` +1 widens (more of the plane), -1 moves closer. Nothing
-        else changes: the curves already passed the leak gate when they were
-        first drawn, the caption is the one the illustrator wrote, and the new
-        zoom sticks to the problem so the next turn's redraw keeps it.
+        figure_zoom {dir: ±1} scales the rectangle about its centre (+1 shows
+        more of the plane), figure_pan {dx, dy} slides it by fractions of
+        itself, figure_reset hands the window back to the automatic guess.
+        Nothing else changes: the curves already passed the leak gate when
+        they were first drawn, and the caption is the illustrator's.
         """
         ctx = self.ctx
         if ctx is None or not ctx.scene:
             return
-        step = 1.4 if direction > 0 else 1 / 1.4
-        zoom = min(4.0, max(0.4, ctx.zoom * step))
-        if zoom == ctx.zoom:
-            return
-        ctx.zoom = zoom
         span = ctx.span or plot.DEFAULT_SPAN
-        svg = await asyncio.to_thread(plot.function_svg, list(ctx.scene), span, zoom)
+
+        if event == "figure_reset":
+            if ctx.view is None:
+                return
+            ctx.view = None
+        else:
+            # their rectangle, or the automatic one the moment they touch it
+            view = ctx.view
+            if view is None:
+                view = await asyncio.to_thread(
+                    plot.compute_view, list(ctx.scene), span
+                )
+                if view is None:
+                    return
+            x0, x1, y0, y1 = view
+            w, h = x1 - x0, y1 - y0
+            if event == "figure_zoom":
+                try:
+                    direction = int(data.get("dir", 0))
+                except (TypeError, ValueError):
+                    return
+                if not direction:
+                    return
+                factor = 1.4 if direction > 0 else 1 / 1.4
+                # bounded against the problem's own span, so the window can
+                # neither vanish into a point nor grow into empty plane
+                base = (span[1] - span[0]) or 1.0
+                if not (base * 0.25 <= w * factor <= base * 5.0):
+                    return
+                cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+                w, h = w * factor, h * factor
+                ctx.view = (cx - w / 2, cx + w / 2, cy - h / 2, cy + h / 2)
+            else:  # figure_pan
+                try:
+                    dx = max(-1.0, min(1.0, float(data.get("dx", 0))))
+                    dy = max(-1.0, min(1.0, float(data.get("dy", 0))))
+                except (TypeError, ValueError):
+                    return
+                if not dx and not dy:
+                    return
+                # dy is screen-down; the y axis grows up
+                ctx.view = (x0 + dx * w, x1 + dx * w, y0 - dy * h, y1 - dy * h)
+
+        ctx.view_rev += 1
+        svg = await asyncio.to_thread(
+            plot.function_svg, list(ctx.scene), span, view=ctx.view
+        )
         if not svg or self.ctx is not ctx:
             return
         try:
@@ -1449,11 +1494,13 @@ class Session:
                 "svg": svg,
                 "of": ", ".join(c.expr for c in ctx.scene),
                 "note": ctx.caption,
-                "zoom": round(zoom, 2),
+                "v": ctx.view_rev,
+                "user": True,          # the student adjusted their view: the
+                                       # squid stays put and nothing is spoken
             }))
         except Exception:
-            log.debug("could not send the rezoomed figure (connection gone)")
-        log.info("figure zoom -> %.2f over %s", zoom, span)
+            log.debug("could not send the adjusted figure (connection gone)")
+        log.info("figure view %s -> %s", event, ctx.view or "auto")
 
     def _resolve_hint(self, hint_id: int, effective: bool) -> None:
         """Answer a pending hint, remembering which one — so a turn the student

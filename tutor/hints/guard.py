@@ -148,9 +148,19 @@ def leaks_answer(
         step_squeezed = re.sub(r"\s+", "", step.expression)
         if step_squeezed and step_squeezed in squeezed:
             return True
-        for e in found.exprs:
-            if "=" not in step.expression and mathnorm.expressions_equivalent(
-                e, step.expression
-            ):
+        # An equation step is checked PIECE BY PIECE. This used to skip any
+        # step containing "=" entirely — and nearly every step is written as
+        # one ("m: y = -13x + 19") — so the RHS of a step the student had not
+        # reached sailed through as long as it was spelled differently. That
+        # is exactly how a finished tangent line ended up drawn on the board
+        # while the student was still deriving it: the curve expression
+        # "-13*x + 19" is not the string "y=-13x+19", but it IS its right side.
+        for piece in step.expression.split("="):
+            piece = piece.strip()
+            # a bare name ("y", "m") carries no content; comparing it would
+            # flag every hint that mentions the variable
+            if not piece or not re.search(r"[*/+\-^]|\d\s*[a-zA-Z]|[a-zA-Z]\s*\d", piece):
+                continue
+            if any(mathnorm.expressions_equivalent(e, piece) for e in found.exprs):
                 return True
     return False

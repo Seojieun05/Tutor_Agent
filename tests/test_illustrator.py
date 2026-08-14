@@ -13,6 +13,7 @@ import pytest
 
 from tutor.config import Settings
 from tutor.hints.generator import HintGenerator
+from tutor.hints import plot
 from tutor.hints.illustrator import Illustrator, wants_a_picture
 from tutor.knowledge.matching import Matcher
 from tutor.knowledge.models import Answer, MatchResult, ReferenceSolution, SolutionStep, Tier
@@ -262,9 +263,9 @@ class TestInTheSession:
 
 
 class TestTheStudentsWindow:
-    """The zoom buttons on the page: `figure_zoom` widens or narrows the
-    window of the scene already on the board, and the choice sticks to the
-    problem so the next turn's redraw keeps it."""
+    """The view controls on the page: figure_zoom / figure_pan / figure_reset
+    move the window of the scene already on the board, and the choice sticks
+    to the problem so the next turn's redraw keeps it."""
 
     async def drawn(self, db):
         session, llm, speaker = build(db, [{
@@ -275,40 +276,79 @@ class TestTheStudentsWindow:
         await asyncio.gather(*[t for t in session._tasks if not t.done()])
         return session
 
-    async def test_zoom_out_redraws_the_same_scene_wider(self, db):
-        session = await self.drawn(db)
-        before = len([e for e in session.ws.events if e["event"] == "figure"])
-
+    async def poke(self, session, event, data=None):
         await session.on_frame(json.dumps(
-            {"type": "EVENT", "event": "figure_zoom", "data": {"dir": 1}}))
+            {"type": "EVENT", "event": event, "data": data or {}}))
         await asyncio.gather(*[t for t in session._tasks if not t.done()])
 
-        figures = [e for e in session.ws.events if e["event"] == "figure"]
-        assert len(figures) == before + 1
-        assert figures[-1]["data"]["id"] == "p1"          # same canvas, replaced
-        assert figures[-1]["data"]["zoom"] == 1.4
-        assert figures[-1]["data"]["note"] == "x축과 만나는 곳"
-        assert session.ctx.zoom == 1.4                    # sticks to the problem
+    def figures(self, session):
+        return [e for e in session.ws.events if e["event"] == "figure"]
+
+    async def test_zoom_out_redraws_the_same_scene_wider(self, db):
+        session = await self.drawn(db)
+        before = len(self.figures(session))
+
+        await self.poke(session, "figure_zoom", {"dir": 1})
+
+        figs = self.figures(session)
+        assert len(figs) == before + 1
+        last = figs[-1]["data"]
+        assert last["id"] == "p1"                  # same canvas, replaced
+        assert last["v"] == 1 and last["user"] is True
+        assert last["note"] == "x축과 만나는 곳"
+        x0, x1, y0, y1 = session.ctx.view           # sticks to the problem
+        assert x1 - x0 > 6                          # wider than the (-1, 5) span
+
+    async def test_every_adjustment_gets_its_own_revision(self, db):
+        # widen then narrow lands back on a window ALREADY SEEN; only the
+        # revision tells the page this render is new and must be painted
+        session = await self.drawn(db)
+        await self.poke(session, "figure_zoom", {"dir": 1})
+        await self.poke(session, "figure_zoom", {"dir": -1})
+        revs = [f["data"]["v"] for f in self.figures(session) if "v" in f["data"]]
+        assert revs == [0, 1, 2]     # the illustrator's own render, then ours
+
+    async def test_pan_slides_the_window(self, db):
+        session = await self.drawn(db)
+        await self.poke(session, "figure_zoom", {"dir": 1})
+        x0, x1, y0, y1 = session.ctx.view
+        await self.poke(session, "figure_pan", {"dx": 0.5, "dy": 0})
+        nx0, nx1, ny0, ny1 = session.ctx.view
+        assert nx0 - x0 == pytest.approx((x1 - x0) * 0.5)
+        assert (ny0, ny1) == (y0, y1)
+
+    async def test_pan_down_shows_the_plane_below(self, db):
+        # dy is screen-down, and the y axis grows up
+        session = await self.drawn(db)
+        await self.poke(session, "figure_pan", {"dx": 0, "dy": 0.5})
+        x0, x1, y0, y1 = session.ctx.view
+        auto = plot.compute_view(list(session.ctx.scene), session.ctx.span)
+        assert y1 < auto[3]
+
+    async def test_reset_hands_the_window_back(self, db):
+        session = await self.drawn(db)
+        await self.poke(session, "figure_zoom", {"dir": 1})
+        await self.poke(session, "figure_reset")
+        assert session.ctx.view is None
+        assert self.figures(session)[-1]["data"]["v"] == 2
 
     async def test_zoom_is_clamped(self, db):
         session = await self.drawn(db)
         for _ in range(10):
-            await session.on_frame(json.dumps(
-                {"type": "EVENT", "event": "figure_zoom", "data": {"dir": 1}}))
-            await asyncio.gather(*[t for t in session._tasks if not t.done()])
-        assert session.ctx.zoom == 4.0
+            await self.poke(session, "figure_zoom", {"dir": 1})
+        x0, x1, _, _ = session.ctx.view
+        span = session.ctx.span
+        assert (x1 - x0) <= (span[1] - span[0]) * 5.0
 
     async def test_zoom_with_no_scene_says_nothing(self, db):
         session, llm, speaker = build(db, [])
-        await session.on_frame(json.dumps(
-            {"type": "EVENT", "event": "figure_zoom", "data": {"dir": 1}}))
-        await asyncio.gather(*[t for t in session._tasks if not t.done()])
+        await self.poke(session, "figure_zoom", {"dir": 1})
         assert "figure" not in session.ws.names()
 
-    async def test_garbage_direction_is_ignored(self, db):
+    async def test_garbage_is_ignored(self, db):
         session = await self.drawn(db)
         before = len(session.ws.events)
-        await session.on_frame(json.dumps(
-            {"type": "EVENT", "event": "figure_zoom", "data": {"dir": "sideways"}}))
-        await asyncio.gather(*[t for t in session._tasks if not t.done()])
+        await self.poke(session, "figure_zoom", {"dir": "sideways"})
+        await self.poke(session, "figure_pan", {"dx": "no", "dy": None})
+        await self.poke(session, "figure_reset")     # nothing to reset
         assert len(session.ws.events) == before

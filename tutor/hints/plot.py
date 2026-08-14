@@ -162,20 +162,30 @@ def _legend_svg(rows, series, px, py) -> str:
     )
 
 
-def function_svg(
+def _sample_all(curves, window: tuple[float, float]):
+    out: list[tuple[object, list[tuple[float, float | None]]]] = []
+    for curve in list(curves)[:4]:
+        text = curve if isinstance(curve, str) else curve.expr
+        try:
+            out.append((curve, _sample(text, *window)))
+        except Exception as e:  # noqa: BLE001 — an unplottable hint still speaks
+            log.info("not plotting %r: %s", text, e)
+    return out
+
+
+def compute_view(
     curves, span: tuple[float, float] = DEFAULT_SPAN, zoom: float = 1.0
-) -> str | None:
-    """Markup for the scene, or None when nothing in it can be drawn.
+) -> tuple[float, float, float, float] | None:
+    """The window function_svg would draw: (x0, x1, y0, y1), or None.
 
-    `curves` are objects with .expr and optionally .label/.role, or plain
-    expression strings.
+    Factored out of the drawing so the session can hold onto it: the moment
+    the student pans or zooms, this guess becomes THEIR window, and their
+    next adjustment has to start from the rectangle actually on screen rather
+    than from a recomputation that may have moved under them.
 
-    `zoom` scales the WINDOW, not the picture: >1 shows more of the plane,
-    <1 moves closer. It exists because the automatic window is a guess about
-    what matters — the middle 90% of the target's values — and the student is
-    the one who knows whether the part it cut off is the part they need. The
+    `zoom` scales the guess: >1 shows more of the plane, <1 moves closer. The
     x-span is scaled before sampling (a wider window has to be sampled to be
-    drawn) and the y-window after it is chosen, because the y-window is
+    judged) and the y-window after it is chosen, because the y-window is
     derived from the samples and would otherwise re-trim whatever the zoom
     let in.
     """
@@ -184,17 +194,7 @@ def function_svg(
         mid = (span[0] + span[1]) / 2
         half = (span[1] - span[0]) / 2 * zoom
         span = (mid - half, mid + half)
-    def sample_all(window: tuple[float, float]):
-        out: list[tuple[object, list[tuple[float, float | None]]]] = []
-        for curve in list(curves)[:4]:
-            text = curve if isinstance(curve, str) else curve.expr
-            try:
-                out.append((curve, _sample(text, *window)))
-            except Exception as e:  # noqa: BLE001 — an unplottable hint still speaks
-                log.info("not plotting %r: %s", text, e)
-        return out
-
-    series = sample_all(span)
+    series = _sample_all(curves, span)
     if not series:
         return None
 
@@ -216,8 +216,31 @@ def function_svg(
     if widened != span:
         log.info("widening x to %.1f..%.1f for a y-range of %.1f", *widened, y1 - y0)
         span = widened
-        series = sample_all(span) or series
-    x0, x1 = span
+    return (span[0], span[1], y0, y1)
+
+
+def function_svg(
+    curves, span: tuple[float, float] = DEFAULT_SPAN, zoom: float = 1.0,
+    view: tuple[float, float, float, float] | None = None,
+) -> str | None:
+    """Markup for the scene, or None when nothing in it can be drawn.
+
+    `curves` are objects with .expr and optionally .label/.role, or plain
+    expression strings. `view` overrides the automatic window entirely — it
+    is the student's own rectangle, chosen with the pan and zoom controls,
+    and it is drawn verbatim: sampled over its x-range, clipped to its
+    y-range, no re-guessing.
+    """
+    if view is None:
+        view = compute_view(curves, span, zoom)
+        if view is None:
+            return None
+    x0, x1, y0, y1 = view
+    if x1 - x0 <= 0 or y1 - y0 <= 0:
+        return None
+    series = _sample_all(curves, (x0, x1))
+    if not series:
+        return None
     px = lambda x: PAD + (x - x0) / (x1 - x0) * (WIDTH - 2 * PAD)      # noqa: E731
     py = lambda y: HEIGHT - PAD - (y - y0) / (y1 - y0) * (HEIGHT - 2 * PAD)  # noqa: E731
 

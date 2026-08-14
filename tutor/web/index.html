@@ -605,7 +605,18 @@
   }
 
   /* a function sketched on the board: axes, a light grid, the curve */
-  .boardfigure { position:relative; padding:.4rem 0 .2rem; }
+  .boardfigure {
+    position:relative; padding:.4rem 0 .2rem;
+    overflow:hidden;                 /* the drag preview stops at its frame */
+    /* A sideways finger pans the GRAPH; an up-down finger still scrolls the
+       BOARD. Taking both would make the sketch a dead zone in the page's own
+       scrolling, and the board is taller than the screen exactly when it has
+       a figure on it. */
+    touch-action:pan-y;
+    cursor:grab;
+  }
+  .boardfigure:active { cursor:grabbing; }
+  .boardfigure:focus-visible { outline:2px solid var(--accent-deep); outline-offset:2px; }
   /* The window controls: the automatic window is a guess about what matters,
      and these are how the student overrules it. − widens (more of the plane,
      the fix when a curve runs out of the frame), + moves closer. Quiet until
@@ -2051,14 +2062,16 @@ function boardDraw(d) {
   const svg = d && d.svg;
   if (!svg) return;
   const id = `fig:${d.id || d.of || "scene"}`;
-  // zoom is part of the key: the same scene through a different window IS a
-  // change, or the redraw the zoom buttons ask for would be dropped here
-  const key = `${id}|${d.of}|${d.note || ""}|${d.zoom || 1}`;
+  // The view revision is part of the key. Keying on the zoom VALUE dropped
+  // every revisited window — widen then narrow back, and the render at the
+  // old zoom collided with the first time it was seen and was thrown away,
+  // which is why the buttons felt like they sometimes did not work.
+  const key = `${id}|${d.of}|${d.note || ""}|${d.v || 0}`;
   if (boardSeen.has(key)) return;      // the same scene twice is not a change
   boardSeen.add(key);
-  // a zoom redraw is the student adjusting their view, not the tutor writing:
-  // the character stays where it is
-  if (!d.zoom || d.zoom === 1) goWrite();
+  // a view adjustment is the student's act, not the tutor writing: the
+  // character stays where it is
+  if (!d.user) goWrite();
 
   let box = document.querySelector(`[data-figure="${CSS.escape(id)}"]`);
   const fresh = !box;
@@ -2073,21 +2086,23 @@ function boardDraw(d) {
     // owns the window (it has the samples); these only ask.
     const zoom = document.createElement("div");
     zoom.className = "figzoom";
-    for (const [glyph, dir, label] of [
-      ["−", +1, "그래프 범위 넓히기"],   // minus = smaller picture = MORE plane
-      ["+", -1, "그래프 범위 좁히기"],
+    for (const [glyph, act, label] of [
+      ["−", () => sendEvent("figure_zoom", { dir: +1 }), "그래프 범위 넓히기"],
+      ["+", () => sendEvent("figure_zoom", { dir: -1 }), "그래프 범위 좁히기"],
+      ["⟳", () => sendEvent("figure_reset"), "그래프 창 되돌리기"],
     ]) {
       const b = document.createElement("button");
       b.type = "button";
       b.textContent = glyph;
       b.setAttribute("aria-label", label);
       b.title = label;
-      b.addEventListener("click", () => sendEvent("figure_zoom", { dir }));
+      b.addEventListener("click", act);
       zoom.appendChild(b);
     }
     const body = document.createElement("div");
     body.className = "figbody";
     box.append(zoom, body);
+    figureControls(box, body);
     $("boardLines").appendChild(box);
   }
   const body = box.querySelector(".figbody");
@@ -2116,6 +2131,66 @@ function boardDraw(d) {
   // seen as leaving rather than as a flicker
   box.classList.add("fading");
   setTimeout(paint, 180);
+}
+
+/** The figure's own hands: drag to pan, keys to steer.
+ *
+ *  The buttons cover a mouse at rest; these cover everyone else — a finger,
+ *  a trackpad drag, and the keyboard, which is also what makes the sketch
+ *  reachable at all without a pointer. The page never does the arithmetic:
+ *  it reports the gesture as fractions of the picture and the server, which
+ *  owns the samples, moves the window and sends the true render back. The
+ *  drag previews locally so the hand feels the picture move at once.
+ */
+function figureControls(box, body) {
+  box.tabIndex = 0;
+  box.setAttribute("role", "group");
+  box.setAttribute("aria-label",
+    "함수 그래프. 화살표 키로 이동, +와 -로 범위, 0으로 되돌리기. 마우스로 끌 수 있어요.");
+
+  box.addEventListener("keydown", (e) => {
+    const pan = { ArrowLeft: [-.2, 0], ArrowRight: [.2, 0],
+                  ArrowUp: [0, -.2], ArrowDown: [0, .2] }[e.key];
+    if (pan) { sendEvent("figure_pan", { dx: pan[0], dy: pan[1] }); }
+    else if (e.key === "-" || e.key === "_") sendEvent("figure_zoom", { dir: +1 });
+    else if (e.key === "+" || e.key === "=") sendEvent("figure_zoom", { dir: -1 });
+    else if (e.key === "0" || e.key === "Home") sendEvent("figure_reset");
+    else return;
+    e.preventDefault();
+  });
+
+  let drag = null;
+  box.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || e.target.closest(".figzoom")) return;
+    const svg = body.querySelector("svg");
+    if (!svg) return;
+    drag = { x: e.clientX, y: e.clientY, box: svg.getBoundingClientRect() };
+    // a pen lifted in the same instant has no pointer left to capture, and
+    // losing the capture only means the drag ends at the figure's edge
+    try { box.setPointerCapture(e.pointerId); } catch (err) {}
+  });
+  box.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    // the preview: the picture follows the hand until the real render lands
+    body.style.transform =
+      `translate(${e.clientX - drag.x}px, ${e.clientY - drag.y}px)`;
+  });
+  const drop = (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    const r = drag.box;
+    drag = null;
+    body.style.transform = "";
+    // dragging the picture right means asking for the plane to its LEFT
+    if (Math.hypot(dx, dy) >= 4 && r.width && r.height) {
+      sendEvent("figure_pan", {
+        dx: +(-dx / r.width).toFixed(3),
+        dy: +(-dy / r.height).toFixed(3),
+      });
+    }
+  };
+  box.addEventListener("pointerup", drop);
+  box.addEventListener("pointercancel", () => { drag = null; body.style.transform = ""; });
 }
 
 /** The tutor has something for the board: send it over, once per turn. */
