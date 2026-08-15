@@ -1032,3 +1032,21 @@ class TestTheTargetsOwnWordsAreNotTheFuture:
             "접선 l의 방정식을 어떻게 나타낼 수 있을까요?",
             self.REF, 1,
         )
+
+
+class TestACorrectingTurnIsNeverCanned:
+    """The last hint at this step did not help: what follows must engage with
+    THEIR work, which no prewritten or concept line can do. Live, the
+    prewritten L2 served here and '다시 살펴보세요' only ever happened at L3 —
+    the one level nothing was prewritten for."""
+
+    def test_the_prewritten_line_yields_to_the_model(self, db):
+        from tutor.store.session_store import HintRecord
+        helper = TestAPrewrittenLineServesFirst()
+        gen, llm, rec, match = helper.ready(db)
+        failed = [HintRecord(id=1, problem_hash="h", step=1, level=1,
+                             action="SOCRATIC_QUESTION", hint_text="첫 질문",
+                             effective=False)]
+        text = gen.generate(helper.decision(), match, None, rec, history=failed)
+        assert str(text) != helper.LINE
+        assert "phrase" in llm.calls

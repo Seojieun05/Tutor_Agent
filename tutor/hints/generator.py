@@ -707,6 +707,17 @@ class HintGenerator:
             ):
                 return continuation
 
+        # Is this turn CORRECTING the student? The last hint at this very step
+        # did not help — a wrong work check, a wrong spoken answer — so what
+        # they need now is a line that engages with THEIR page and THEIR words
+        # ("둘째 줄을 다시 살펴볼까요?"), which no line written before they
+        # existed can do. Live, the prewritten L2 served here and the pointing
+        # only ever happened at L3, the one level nothing was prewritten for.
+        prior_here = [
+            h for h in history if h.step == decision.target_step and h.level >= 1
+        ]
+        correcting = bool(prior_here) and prior_here[-1].effective is False
+
         # 0) A line written for THIS problem's THIS step ahead of time —
         # phrased at warm time by the same model and prompt the live path
         # uses, screened by the same guards then and re-screened now, and
@@ -717,6 +728,7 @@ class HintGenerator:
         # falls through to the ladder below like everything else.
         if (
             not partial
+            and not correcting
             and not decision.misconception
             and match.tier is Tier.EXACT
             and match.problem is not None
@@ -782,14 +794,15 @@ class HintGenerator:
                 break
             if template.concept_id is None and template.misconception_id is None:
                 continue
-            if decision.misconception and template.misconception_id is None:
+            if (decision.misconception or correcting) and template.misconception_id is None:
                 # A diagnosed mistake outranks concept boilerplate. Live, the
                 # policy had named the exact slip ("2x의 미분을 2x로 계산") and
                 # this loop answered with the concept's stock line about
                 # tangent slopes — fluent, instant, and about the wrong thing.
                 # Only the mistake's own pedagogy may take this turn; without
                 # one, the phrasing model, which is handed the diagnosis and
-                # told to aim at it, does.
+                # told to aim at it, does. A correcting turn without a NAMED
+                # misconception is the same situation with less paperwork.
                 continue
             try:
                 text = template.template_text.format(**template_slots)
