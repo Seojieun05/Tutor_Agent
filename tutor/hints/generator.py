@@ -745,6 +745,15 @@ class HintGenerator:
                 break
             if template.concept_id is None and template.misconception_id is None:
                 continue
+            if decision.misconception and template.misconception_id is None:
+                # A diagnosed mistake outranks concept boilerplate. Live, the
+                # policy had named the exact slip ("2x의 미분을 2x로 계산") and
+                # this loop answered with the concept's stock line about
+                # tangent slopes — fluent, instant, and about the wrong thing.
+                # Only the mistake's own pedagogy may take this turn; without
+                # one, the phrasing model, which is handed the diagnosis and
+                # told to aim at it, does.
+                continue
             try:
                 text = template.template_text.format(**template_slots)
             except (KeyError, IndexError):

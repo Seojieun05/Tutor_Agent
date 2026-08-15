@@ -850,3 +850,50 @@ class TestTheSeedGateRefusesAnnouncers:
         kept = {t.id for t in db.hint_templates_for(["linear_equation"], None, 1)}
         assert "gate-l1-bad" not in kept
         assert "gate-l1-good" in kept
+
+
+class TestADiagnosedMistakeOutranksBoilerplate:
+    """Live: the policy named the exact slip ("2x의 미분을 2x로 계산") and the
+    concept template answered with its stock line about tangent slopes. A
+    diagnosed misconception may only be answered by its own pedagogy or by
+    the phrasing model that was handed the diagnosis — never by a concept
+    line that ignores it."""
+
+    CONCEPT_LINE = "곡선 위 한 점에서의 접선의 기울기는 그 점의 미분계수와 같아요. 지금은 어느 점의 미분계수가 필요할까요?"
+
+    def seeded(self, db):
+        from tutor.knowledge.models import HintTemplate
+        db.insert_hint_template(HintTemplate(
+            id="t-l2-diff", concept_id="differentiation", level=2,
+            template_text=self.CONCEPT_LINE,
+        ))
+        llm = EchoLLMClient()
+        gen = HintGenerator(llm, db)
+        rec = Recognition(problem_text="접선 문제", equations=[],
+                          concepts=["differentiation"], confidence=0.95)
+        match = MatchResult(tier=Tier.CONCEPT, concepts=["differentiation"])
+        return gen, llm, rec, match
+
+    def test_the_concept_template_stands_when_nothing_is_diagnosed(self, db):
+        gen, llm, rec, match = self.seeded(db)
+        decision = Decision(Action.CONCEPT_HINT, 2, 3, None, "escalate")
+        text = gen.generate(decision, match, None, rec, history=[])
+        # served straight from the DB's concept pedagogy, no model asked
+        concept_lines = {
+            t.template_text
+            for t in db.hint_templates_for(["differentiation"], None, 2)
+            if t.concept_id is not None
+        }
+        assert str(text) in concept_lines
+        assert "phrase" not in llm.calls
+
+    def test_a_misconception_takes_the_turn_to_the_phrasing_model(self, db):
+        gen, llm, rec, match = self.seeded(db)
+        decision = Decision(
+            Action.CONCEPT_HINT, 2, 3,
+            "x^3 - 2x의 도함수를 구할 때 2x의 미분을 2x로 잘못 계산함",
+            "hint L1 ineffective: escalate to L2",
+        )
+        text = gen.generate(decision, match, None, rec, history=[])
+        assert str(text) != self.CONCEPT_LINE
+        assert "phrase" in llm.calls
