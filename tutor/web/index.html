@@ -1659,9 +1659,11 @@ function setState(s) {
     $("chat").appendChild(thinking);     // always after the newest message
     scrollChat();
   }
+  if (s === "PROCESSING") {
+    // the FIRST feedback of the turn types out like the rest
+    setStage("문제를 살펴보고 있어요…");
+  }
   if (s === "LISTENING" || !s) {
-    // a fresh turn starts generic, and the tutor comes back from the board
-    $("stageText").textContent = "문제를 살펴보고 있어요…";
     wroteThisTurn = false;
     clearInk();
     goHome();
@@ -1670,9 +1672,28 @@ function setState(s) {
 
 // What the pipeline is doing right now (server `stage` events) — the screen
 // carries the progress so the voice does not have to narrate it.
+//
+// TYPED, not swapped. A line that appears whole and then sits still is a
+// label; a line still being written is somebody doing something right now,
+// which is the entire message these carry. Fast — a line lands in ~½s — and
+// under reduced motion it appears whole. The element is not a live region
+// (the state chip's label is), so the partial text is never announced.
+let stageTimer = null;
 function setStage(text) {
   if (!text) return;
-  $("stageText").textContent = text;
+  const el = $("stageText");
+  clearInterval(stageTimer);
+  el.textContent = text;
+  if (!STILL.matches && text.length > 1) {
+    let shown = 0;
+    const step = Math.max(1, Math.ceil(text.length / (500 / 24)));
+    el.textContent = "";
+    stageTimer = setInterval(() => {
+      shown = Math.min(text.length, shown + step);
+      el.textContent = text.slice(0, shown);
+      if (shown >= text.length) clearInterval(stageTimer);
+    }, 24);
+  }
   if (!$("thinking").hidden) scrollChat();
 }
 

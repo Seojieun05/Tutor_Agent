@@ -574,3 +574,81 @@ class TestSurrenderIsNotGraded:
                 problem_text="p", reference=REFERENCE, question="q",
                 target_step=1, transcript=said,
             )
+
+
+class TestConfirmedWorkPointsForward:
+    """Live, problem 13 at step 4 of 7: "맞아요! 이대로 하면 돼요. 또 궁금한 게
+    있으면 물어봐 주세요" — confirmed, and abandoned. Naming where to go next
+    is not a hint (the ladder does not move); it is the answer to the question
+    the student is about to ask."""
+
+    def state(self, step):
+        from tutor.state.models import StudentState
+        return StudentState(status="CORRECT", last_correct_step=step)
+
+    def line(self, step, reference):
+        from tutor.server.session import Session
+        return Session._confirmed_line(self.state(step), reference)
+
+    def test_mid_problem_names_the_next_step(self):
+        from tutor.knowledge.models import Answer, ReferenceSolution, SolutionStep
+        ref = ReferenceSolution(
+            steps=[SolutionStep(idx=1, description="f'(x)로 접선 l의 기울기 구하기",
+                                expression="f'(1) = -2"),
+                   SolutionStep(idx=2, description="점 (1, -6)을 지나는 l의 방정식 쓰기",
+                                expression="l: y = -2*x - 4")],
+            final_answer=Answer(kind="SCALAR", value="49"),
+            concepts=["differentiation"], verified=True, origin="db",
+        )
+        assert self.line(1, ref) == \
+            "맞아요! 여기까지 잘했어요. 다음은 점 (1, -6)을 지나는 l의 방정식 쓰기 차례예요."
+
+    def test_a_finished_problem_gets_the_congratulation(self):
+        from tutor.knowledge.models import Answer, ReferenceSolution, SolutionStep
+        ref = ReferenceSolution(
+            steps=[SolutionStep(idx=1, description="계산", expression="1+1")],
+            final_answer=Answer(kind="SCALAR", value="2"),
+            concepts=[], verified=True, origin="db",
+        )
+        assert "다 풀었어요" in self.line(1, ref)
+
+    def test_a_sentence_step_falls_back_to_the_plain_verdict(self):
+        from tutor.knowledge.models import Answer, ReferenceSolution, SolutionStep
+        from tutor.server.session import WORK_CONFIRMED
+        ref = ReferenceSolution(
+            steps=[SolutionStep(idx=1, description="도함수를 구합니다.", expression="f'")],
+            final_answer=Answer(kind="SCALAR", value="1"),
+            concepts=[], verified=True, origin="db",
+        )
+        assert self.line(0, ref) == WORK_CONFIRMED
+
+    def test_no_reference_keeps_the_old_line(self):
+        from tutor.server.session import WORK_CONFIRMED
+        assert self.line(3, None) == WORK_CONFIRMED
+
+
+class TestWorkingAloudIsNotParroted:
+    """Live: "우선 f를 미분해야겠지. 그러면 2x-4." came back as "우선 f를
+    미분해야겠지. 그러면 2x-4인지 보고 있어요." A value can be echoed; a train
+    of thought cannot — the stage line follows along instead."""
+
+    def test_the_live_utterance_is_not_a_core(self):
+        from tutor.server.session import answer_core
+        assert answer_core("우선 f를 미분해야겠지. 그러면 2x-4.") is None
+
+    @pytest.mark.parametrize("said,core", [
+        ("5예요", "5"),
+        ("마이너스 3이요", "마이너스 3"),
+        ("x는 2요", "x는 2"),
+    ])
+    def test_values_still_echo(self, said, core):
+        from tutor.server.session import answer_core
+        assert answer_core(said) == core
+
+    @pytest.mark.parametrize("said", [
+        "양변을 미분하면 2x-4가 나와서 그게 기울기예요",   # a speech ending in a value
+        "일단 정리하면, 3이요",                            # comma = clause boundary
+    ])
+    def test_speeches_do_not(self, said):
+        from tutor.server.session import answer_core
+        assert answer_core(said) is None

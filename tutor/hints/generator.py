@@ -14,13 +14,6 @@ import re
 from pydantic import BaseModel, field_validator
 
 from tutor.hints.guard import leaks_answer
-
-# the verbal endings a Korean sentence closes on; a step description carrying
-# one cannot take a particle, so it may not fill a hint template's {step}
-_SENTENCE_STEP_RE = re.compile(
-    r"(?:습니다|ㅂ니다|합니다|입니다|한다|이다|된다|간다|온다|"
-    r"어요|아요|여요|해요|예요|에요|돼요|네요|세요|하죠|이죠|죠)$"
-)
 from tutor.knowledge import mathnorm
 from tutor.knowledge.db import KnowledgeDB
 from tutor.knowledge.models import MatchResult, ReferenceSolution
@@ -30,6 +23,19 @@ from tutor.store.session_store import HintRecord
 from tutor.vision.recognizer import Recognition
 
 log = logging.getLogger(__name__)
+
+# The verbal endings a Korean sentence closes on. A step description carrying
+# one cannot take a particle, so it may not fill a hint template's {step} —
+# and the same rule guards every other place a step description is glued into
+# a sentence (the work-check confirmation names the next step with it).
+SENTENCE_STEP_RE = re.compile(
+    # 다$ covers the whole plain-declarative family at once — 한다, 나눈다,
+    # 구합니다, 이다 — which an enumerated list kept missing one verb at a
+    # time ("나눈다 차례예요" got through the first draft). The rare noun that
+    # ends in 다 (바다) is misjudged toward the SAFE side: skipping a template
+    # costs a model call, gluing a particle onto a sentence costs the demo.
+    r"(?:어요|아요|여요|해요|예요|에요|돼요|네요|세요|하죠|이죠|죠|다)$"
+)
 
 # "Show me again" means different things depending on where the picture comes
 # from, and telling a student to hold a worksheet up to a camera that is not
@@ -353,7 +359,7 @@ class HintGenerator:
         # phrasing model, which can inflect, gets it instead.
         template_slots = dict(slots)
         step = template_slots.get("step", "").strip().rstrip(" .!?…")
-        if step and _SENTENCE_STEP_RE.search(step):
+        if step and SENTENCE_STEP_RE.search(step):
             del template_slots["step"]
         elif step:
             template_slots["step"] = step

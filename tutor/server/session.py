@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 
 from tutor.config import Settings
 from tutor.hints.generator import (
+    SENTENCE_STEP_RE,
     HintGenerator,
     strip_leading_acknowledgement,
     visible_to_student,
@@ -139,9 +140,19 @@ def answer_core(transcript: str) -> str | None:
     stripped — verbs ("양변에서 5를 빼요" → "…빼"), questions, long speeches.
     Those are exactly the utterances that sound wrong repeated back, so no
     echo is the natural choice: the generic filler takes the turn instead.
+
+    A VALUE, strictly: one short phrase with nothing sentence-like inside it.
+    The 24-character cap alone let "우선 f를 미분해야겠지. 그러면 2x-4" through
+    (it ends in a digit), and the tutor parroted a student's whole train of
+    thought back at them with "…인지 보고 있어요" stitched on. Working aloud
+    is for the STAGE LINE to acknowledge, not the voice to repeat.
     """
     text = " ".join(transcript.split()).rstrip("?.!…, ")
-    if not text or len(text) > 24:
+    if not text or len(text) > 16:
+        return None
+    # sentence-internal punctuation or more than three words is speech,
+    # not a value — "마이너스 3" is two words, an argument is not
+    if re.search(r"[.!?…,]", text) or len(text.split()) > 3:
         return None
     for tail in _POLITE_TAILS:
         if text.endswith(tail) and len(text) > len(tail):
@@ -697,7 +708,15 @@ class Session:
                 await self._answer_question(ctx, pending, transcript)
                 return
 
-        await self._stage("답을 확인하고 있어요")
+        # What the screen says while the judge reads. A short value is "an
+        # answer being checked"; a train of thought spoken aloud is "working
+        # being followed" — the same distinction that decides whether the
+        # voice echoes it. The student who narrates their reasoning sees the
+        # tutor following along instead of hearing themselves quoted.
+        await self._stage(
+            "답을 확인하고 있어요" if answer_core(transcript)
+            else "말한 중간 과정이 맞는지 확인하고 있어요"
+        )
         verdict = await asyncio.to_thread(
             self.deps.evaluator.evaluate,
             problem_text=ctx.recognition.problem_text,
@@ -1079,8 +1098,23 @@ class Session:
             # step they have not reached and imply something was wrong.
             # Deliberately not _deliver(): no hint was given, so nothing should
             # enter the hint history or move the L1-L4 ladder.
+            #
+            # But the verdict alone ended the conversation. A student four
+            # steps into a seven-step problem heard "이대로 하면 돼요. 또 궁금한
+            # 게 있으면 물어봐 주세요" and was left standing — confirmed, and
+            # abandoned. Naming WHERE to go next is not a hint (the ladder
+            # does not move, nothing enters the history): it is the answer to
+            # the question they are about to ask.
             log.info("work check at step %d: correct so far", current.last_correct_step)
-            await self._speak(WORK_CONFIRMED)
+            line = self._confirmed_line(current, reference)
+            await self._speak(line)
+            # the confirmation is also the one moment the whole picture is
+            # right so far — let the board show it
+            self._spawn(self._illustrate(
+                Decision(Action.WAIT, 0, current.last_correct_step + 1, None,
+                         "work confirmed"),
+                line, (), ctx.hash, student_said=question,
+            ))
             return
 
         fresh_history = self.store.get_history(problem_hash=ctx.hash)
@@ -1122,6 +1156,30 @@ class Session:
     def _work_reaction(state: StudentState) -> str:
         """What the tutor says it saw, before it hints. Never what is wrong."""
         return WORK_CHECK_REACTIONS.get(state.status, WORK_CHECK_DEFAULT)
+
+    @staticmethod
+    def _confirmed_line(state: StudentState, reference) -> str:
+        """The verdict, plus where to go — when the next step can be NAMED.
+
+        Only a noun-form step description rides in the sentence (the same rule
+        the hint templates follow: a sentence cannot wear a particle), only
+        its description is spoken (never an expression), and the composed line
+        still passes the leak guard upstream of nothing — the description of
+        the step they are about to do is exactly what L4 is allowed to say.
+        A finished problem gets the congratulation instead.
+        """
+        if reference is None:
+            return WORK_CONFIRMED
+        nxt = next(
+            (s for s in reference.steps if s.idx == state.last_correct_step + 1),
+            None,
+        )
+        if nxt is None:
+            return "맞아요! 여기까지면 다 풀었어요. 어떻게 구했는지 한번 정리해 볼까요?"
+        name = nxt.description.strip().rstrip(" .!?…")
+        if not name or SENTENCE_STEP_RE.search(name):
+            return WORK_CONFIRMED
+        return f"맞아요! 여기까지 잘했어요. 다음은 {name} 차례예요."
 
     def _same_problem(self, rec: Recognition) -> bool:
         """Is this the worksheet we are already working on?
