@@ -189,13 +189,16 @@ _POLITE_TAILS = ("입니다", "이에요", "이예요", "예요", "에요", "이
 def final_value_claim(transcript: str, answer) -> str:
     """What the transcript claims about the final value.
 
-    "said"    — the value is in the utterance: the problem may close.
-    "wrong"   — a number is ASSERTED AS THE RESULT at the utterance's tail
-                ("곱하면 98 맞나?") and it is not the value. Working numbers
-                earlier in the sentence (밑변 14, 높이 7) assert nothing.
-    "none"    — no number claims the result: a plan, a setup, a method.
-    "unknown" — the final is not machine-checkable from speech (a surd, a
-                power): the judge's call stands, permissive as before.
+    "said"      — the value is ASSERTED AS THE RESULT at the utterance's
+                  tail ("곱하면 49예요", "답은 49"): arriving is arriving.
+    "wrong"     — a tail assertion that is not the value ("곱하면 98 맞나?").
+                  Working numbers earlier in the sentence assert nothing.
+    "mentioned" — the value appears mid-sentence, unasserted: enough to let
+                  a CORRECT last-step verdict stand, never enough to close
+                  a problem early on its own.
+    "none"      — no number claims the result: a plan, a setup, a method.
+    "unknown"   — the final is not machine-checkable from speech (a surd, a
+                  power): the judge's call stands, permissive as before.
 
     Only plain-rational finals are checkable (49, 1/2, 24/7 — STT writes
     digits); 3*sqrt(10)/10 has no fixed transcription shape.
@@ -208,31 +211,36 @@ def final_value_claim(transcript: str, answer) -> str:
         target = Fraction(str(answer.value).strip())
     except (ValueError, ZeroDivisionError):
         return "unknown"
-    said_any = False
+    def parse(number: str) -> Fraction | None:
+        try:
+            return Fraction(number.replace(" ", ""))
+        except (ValueError, ZeroDivisionError):
+            return None
+
+    # The ASSERTION is the number at the utterance's tail, optionally wearing
+    # 맞나/이에요/요 — that is the one presented as the result. Numbers earlier
+    # in the sentence are working values and assert nothing, so a problem
+    # whose intermediate happens to equal its final answer cannot close on it.
+    tail = re.search(
+        r"(-?\d+(?:\.\d+)?(?:\s*/\s*\d+(?:\.\d+)?)?)\s*"
+        r"(?:[이가은는]\s*)?(?:맞나요?|맞아요?|맞죠|맞지|아닌가요?|아니에요|"
+        r"아니야|인가요?|이에요|예요|이요|이네요|네요|잖아요?|요)?\s*[?.!…~]*$",
+        (transcript or "").strip(),
+    )
+    asserted = parse(tail.group(1)) if tail else None
+    if asserted is not None:
+        return "said" if asserted == target else "wrong"
     for said in re.findall(
         r"-?\d+(?:\.\d+)?(?:\s*/\s*\d+(?:\.\d+)?)?", transcript or ""
     ):
-        try:
-            claim = Fraction(said.replace(" ", ""))
-        except (ValueError, ZeroDivisionError):
-            continue
-        said_any = True
-        if claim == target:
-            return "said"
-    if not said_any:
-        return "none"
-    tail = re.search(
-        r"-?\d+(?:\.\d+)?(?:\s*/\s*\d+(?:\.\d+)?)?\s*"
-        r"(?:[이가은는]\s*)?(?:맞나요?|맞아요?|맞죠|맞지|아닌가요?|인가요?|"
-        r"이에요|예요|이요|잖아요?|요)?\s*[?.!…~]*$",
-        (transcript or "").strip(),
-    )
-    return "wrong" if tail else "none"
+        if parse(said) == target:
+            return "mentioned"
+    return "none"
 
 
 def names_the_final_value(transcript: str, answer) -> bool:
     """Did the transcript actually SAY the problem's final value?"""
-    return final_value_claim(transcript, answer) in ("said", "unknown")
+    return final_value_claim(transcript, answer) in ("said", "mentioned", "unknown")
 
 
 def answer_core(transcript: str) -> str | None:
@@ -902,6 +910,35 @@ class Session:
         # Orchestrator-owned writes. The policy needs no new rules: resolving
         # the pending hint IS the signal that moves it up, down or nowhere.
         prev = self.store.get_state() or StudentState()
+        claim = final_value_claim(transcript, reference.final_answer)
+        if claim == "said":
+            # The student ASSERTED the verified final value — however far the
+            # pending question was from the end, arriving is arriving. A tutor
+            # who hears "49요" and answers with the next sub-step is grading
+            # the itinerary, not the trip. The check is mechanical (sympy-
+            # verified answer, tail-asserted only), so the judge's opinion of
+            # the sentence around it cannot talk the tutor out of a right
+            # answer; a mid-sentence working value that happens to equal the
+            # final closes nothing (that is "mentioned").
+            log.info(
+                "the final value was asserted at step %d: the problem closes",
+                pending.step,
+            )
+            self.store.set_state(prev.model_copy(update={
+                "current_step": "최종 정답을 말함",
+                "last_correct_step": len(reference.steps),
+                "status": "CORRECT",
+                "misconception": None,
+                "attempt_count": 1,
+                "previous_hint_effective": True,
+            }))
+            self._resolve_hint(pending.id, True)
+            if verdict.verdict != "CORRECT":
+                verdict = verdict.model_copy(update={
+                    "verdict": "CORRECT", "feedback": "맞아요, 정답이에요!",
+                })
+            await self._finish_problem(ctx, verdict, len(reference.steps))
+            return
         if verdict.verdict in ("CORRECT", "PARTIAL") and pending.step >= len(
             reference.steps
         ):
@@ -910,7 +947,6 @@ class Session:
             # is rightly CORRECT-for-the-question — but the problem is not
             # finished until 49 has been said, and "곱하면 98 맞나?" must not
             # hear 맞아요 of any kind (live it did, twice worded).
-            claim = final_value_claim(transcript, reference.final_answer)
             if claim == "wrong":
                 log.info("final step: a wrong value was asserted — INCORRECT")
                 verdict = verdict.model_copy(update={
@@ -919,7 +955,7 @@ class Session:
                     "reached_step": None,
                     "reached_claim": "",
                 })
-            elif verdict.verdict == "CORRECT" and claim != "said":
+            elif verdict.verdict == "CORRECT" and claim == "none":
                 log.info(
                     "final step: the plan was right but no value was said — "
                     "PARTIAL, the problem stays open"

@@ -560,14 +560,20 @@ class TestRunningAhead:
         assert session.store.get_state().last_correct_step == 2
 
     async def test_running_ahead_never_reaches_the_last_step(self, db):
-        """The ceiling is what keeps the leak guard shut and the problem open.
-        A jump to the final step would make the answer sayable and close the
-        problem on one spoken sentence, so it is clamped one short."""
+        """The ceiling is what keeps the leak guard shut and the problem open:
+        an LLM-proposed jump to the final step is clamped one short, whatever
+        the claim says. What DOES close a problem early is the student
+        ASSERTING the verified value at the utterance's tail ("넓이는 28이요")
+        — that path is mechanical, not the judge's, and has its own tests in
+        TestSayingTheAnswerEndsIt. Here the value is only mentioned in
+        passing, so the clamp is all that speaks."""
         session, _, speaker = self._session(db, self._verdict(
             reached_step=3, reached_claim="S = 28",    # the final step itself
         ))
         ask_l1(session, step=1)
-        await session.handle_answer("넓이는 28이요", session.store.pending_hint("p1"))
+        await session.handle_answer(
+            "28이 나오는 것 같긴 한데 확실하진 않아요", session.store.pending_hint("p1")
+        )
 
         assert session.store.get_state().last_correct_step == 1   # not 3
         assert session.ctx is not None                            # still open
@@ -1026,3 +1032,54 @@ class TestTheEchoDropsTheThrowatClearing:
     def test_leading_markers_are_stripped(self, said, core):
         from tutor.server.session import answer_core
         assert answer_core(said) == core
+
+
+class TestSayingTheAnswerEndsIt:
+    """The student asserts the verified final value — from ANY step, the
+    problem closes with a yes. A tutor who hears "정답은 5예요" mid-itinerary
+    and replies with the next sub-step is grading the itinerary, not the trip.
+    Only a TAIL assertion closes: "5를 빼면 돼요" merely passes through the
+    number and keeps the normal ladder."""
+
+    async def test_the_answer_asserted_early_closes_the_problem(self, db):
+        session, llm, speaker = build_session(
+            db,
+            [{"verdict": "CORRECT", "feedback": "맞아요!",
+              "misconception": None, "status": "CORRECT"}],
+        )
+        ask_l1(session, step=1)            # NOT the last step
+
+        await session.handle_answer("정답은 5예요", session.store.pending_hint("p1"))
+
+        assert session.ctx is None                     # closed
+        assert "solved" in session.ws.event_names()
+        assert "hint_issued" not in session.ws.event_names()
+        assert "끝까지 풀었네요" in " ".join(speaker.spoken)
+
+    async def test_a_judge_that_disagrees_cannot_veto_a_verified_value(self, db):
+        session, llm, speaker = build_session(
+            db,
+            [{"verdict": "INCORRECT", "feedback": "음, 조금 달라요.",
+              "misconception": None, "status": "STUCK"}],
+        )
+        ask_l1(session, step=1)
+
+        await session.handle_answer("5 맞아요?", session.store.pending_hint("p1"))
+
+        assert session.ctx is None
+        assert "solved" in session.ws.event_names()
+        spoken = " ".join(speaker.spoken)
+        assert "정답이에요" in spoken and "조금 달라요" not in spoken
+
+    async def test_a_passing_mention_does_not_close(self, db):
+        session, llm, speaker = build_session(
+            db,
+            [{"verdict": "CORRECT", "feedback": "맞아요!",
+              "misconception": None, "status": "CORRECT"}],
+        )
+        ask_l1(session, step=1)
+
+        await session.handle_answer("5를 빼면 돼요", session.store.pending_hint("p1"))
+
+        assert session.ctx is not None                 # still teaching
+        assert "solved" not in session.ws.event_names()

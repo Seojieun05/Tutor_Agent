@@ -154,7 +154,10 @@ async def test_a_spoken_answer_waits_out_the_solve_then_grades(db):
 
     assert llm.calls.count("evaluate") == 1                  # graded, not dropped
     assert llm.calls.count("recognize") == 1                 # and no re-capture
-    assert session.ctx.reference is not None
+    # "5예요" IS the verified final value, so the problem closes — which also
+    # proves the reference arrived: the value was compared against it
+    assert session.ctx is None
+    assert any(e["event"] == "solved" for e in ws.events)
 
 
 async def test_a_failed_solve_is_retried_on_the_answer_turn_never_re_photographed(db):
@@ -183,9 +186,12 @@ async def test_a_failed_solve_is_retried_on_the_answer_turn_never_re_photographe
     await session._handle_utterance(PCM, 16000)              # "5예요"
 
     assert solver.calls == 2                                 # the solve was retried...
-    assert session.ctx.reference is not None                 # ...and won this time
+    # ...and won: the answer was graded against the retried reference and,
+    # being the verified final value, closed the problem
     assert llm.calls.count("evaluate") == 1                  # so the answer WAS graded
     assert llm.calls.count("recognize") == 1                 # and no second look at the page
+    assert session.ctx is None
+    assert any(e["event"] == "solved" for e in ws.events)
     assert sum(1 for e in ws.events if e["event"] == "capture_request") == 1
 
 
