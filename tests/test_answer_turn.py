@@ -930,6 +930,99 @@ class TestAPlanDoesNotCloseTheProblem:
         assert session.ctx is not None                     # NOT closed
         assert "solved" not in session.ws.event_names()
         assert "끝까지 풀었네요" not in " ".join(speaker.spoken)
-        assert speaker.spoken[0].startswith("맞아요, 방향은 잘 잡았어요.")
+        assert speaker.spoken[0].startswith("좋아요, 제대로 접근하고 있어요.")
         state = session.store.get_state()
         assert state is not None and state.status == "STUCK"   # the partial path
+
+
+class TestAWrongValueNeverHearsRight:
+    """Live: "밑변은 14고, 높이가 7, 곱하면 98 맞나?" — right setup, wrong
+    value — was answered with 맞아요-wording twice. A number asserted as the
+    result at the utterance's tail is a CLAIM; a wrong claim is INCORRECT,
+    however good the approach, and the working numbers before it (14, 7)
+    assert nothing."""
+
+    def test_the_claim_reader(self):
+        from tutor.knowledge.models import Answer
+        from tutor.server.session import final_value_claim
+        a49 = Answer(kind="SCALAR", value="49")
+        assert final_value_claim("밑변은 14고, 높이가 7, 곱하면 98 맞나?", a49) == "wrong"
+        assert final_value_claim("곱하면 49예요", a49) == "said"
+        assert final_value_claim("y절편 차이를 밑변으로 하면 돼요", a49) == "none"
+        # working numbers mid-sentence, no tail assertion: not a claim
+        assert final_value_claim("밑변이 14니까 이걸 반으로 나눠 볼게요", a49) == "none"
+
+    async def test_a_wrong_final_claim_is_incorrect_not_partial(self, db):
+        session, llm, speaker = build_session(
+            db,
+            [{"verdict": "CORRECT", "feedback": "맞아요!",
+              "misconception": None, "status": "CORRECT"}],
+        )
+        ask_l1(session, step=2)            # the LAST step; the answer is 5
+
+        await session.handle_answer(
+            "3으로 나누면 6 맞나?", session.store.pending_hint("p1")
+        )
+
+        assert session.ctx is not None
+        assert "solved" not in session.ws.event_names()
+        assert speaker.spoken[0].startswith("접근 방식은 좋아요.")
+        assert "맞아요" not in speaker.spoken[0]
+        history = session.store.get_history(problem_hash="p1")
+        assert history[0].effective is False      # the pending hint did not land
+
+
+class TestAFragmentIsNotAnAnswer:
+    """"응, 레이 와이 절편은" — the sentence died on a particle and the VAD
+    closed on the pause. There is nothing to grade: no judge, no verdict on
+    work the student never said, just a re-ask."""
+
+    def evaluator(self):
+        from tutor.state.answer import AnswerEvaluator
+
+        class NoJudge:
+            def run_with_tools(self, **kw):
+                raise AssertionError("judge was consulted")
+
+        return AnswerEvaluator(NoJudge())
+
+    @pytest.mark.parametrize("said", [
+        "응, 레이 와이 절편은",
+        "그러니까 두 직선의 교점을",
+        "밑변의 길이는",
+    ])
+    def test_a_dangling_particle_is_reasked_not_graded(self, said):
+        from tutor.state.answer import CUTOFF_FEEDBACK
+        v = self.evaluator().evaluate(
+            problem_text="p", reference=REFERENCE, question="q",
+            target_step=1, transcript=said,
+        )
+        assert v.verdict == "UNCLEAR"
+        assert v.feedback == CUTOFF_FEEDBACK
+
+    @pytest.mark.parametrize("said", [
+        "x는 2",                     # ends on the value: the answer shape
+        "마이너스 2",
+        "두 값의 차이",              # a noun that merely ENDS in 이
+    ])
+    def test_value_tails_and_nouns_still_reach_the_judge(self, said):
+        with pytest.raises(AssertionError, match="judge was consulted"):
+            self.evaluator().evaluate(
+                problem_text="p", reference=REFERENCE, question="q",
+                target_step=1, transcript=said,
+            )
+
+
+class TestTheEchoDropsTheThrowatClearing:
+    """"그럼 마이너스 2" must echo as "마이너스 2…", not "그럼 마이너스 2…":
+    the discourse marker is the student turning to speak, not the value."""
+
+    @pytest.mark.parametrize("said,core", [
+        ("그럼 마이너스 2", "마이너스 2"),
+        ("응, 그럼 5", "5"),
+        ("음, 마이너스 4", "마이너스 4"),
+        ("그러니까 x는 2", "x는 2"),
+    ])
+    def test_leading_markers_are_stripped(self, said, core):
+        from tutor.server.session import answer_core
+        assert answer_core(said) == core

@@ -186,33 +186,53 @@ READOUT_CLOSERS: dict[bool, str] = {
 _POLITE_TAILS = ("입니다", "이에요", "이예요", "예요", "에요", "이요", "요")
 
 
-def names_the_final_value(transcript: str, answer) -> bool:
-    """Did the transcript actually SAY the problem's final value?
+def final_value_claim(transcript: str, answer) -> str:
+    """What the transcript claims about the final value.
 
-    The gate that keeps a right PLAN from closing the problem: the last
-    step's L1 asks about the setup, and answering the setup is correct
-    without being finished. Only plain-rational finals are machine-checkable
-    from speech (49, 1/2, 24/7 — STT writes digits); a surd or a power
-    (2**(5/2)) does not survive transcription in any fixed shape, so those
-    finals stay the judge's call — permissive, exactly as today.
+    "said"    — the value is in the utterance: the problem may close.
+    "wrong"   — a number is ASSERTED AS THE RESULT at the utterance's tail
+                ("곱하면 98 맞나?") and it is not the value. Working numbers
+                earlier in the sentence (밑변 14, 높이 7) assert nothing.
+    "none"    — no number claims the result: a plan, a setup, a method.
+    "unknown" — the final is not machine-checkable from speech (a surd, a
+                power): the judge's call stands, permissive as before.
+
+    Only plain-rational finals are checkable (49, 1/2, 24/7 — STT writes
+    digits); 3*sqrt(10)/10 has no fixed transcription shape.
     """
     from fractions import Fraction
 
     if getattr(answer, "kind", None) != "SCALAR":
-        return True
+        return "unknown"
     try:
         target = Fraction(str(answer.value).strip())
     except (ValueError, ZeroDivisionError):
-        return True
+        return "unknown"
+    said_any = False
     for said in re.findall(
         r"-?\d+(?:\.\d+)?(?:\s*/\s*\d+(?:\.\d+)?)?", transcript or ""
     ):
         try:
-            if Fraction(said.replace(" ", "")) == target:
-                return True
+            claim = Fraction(said.replace(" ", ""))
         except (ValueError, ZeroDivisionError):
             continue
-    return False
+        said_any = True
+        if claim == target:
+            return "said"
+    if not said_any:
+        return "none"
+    tail = re.search(
+        r"-?\d+(?:\.\d+)?(?:\s*/\s*\d+(?:\.\d+)?)?\s*"
+        r"(?:[이가은는]\s*)?(?:맞나요?|맞아요?|맞죠|맞지|아닌가요?|인가요?|"
+        r"이에요|예요|이요|잖아요?|요)?\s*[?.!…~]*$",
+        (transcript or "").strip(),
+    )
+    return "wrong" if tail else "none"
+
+
+def names_the_final_value(transcript: str, answer) -> bool:
+    """Did the transcript actually SAY the problem's final value?"""
+    return final_value_claim(transcript, answer) in ("said", "unknown")
 
 
 def answer_core(transcript: str) -> str | None:
@@ -231,6 +251,13 @@ def answer_core(transcript: str) -> str | None:
     is for the STAGE LINE to acknowledge, not the voice to repeat.
     """
     text = " ".join(transcript.split()).rstrip("?.!…, ")
+    # A leading discourse marker is the student TURNING to speak, not part of
+    # the value: "그럼 마이너스 2" echoed as "그럼 마이너스 2인지 보고 있어요"
+    # parrots the turn-taking noise back. Strip as many as are stacked.
+    text = re.sub(
+        r"^(?:(?:그럼|그러면|그러니까|그니까|그래서|응|네|예|어|음+|아+|자|이제|일단)[,\s]+)+",
+        "", text,
+    )
     if not text or len(text) > 16:
         return None
     # sentence-internal punctuation or more than three words is speech,
@@ -875,25 +902,32 @@ class Session:
         # Orchestrator-owned writes. The policy needs no new rules: resolving
         # the pending hint IS the signal that moves it up, down or nowhere.
         prev = self.store.get_state() or StudentState()
-        if (
-            verdict.verdict == "CORRECT"
-            and pending.step >= len(reference.steps)
-            and not names_the_final_value(transcript, reference.final_answer)
+        if verdict.verdict in ("CORRECT", "PARTIAL") and pending.step >= len(
+            reference.steps
         ):
-            # The LAST step only closes on the VALUE. Its L1 asks about the
-            # setup ("어떤 부분을 밑변과 높이로 정하면 좋을까요?"), and a
-            # student who answers THAT has answered the question — the judge
-            # rightly says CORRECT — but the problem is not finished until 49
-            # has actually been said. Downgrade to the partial machinery: the
-            # direction is affirmed, the step stays open, the value is asked.
-            log.info(
-                "final step: the plan was right but no value was said — "
-                "PARTIAL, the problem stays open"
-            )
-            verdict = verdict.model_copy(update={
-                "verdict": "PARTIAL",
-                "feedback": "맞아요, 방향은 잘 잡았어요.",
-            })
+            # The LAST step only closes on the VALUE, and it never nods at a
+            # wrong one. Its L1 asks about the setup, so a right setup answer
+            # is rightly CORRECT-for-the-question — but the problem is not
+            # finished until 49 has been said, and "곱하면 98 맞나?" must not
+            # hear 맞아요 of any kind (live it did, twice worded).
+            claim = final_value_claim(transcript, reference.final_answer)
+            if claim == "wrong":
+                log.info("final step: a wrong value was asserted — INCORRECT")
+                verdict = verdict.model_copy(update={
+                    "verdict": "INCORRECT",
+                    "feedback": "접근 방식은 좋아요. 다만 한 번 더 확인해 볼까요?",
+                    "reached_step": None,
+                    "reached_claim": "",
+                })
+            elif verdict.verdict == "CORRECT" and claim != "said":
+                log.info(
+                    "final step: the plan was right but no value was said — "
+                    "PARTIAL, the problem stays open"
+                )
+                verdict = verdict.model_copy(update={
+                    "verdict": "PARTIAL",
+                    "feedback": "좋아요, 제대로 접근하고 있어요.",
+                })
         if verdict.verdict == "CORRECT":
             reached = self._reached_step(verdict, reference, pending.step, transcript)
             self.store.set_state(
