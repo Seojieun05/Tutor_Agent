@@ -32,7 +32,11 @@ Rules:
   earlier misconception requires the CURRENT work to still show it.
 - Treat the student's latest spoken response as valid evidence of understanding,
   even when the handwritten work is empty or unchanged.
-- last_correct_step: highest reference step index the student has completed correctly (0 = none).
+- last_correct_step: the largest N such that reference steps 1..N are ALL accounted
+  for — written on the page, said aloud, or made unnecessary by the student's own
+  valid route. A later step done while an earlier one is still missing does NOT
+  raise it: report the unbroken prefix, and name the missing step in current_step.
+  (0 = none.)
 - status: CORRECT | CALCULATION_ERROR | CONCEPT_ERROR | PROCEDURAL_ERROR | MISREAD | STUCK | UNCERTAIN.
 - misconception: prefer an id from the provided misconception list when the student's
   error matches its indicators; otherwise a short free-text description or null.
@@ -198,10 +202,34 @@ class StudentStateEstimator:
         def same(a: str, b: str) -> bool:
             return mathnorm.equations_same_form(a, b)
 
+        matched = {
+            step.idx
+            for step in reference.steps
+            if any(same(line, step.expression) for line in rec.student_work)
+        }
+        # A later line vouches for the earlier steps it PASSED THROUGH: a page
+        # showing only "x = 5" did step 1 ("3*x = 15") in its head, and the
+        # two are one equation — same solution set, different form. It vouches
+        # for nothing on a different thread: g'(1) = -4 says nothing about
+        # l의 방정식, however many steps further along it sits.
+        implied = {
+            earlier.idx
+            for earlier in reference.steps
+            for done in reference.steps
+            if done.idx in matched and done.idx > earlier.idx
+            and mathnorm.equations_equivalent(done.expression, earlier.expression)
+        }
+        covered = matched | implied
+        # The PREFIX, not the peak: steps 1..N all accounted for. A page
+        # showing steps 1, 3 and 4 of independent sub-results is not "step 4
+        # done" — the hole at 2 is the very thing the tutor exists to notice
+        # (live: l의 기울기에서 곧장 m의 기울기로, l의 방정식은 한 번도 쓰이지
+        # 않은 채 확인이 지나갔다). With a hole, the newest line no longer
+        # equals the prefix, so this fast path declines and the full diagnosis
+        # decides whether the skip was fine or the thing to point at.
         lcs = 0
-        for step in reference.steps:
-            if any(same(line, step.expression) for line in rec.student_work):
-                lcs = max(lcs, step.idx)
+        while lcs + 1 in covered:
+            lcs += 1
         last = rec.student_work[-1]
         last_step = next(
             (s.idx for s in reference.steps if same(last, s.expression)), None
