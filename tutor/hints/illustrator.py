@@ -63,6 +63,44 @@ def drawable(expression: str) -> bool:
     return bool(_CURVE_LIKE.search(expression or ""))
 
 
+# "l: y = -2*(x - 1) - 6 = -2*x - 4" — a verified, LABELLED line. The last
+# piece of the chain is the finished form the board draws.
+_LABELLED_LINE = re.compile(r"^\s*([A-Za-z])\s*:\s*y\s*=\s*(.+)$")
+
+
+def ensure_verified_targets(
+    spec: FigureSpec | None, verified: list[str] | None
+) -> FigureSpec | None:
+    """A verified labelled line (l:, m:) is on the board, full stop.
+
+    The model decides the REST of the scene; whether an earned target line
+    appears stopped being its call the second time l went undrawn. Anything
+    in `verified` has been graded as the student's own result, so drawing it
+    can reveal nothing — and the leak screen downstream still runs.
+    """
+    obligates = []
+    for item in verified or []:
+        m = _LABELLED_LINE.match(item.strip())
+        if m is None:
+            continue
+        expr = m.group(2).split("=")[-1].strip()
+        if expr:
+            obligates.append(Curve(expr=expr, label=m.group(1), role="target"))
+    if not obligates:
+        return spec
+    if spec is None:
+        spec = FigureSpec()
+    have = {c.expr.replace(" ", "") for c in spec.curves}
+    labels = {c.label for c in spec.curves if c.label}
+    missing = [
+        c for c in obligates
+        if c.expr.replace(" ", "") not in have and c.label not in labels
+    ]
+    # earned targets survive the 4-curve cap ahead of scenery
+    spec.curves = (missing + spec.curves)[:4]
+    return spec
+
+
 class Curve(BaseModel):
     """One line on the grid, and why it is still there."""
 

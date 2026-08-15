@@ -417,3 +417,33 @@ class TestAVerifiedLineReachesTheBoard:
             "이제 l의 방정식을 어떻게 쓰면 좋을까요?", (), "p1",
         )
         assert recorder.kw is None
+
+
+class TestAnEarnedLineIsNotUpForProposal:
+    """ensure_verified_targets: a verified labelled line (l:, m:) reaches the
+    scene whatever the model proposed — l went undrawn twice on its judgement."""
+
+    VERIFIED = ["f'(1) = -2", "l: y = -2*(x - 1) - 6 = -2*x - 4"]
+
+    def test_a_missing_target_is_added_from_the_chains_final_form(self):
+        from tutor.hints.illustrator import Curve, FigureSpec, ensure_verified_targets
+        spec = FigureSpec(curves=[Curve(expr="x**2 - 4*x - 3", label="f")])
+        out = ensure_verified_targets(spec, self.VERIFIED)
+        assert [(c.label, c.expr) for c in out.curves][0] == ("l", "-2*x - 4")
+        assert out.curves[0].role == "target"
+
+    def test_a_refusing_model_still_yields_the_earned_line(self):
+        from tutor.hints.illustrator import ensure_verified_targets
+        out = ensure_verified_targets(None, self.VERIFIED)
+        assert out is not None
+        assert [c.label for c in out.curves] == ["l"]
+
+    def test_a_line_already_drawn_is_not_duplicated(self):
+        from tutor.hints.illustrator import Curve, FigureSpec, ensure_verified_targets
+        spec = FigureSpec(curves=[Curve(expr="-2*x - 4", label="l", role="target")])
+        out = ensure_verified_targets(spec, self.VERIFIED)
+        assert len(out.curves) == 1
+
+    def test_scalar_steps_obligate_nothing(self):
+        from tutor.hints.illustrator import ensure_verified_targets
+        assert ensure_verified_targets(None, ["f'(1) = -2", "g'(1) = -4"]) is None

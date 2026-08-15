@@ -1324,8 +1324,23 @@ class Session:
             # ladder or enter history; it answers the question they are about
             # to ask without reading an internal step label aloud.
             log.info("work check at step %d: correct so far", current.last_correct_step)
-            line = self._confirmed_line(current, reference)
+            line, asked_step = self._confirmed_line(current, reference)
             await self._speak(line, final=True)
+            pending_now = self.store.pending_hint(ctx.hash)
+            if asked_step is not None and (
+                pending_now is None or pending_now.step != asked_step
+            ):
+                # The forward invitation is a real question, so it is on the
+                # record like one: the reply to it ("그럼 마이너스 4 맞나?")
+                # must find a pending question to be graded against, and the
+                # ladder for the NEXT step rightly starts at this L1 — the
+                # verdict about the PAST work still enters no history. When a
+                # question for that very step is already pending, it stays the
+                # question of record; re-asking is not re-recording.
+                self.store.append_hint(
+                    problem_hash=ctx.hash, step=asked_step, level=1,
+                    action="SOCRATIC_QUESTION", hint_text=line,
+                )
             # The forward invitation often gets one reply — "그거 어떻게
             # 해요?" — and that reply must not begin with a camera shutter:
             # the diagnosis it needs is the one that was just made.
@@ -1442,7 +1457,7 @@ class Session:
         return WORK_CHECK_REACTIONS.get(state.status, WORK_CHECK_DEFAULT)
 
     @staticmethod
-    def _confirmed_line(state: StudentState, reference) -> str:
+    def _confirmed_line(state: StudentState, reference) -> tuple[str, int | None]:
         """The verdict, plus a question that opens the next piece of work.
 
         Only a noun-form step description rides in the sentence (the same rule
@@ -1450,19 +1465,26 @@ class Session:
         its description becomes an invitation (never an expression), and the composed line
         stays at the level of an action rather than revealing its expression.
         A finished problem gets the congratulation instead.
+
+        Returns the line AND the step it asked about (None when it asked
+        nothing). The caller records an asked question like any other: a
+        student who answers "그럼 마이너스 4 맞나?" three seconds later must
+        land on a pending question, and live they landed on none — the intent
+        fell through to the LLM, came back NONE, and the tutor sat silent on
+        a correct answer it had just invited.
         """
         if reference is None:
-            return WORK_CONFIRMED
+            return WORK_CONFIRMED, None
         nxt = next(
             (s for s in reference.steps if s.idx == state.last_correct_step + 1),
             None,
         )
         if nxt is None:
-            return "맞아요! 여기까지면 다 풀었어요. 어떻게 구했는지 한번 정리해 볼까요?"
+            return "맞아요! 여기까지면 다 풀었어요. 어떻게 구했는지 한번 정리해 볼까요?", None
         name = nxt.description.strip().rstrip(" .!?…")
         if not name or SENTENCE_STEP_RE.search(name):
-            return WORK_CONFIRMED
-        return f"맞아요! 여기까지 잘했어요. {guided_step_question(name, nxt.idx)}"
+            return WORK_CONFIRMED, None
+        return f"맞아요! 여기까지 잘했어요. {guided_step_question(name, nxt.idx)}", nxt.idx
 
     def _same_problem(self, rec: Recognition) -> bool:
         """Is this the worksheet we are already working on?
@@ -1761,6 +1783,9 @@ class Session:
             student_said=student_said,
             verified=verified,
         )
+        # the model proposes the scene; the student's earned target lines are
+        # not up for proposal — l went undrawn twice on the model's judgement
+        spec = illustrator.ensure_verified_targets(spec, verified)
         if spec is None or not spec.curves:
             return
         # The same gate as the words: a curve of the answer IS the answer.
