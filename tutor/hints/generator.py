@@ -94,10 +94,19 @@ def mentions_future_step(
     spoken = _step_tokens(text)
     if not spoken:
         return False
+    # The target step's own vocabulary never counts as "future". Sibling
+    # steps rhyme — "점 (1, -6)을 지나는 l의 방정식" and "점 (1, 6)을 지나는
+    # m의 방정식" share 방정식, 지나 and both digits — and counting the shared
+    # words flagged the CORRECT step-2 question as a mention of step 5, at
+    # generation and at speak time both, leaving the slot to a concept line
+    # that knew nothing about l. What distinguishes a future step is what is
+    # ONLY in it.
+    target = next((s for s in reference.steps if s.idx == target_step), None)
+    own = _step_tokens(target.description) if target is not None else set()
     for step in reference.steps:
         if step.idx <= target_step:
             continue
-        future = _step_tokens(step.description)
+        future = _step_tokens(step.description) - own
         overlap = spoken & future
         concept_overlap = {
             token for token in overlap

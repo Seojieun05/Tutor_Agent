@@ -995,3 +995,40 @@ class TestPrewriteScreensItsOwnPen:
         line = gen.prewrite(problem=problem, reference=reference, rec=rec,
                             step_idx=1, level=1)
         assert line is None
+
+
+class TestTheTargetsOwnWordsAreNotTheFuture:
+    """Sibling steps rhyme: l의 방정식 (step 2) and m의 방정식 (step 5) share
+    방정식, 지나 and both digits. The words that are ALSO the target's own
+    must not count as a future-step mention — counting them silenced the
+    correct step-2 question and left the slot to step-blind boilerplate."""
+
+    REF = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="f'(x)로 접선 l의 기울기 구하기",
+                         expression="f'(x) = 2*x - 4, f'(1) = -2"),
+            SolutionStep(idx=2, description="점 (1, -6)을 지나는 l의 방정식 쓰기",
+                         expression="l: y = -2*x - 4"),
+            SolutionStep(idx=3, description="곱의 미분법으로 g'(x) 쓰기",
+                         expression="g'(x) = (3*x**2 - 2)*f(x) + (x**3 - 2*x)*f'(x)"),
+            SolutionStep(idx=4, description="g'(1) 계산", expression="g'(1) = -4"),
+            SolutionStep(idx=5, description="점 (1, 6)을 지나는 m의 방정식 쓰기",
+                         expression="m: y = -4*x + 10"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="49"),
+        concepts=["differentiation"], verified=True, origin="db",
+    )
+
+    def test_the_step_two_question_is_not_a_mention_of_step_five(self):
+        assert not mentions_future_step(
+            "이제 점 (1, -6)을 지나는 l의 방정식을 어떻게 쓰면 좋을까요?",
+            self.REF, 2,
+        )
+
+    def test_a_step_one_hint_asking_for_the_equation_is_still_caught(self):
+        # the original live failure this guard exists for, unchanged
+        assert mentions_future_step(
+            "우선 구하신 기울기 마이너스 2와 점 (1, -6)을 사용해서 "
+            "접선 l의 방정식을 어떻게 나타낼 수 있을까요?",
+            self.REF, 1,
+        )
