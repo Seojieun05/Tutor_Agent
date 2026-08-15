@@ -914,7 +914,11 @@ class HintGenerator:
         seen = visible_to_student(rec)
 
         def screened(text: str) -> str | None:
-            text = strip_leading_acknowledgement(" ".join(text.split()))
+            # a phrasing model sometimes wraps math in TeX dollars ("$x$의
+            # 범위"), which the page would show literally
+            text = strip_leading_acknowledgement(
+                " ".join(text.replace("$", "").split())
+            )
             if (
                 not text
                 or (level == 1 and announces_step(text))
