@@ -1,7 +1,13 @@
 import pytest
 
 from tutor.hints.guard import leaks_answer
-from tutor.hints.generator import HintGenerator, PhrasedHint
+from tutor.hints.generator import (
+    HintGenerator,
+    PhrasedHint,
+    SafeWordEmitter,
+    guided_step_question,
+    mentions_future_step,
+)
 from tutor.knowledge.models import (
     Answer,
     MatchResult,
@@ -85,6 +91,67 @@ class TestLeakGuard:
         assert not leaks_answer("x^3의 지수를 확인해 보세요", QUAD_REF, 1)
 
 
+class TestSafeWordEmitter:
+    def test_safe_words_leave_before_the_sentence_is_complete(self):
+        out = []
+        emitter = SafeWordEmitter(out.append, LIN_REF, 1, [])
+        emitter.feed("지금 두 번째 줄에서 어떤 등식의 성질을 ")
+        assert out, "the rolling quarantine held the entire sentence"
+        assert "".join(out) != emitter.seen
+        emitter.feed("써야 할까요?")
+        text, blocked = emitter.finish(emitter.seen)
+        assert not blocked
+        assert "".join(out) == text
+
+    def test_answer_word_never_leaves_quarantine(self):
+        out = []
+        emitter = SafeWordEmitter(out.append, LIN_REF, 1, [])
+        unsafe = "두 번째 줄을 천천히 보면 정답은 바로 5예요 "
+        emitter.feed(unsafe)
+        text, blocked = emitter.finish(unsafe)
+        spoken = "".join(out)
+        assert blocked
+        assert "5" not in spoken and "5" not in text
+        assert "어디인가요" in spoken
+
+    def test_l1_step_announcement_never_reaches_the_live_stream(self):
+        out = []
+        emitter = SafeWordEmitter(
+            out.append, LIN_REF, 1, [], forbid_step_announcement=True
+        )
+        announced = "곱의 미분법으로 g'(x) 쓰기 차례예요. "
+        emitter.feed(announced)
+        text, blocked = emitter.finish(announced)
+
+        assert blocked
+        assert "차례" not in "".join(out) and "차례" not in text
+        assert text.endswith("?")
+
+    def test_future_step_question_never_leaves_the_live_stream(self):
+        reference = ReferenceSolution(
+            steps=[
+                SolutionStep(idx=1, description="접선 l의 기울기 구하기",
+                             expression="f'(1) = -2"),
+                SolutionStep(idx=2, description="점 (1, -6)을 지나는 l의 방정식 쓰기",
+                             expression="l: y = -2*x - 4"),
+            ],
+            final_answer=Answer(kind="SCALAR", value="49"), concepts=[],
+        )
+        out = []
+        emitter = SafeWordEmitter(
+            out.append, reference, 1, [], forbid_future_step=True
+        )
+        future = (
+            "우선 구하신 기울기 마이너스 2와 점 (1, -6)을 사용해서 "
+            "접선 l의 방정식을 어떻게 나타낼 수 있을까요? "
+        )
+        emitter.feed(future)
+        text, blocked = emitter.finish(future)
+
+        assert blocked
+        assert "방정식" not in "".join(out) and "방정식" not in text
+
+
 def decision(level=1, misconception=None, target=1):
     from tutor.policy.engine import LEVEL_ACTIONS
 
@@ -101,13 +168,87 @@ def lin_match(db_problem=None):
 
 
 class TestGenerator:
+    def test_live_generator_replaces_an_answer_before_it_is_emitted(self):
+        class NoTemplates:
+            def hint_templates_for(self, *args, **kwargs):
+                return []
+
+            def get_misconception(self, *args, **kwargs):
+                return None
+
+        llm = EchoLLMClient({"phrase": [{"hint": "천천히 보면 정답은 바로 5예요"}]})
+        gen = HintGenerator(llm, NoTemplates())
+        out = []
+        text = gen.generate(
+            decision(1),
+            MatchResult(tier=Tier.NEW, concepts=[]),
+            LIN_REF,
+            Recognition(problem_text="일차방정식"),
+            [],
+            on_delta=out.append,
+        )
+        assert "5" not in "".join(out)
+        assert "5" not in text
+        assert out and "어디인가요" in text
+
     def test_db_template_first_no_llm(self, db):
         llm = EchoLLMClient()
         gen = HintGenerator(llm, db)
         text = gen.generate(decision(1), lin_match(), LIN_REF, Recognition(problem_text="p"), [])
         assert text
+        assert text.startswith("우선 ")
         assert llm.calls == []  # verified DB pedagogy, no LLM
         assert not leaks_answer(text, LIN_REF, 1)
+
+    def test_later_l1_template_connects_with_now(self, db):
+        text = HintGenerator(EchoLLMClient(), db).generate(
+            decision(1, target=2), lin_match(), LIN_REF,
+            Recognition(problem_text="p"), [],
+        )
+        assert text.startswith("이제 ")
+
+    def test_product_rule_step_is_invited_without_announcing_the_method(self):
+        text = guided_step_question("곱의 미분법으로 g'(x) 쓰기", 3)
+        assert text == "이제 g(x)가 두 식의 곱이라는 점을 보고, 어떻게 미분하면 좋을까요?"
+        assert "곱의 미분법" not in text and "차례" not in text
+
+    def test_a_target_step_one_hint_cannot_ask_for_step_two(self, db):
+        reference = ReferenceSolution(
+            steps=[
+                SolutionStep(idx=1, description="접선 l의 기울기 구하기",
+                             expression="f'(1) = -2"),
+                SolutionStep(idx=2, description="점 (1, -6)을 지나는 l의 방정식 쓰기",
+                             expression="l: y = -2*x - 4"),
+                SolutionStep(idx=3, description="곱의 미분법으로 g'(x) 쓰기",
+                             expression="g'(x) = u'(x)*v(x) + u(x)*v'(x)"),
+            ],
+            final_answer=Answer(kind="SCALAR", value="49"), concepts=[],
+        )
+        future = (
+            "우선 구하신 기울기 마이너스 2와 점 (1, -6)을 사용해서 "
+            "접선 l의 방정식을 어떻게 나타낼 수 있을까요?"
+        )
+        assert mentions_future_step(future, reference, 1)
+
+        class NoTemplates:
+            def hint_templates_for(self, *args, **kwargs):
+                return []
+
+            def get_misconception(self, *args, **kwargs):
+                return None
+
+        llm = EchoLLMClient({"phrase": [
+            {"hint": future},
+            {"hint": "우선 접선 l의 기울기는 얼마인지 확인해 볼까요?"},
+        ]})
+        text = HintGenerator(llm, NoTemplates()).generate(
+            Decision(Action.SOCRATIC_QUESTION, 1, 1, "force_llm", "test"),
+            MatchResult(tier=Tier.EXACT, concepts=[], reference=reference),
+            reference, Recognition(problem_text="p"), [],
+        )
+
+        assert llm.calls == ["phrase", "phrase"]
+        assert "방정식" not in text
 
     def test_misconception_template_with_safe_term(self, db):
         # answer is 5 and b=5 → the {term}=5 template would leak; generator must skip it
@@ -172,6 +313,30 @@ class TestGenerator:
         text = gen.generate(decision(1), match, LIN_REF, Recognition(problem_text="p"), [])
         assert llm.calls == ["phrase", "phrase"]
         assert not leaks_answer(text, LIN_REF, 1)
+
+    def test_llm_step_announcement_gets_regenerated_as_a_question(self, db):
+        llm = EchoLLMClient({"phrase": [
+            {"hint": "곱의 미분법으로 g'(x) 쓰기 차례예요."},
+            {"hint": "이제 g(x)가 두 식의 곱이라는 점을 보고, 어떻게 미분하면 좋을까요?"},
+        ]})
+        reference = ReferenceSolution(
+            steps=[
+                SolutionStep(idx=1, description="첫 값 구하기", expression="a = 1"),
+                SolutionStep(idx=2, description="둘째 값 구하기", expression="b = 2"),
+                SolutionStep(idx=3, description="곱의 미분법으로 g'(x)를 씁니다.",
+                             expression="g'(x) = u'(x)*v(x) + u(x)*v'(x)"),
+            ],
+            final_answer=Answer(kind="SCALAR", value="1"),
+            concepts=["unknown_concept"], verified=True, origin="db",
+        )
+        text = HintGenerator(llm, db).generate(
+            decision(1, target=3),
+            MatchResult(tier=Tier.NEW, concepts=["unknown_concept"], reference=reference),
+            reference, Recognition(problem_text="p"), [],
+        )
+
+        assert llm.calls == ["phrase", "phrase"]
+        assert text.startswith("이제 ") and "차례" not in text
 
 
 class TestTheirWorkReachesThePrompt:
@@ -628,3 +793,60 @@ class TestATemplateNeverWearsASentence:
         db = self.db_with_template()
         text = self.generate(db, self.reference("접선 l의 기울기 구하기."))
         assert text == "접선 l의 기울기 구하기가 먼저예요."
+
+
+class TestATutorAsksInItsOwnVoice:
+    """The deterministic L1 conjugates the step verb instead of gluing a
+    particle onto a label — the audit that forced this heard "바꿔를 어떻게
+    쓰면 좋을까요?", "찾기를 해 볼까요?" and "f'(1)를 구해 볼까요?"."""
+
+    @pytest.mark.parametrize("description,expected", [
+        # a phrase ending on a connective flows straight into the verb
+        ("구하는 값을 밑 3으로 바꿔 쓰기", "이제 구하는 값을 밑 3으로 바꿔 써 볼까요?"),
+        ("둘째 조건에 대입해 정리하기", "이제 둘째 조건에 대입해 정리해 볼까요?"),
+        # an adverbial tail (…으로) already carries its particle
+        ("ㄱ: k = 0 일 때 위치를 적분으로 구하기", "이제 ㄱ: k = 0 일 때 위치를 적분으로 구해 볼까요?"),
+        ("넓이를 정적분으로 세우기", "이제 넓이를 정적분으로 세워 볼까요?"),
+        # step verbs are conjugated, never "X기를 해 볼까요"
+        ("극값을 갖는 x 찾기", "이제 극값을 갖는 x를 찾아볼까요?"),
+        ("참인 보기 모으기", "이제 참인 보기를 모아 볼까요?"),
+        ("점근선 확인", "이제 점근선을 확인해 볼까요?"),
+        ("극댓값을 a로 나타내기", "이제 극댓값을 a로 나타내 볼까요?"),
+    ])
+    def test_step_labels_become_natural_questions(self, description, expected):
+        assert guided_step_question(description, 3) == expected
+
+    @pytest.mark.parametrize("description,expected", [
+        # the particle follows the SOUND of the tail: 일 → 을, 세제곱 → 삼 → 을
+        ("두 값을 더해 f'(1) 구하기", "이제 두 값을 더해 f'(1)을 구해 볼까요?"),
+        ("두 식을 나눠 r³ 구하기", "이제 두 식을 나눠 r³을 구해 볼까요?"),
+        ("첫 식에 대입해 a_1 구하기", "이제 첫 식에 대입해 a_1을 구해 볼까요?"),
+        # letter names: 엘/엠/엔/알 close on a consonant, the rest stay open
+        ("접선 l의 기울기와 m 구하기", "이제 접선 l의 기울기와 m을 구해 볼까요?"),
+        ("교점의 x좌표에서 x 구하기", "이제 교점의 x좌표에서 x를 구해 볼까요?"),
+    ])
+    def test_the_particle_follows_the_spoken_tail(self, description, expected):
+        assert guided_step_question(description, 2) == expected
+
+
+class TestTheSeedGateRefusesAnnouncers:
+    """warm_kb refuses an L1 template that announces the step: the first
+    batch was seeded as "{step} 차례예요 …" and sat in the DB as dead rows,
+    silently skipped by the generator on every single turn."""
+
+    def test_an_announcing_l1_is_refused_and_a_question_is_kept(self, db):
+        from tutor.scripts.warm_kb import seed_hint_templates
+
+        n = seed_hint_templates(db, {"hint_templates": [
+            {"id": "gate-l1-bad", "concept_id": "linear_equation", "level": 1,
+             "template_text": "{step} 차례예요. 어떻게 시작하면 좋을까요?"},
+            {"id": "gate-l1-good", "concept_id": "linear_equation", "level": 1,
+             "template_text": "등식의 양쪽에서 무엇을 똑같이 할 수 있을까요?"},
+            {"id": "gate-l2-ok", "concept_id": "linear_equation", "level": 2,
+             "template_text": "이항은 부호를 바꿔 옮기는 거예요. 어느 항부터 옮기면 좋을까요?"},
+        ]})
+
+        assert n == 2
+        kept = {t.id for t in db.hint_templates_for(["linear_equation"], None, 1)}
+        assert "gate-l1-bad" not in kept
+        assert "gate-l1-good" in kept

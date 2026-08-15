@@ -243,10 +243,22 @@ def seed_hint_templates(db, entries: dict) -> int:
     A hint the DB can answer is a hint no model is asked to write — the
     template path in HintGenerator.generate runs before the phrase call, so
     every line seeded here turns a measured ~7s of phrasing into nothing.
+
+    Quality gate at the door, not at speak time: an L1 that announces the
+    step ("X 차례예요") is the navigation voice the generator would refuse
+    anyway — the whole first batch of L1 templates was seeded in that shape
+    and sat in the DB as dead rows, silently skipped on every turn. Refusing
+    it HERE, loudly, keeps the file honest.
     """
+    from tutor.hints.generator import announces_step
+
     n = 0
     for spec in entries.get("hint_templates", []):
-        db.insert_hint_template(HintTemplate.model_validate(spec))
+        template = HintTemplate.model_validate(spec)
+        if template.level == 1 and announces_step(template.template_text):
+            say(f"  REFUSED {template.id}: an L1 must ask, not announce a step")
+            continue
+        db.insert_hint_template(template)
         n += 1
     if n:
         say(f"seeded {n} hint template(s)")
