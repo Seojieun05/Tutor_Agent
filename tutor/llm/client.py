@@ -11,7 +11,7 @@ import base64
 import json
 import logging
 import re
-from typing import Protocol, Sequence, TypeVar
+from typing import Callable, Protocol, Sequence, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -54,6 +54,90 @@ class LLMClient(Protocol):
         schema: type[M],
         max_rounds: int = 6,
     ) -> M: ...
+
+    def complete_json_stream(
+        self,
+        *,
+        purpose: str,
+        system: str,
+        user: str,
+        images: Sequence[bytes] = (),
+        schema: type[M],
+        text_field: str,
+        on_text_delta: Callable[[str], None],
+    ) -> M: ...
+
+
+class JsonStringFieldStream:
+    """Incrementally decode one JSON string field from arbitrary SSE chunks.
+
+    The model still returns the complete structured object for validation. This
+    small parser only exposes characters inside (for example) ``"hint"`` while
+    that object is arriving; JSON syntax and later fields such as ``board``
+    never enter the student-facing stream.
+    """
+
+    _ESCAPES = {
+        '"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f",
+        "n": "\n", "r": "\r", "t": "\t",
+    }
+
+    def __init__(self, field: str):
+        self.field = field
+        self._source = ""
+        self._pos = 0
+        self._started = False
+        self._done = False
+        self._escaped = False
+        self._unicode = ""
+
+    def feed(self, chunk: str) -> str:
+        if not chunk or self._done:
+            return ""
+        self._source += chunk
+        if not self._started:
+            match = re.search(rf'"{re.escape(self.field)}"\s*:\s*"', self._source)
+            if match is None:
+                # Keep a bounded suffix: enough for a key split across chunks,
+                # without retaining an arbitrarily large prefix before it.
+                if len(self._source) > 256:
+                    self._source = self._source[-256:]
+                return ""
+            self._started = True
+            self._pos = match.end()
+
+        out: list[str] = []
+        while self._pos < len(self._source) and not self._done:
+            ch = self._source[self._pos]
+            self._pos += 1
+            if self._unicode:
+                if ch.lower() not in "0123456789abcdef":
+                    # Invalid JSON will be handled by the normal schema retry;
+                    # do not expose a malformed escape as student text.
+                    self._done = True
+                    break
+                self._unicode += ch
+                if len(self._unicode) == 5:  # 'u' + four hex digits
+                    out.append(chr(int(self._unicode[1:], 16)))
+                    self._unicode = ""
+                    self._escaped = False
+                continue
+            if self._escaped:
+                if ch == "u":
+                    self._unicode = "u"
+                elif ch in self._ESCAPES:
+                    out.append(self._ESCAPES[ch])
+                    self._escaped = False
+                else:
+                    self._done = True
+                continue
+            if ch == "\\":
+                self._escaped = True
+            elif ch == '"':
+                self._done = True
+            else:
+                out.append(ch)
+        return "".join(out)
 
 
 def _strip_fences(text: str) -> str:
@@ -112,6 +196,37 @@ class GrokClient:
             {"role": "user", "content": self._user_content(user, images)},
         ]
         return self._final_json(purpose, messages, schema)
+
+    def complete_json_stream(
+        self, *, purpose, system, user, images=(), schema, text_field, on_text_delta
+    ):
+        """Validate a normal JSON response while exposing one string field live."""
+        messages = [
+            {"role": "system", "content": f"{system}\n\n{self._schema_reminder(schema)}"},
+            {"role": "user", "content": self._user_content(user, images)},
+        ]
+        extractor = JsonStringFieldStream(text_field)
+        content = ""
+        stream = self._client.chat.completions.create(
+            model=self.settings.chat_model,
+            messages=messages,
+            response_format={"type": "json_object"},
+            temperature=0,
+            stream=True,
+            **self._tuning(purpose),
+        )
+        for event in stream:
+            if not event.choices:
+                continue
+            delta = event.choices[0].delta.content or ""
+            if not delta:
+                continue
+            content += delta
+            visible = extractor.feed(delta)
+            if visible:
+                on_text_delta(visible)
+        messages.append({"role": "assistant", "content": content})
+        return self._parse_or_retry(purpose, messages, content, schema)
 
     def run_with_tools(self, *, purpose, system, user, images=(), schema, max_rounds=6):
         tools = self.registry.openai_tools(purpose)

@@ -263,6 +263,21 @@ async def test_correct_work_is_confirmed_and_not_hinted_at(db):
     assert session.ctx is not None                 # still on the same problem
 
 
+async def test_correct_so_far_does_not_resolve_the_unattempted_next_step(db):
+    session, _, _, _ = build(
+        db,
+        "풀이 맞아?",
+        llm_responses={"recognize": [seen(["3*x = 15"])]},
+    )
+    hint_id = ask_l1(session, step=2)  # step 1 proven; asking about step 2
+
+    await session._handle_utterance(PCM, 16000)
+
+    pending = session.store.pending_hint("p1")
+    assert pending is not None and pending.id == hint_id
+    assert pending.step == 2 and pending.effective is None
+
+
 async def test_a_wrong_line_hears_the_verdict_first(db):
     """"풀이 맞아?" is a yes/no question: when the answer is no, say NO first.
 
@@ -651,6 +666,17 @@ class TestTheFollowThrough:
         hint = session.store.get_history(problem_hash="p1")[-1]
         assert hint.step == 2 and hint.level == 1     # L1 at the NEXT step
 
+    async def test_spoken_next_step_request_uses_the_armed_follow_through(self, db):
+        session, llm, _, ws = await self.confirmed(db)
+        session.deps.transcriber.texts.append("응, 이 다음엔 어떻게 해야 돼?")
+
+        await session._handle_utterance(PCM, 16000)
+
+        assert ws.captures == 1                       # confirmation's photo only
+        assert llm.calls.count("evaluate") == 0       # never graded as an answer
+        hint = session.store.get_history(problem_hash="p1")[-1]
+        assert hint.step == 2                         # never returned to step 1
+
     async def test_the_window_is_single_use(self, db):
         session, llm, speaker, ws = await self.confirmed(db)
         await session.handle_hint_request()
@@ -669,3 +695,99 @@ class TestTheFollowThrough:
         await session.handle_hint_request()
 
         assert ws.captures == 2                       # expired: look again
+
+
+async def test_problem_13_g_prime_confirmation_continues_to_g_prime_at_one(db):
+    """The complete live regression from 2026-08-15 14:27.
+
+    A cropped reread reported CORRECT step 1 after step 3 had already been
+    proven; the follow-up question was then graded against an ancient step-1
+    hint.  Neither kind of rewind is allowed.
+    """
+    p13_text = (
+        "13. 함수 f(x) = x² - 4x - 3 에 대하여 곡선 y = f(x) 위의 점 "
+        "(1, -6)에서의 접선을 l이라 하고, 함수 g(x) = (x³ - 2x) f(x)에 "
+        "대하여 곡선 y = g(x) 위의 점 (1, 6)에서의 접선을 m이라 하자."
+    )
+    equations = [
+        "f(x) = x**2 - 4*x - 3",
+        "y = f(x)",
+        "g(x) = (x**3 - 2*x)*f(x)",
+        "y = g(x)",
+    ]
+    work = ["g'(x) = (3*x**2 - 2)*f(x) + (x**3 - 2*x)*(2*x - 4)"]
+    reference = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="f'(x)로 접선 l의 기울기 구하기",
+                         expression="f'(x) = 2*x - 4, f'(1) = -2"),
+            SolutionStep(idx=2, description="점 (1, -6)을 지나는 l의 방정식 쓰기",
+                         expression="l: y = -2*x - 4"),
+            SolutionStep(idx=3, description="곱의 미분법으로 g'(x) 쓰기",
+                         expression="g'(x) = (3*x**2 - 2)*f(x) + (x**3 - 2*x)*f'(x)"),
+            SolutionStep(idx=4, description="g'(1) 계산", expression="g'(1) = -4"),
+            SolutionStep(idx=5, description="m의 방정식 쓰기", expression="m: y = -4*x + 10"),
+            SolutionStep(idx=6, description="두 직선의 교점 구하기", expression="x = 7"),
+            SolutionStep(idx=7, description="넓이 구하기", expression="49"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="49"),
+        concepts=["differentiation", "derivative_applications", "area"],
+        verified=True,
+        origin="db",
+    )
+    recognized = dict(
+        problem_text=p13_text,
+        equations=equations,
+        student_work=work,
+        choices=[], diagram_conditions=[], uncertain_regions=[], confidence=1.0,
+    )
+    session, llm, speaker, ws = build(
+        db,
+        "풀이 맞아?",
+        "응, 이 다음엔 어떻게 해야 돼?",
+        llm_responses={
+            "recognize": [recognized],
+            # The bad live estimate: correct line, but a regressed step number.
+            "estimate": [{"current_step": "g' 식을 올바르게 구함",
+                          "last_correct_step": 1, "status": "CORRECT",
+                          "misconception": None, "attempt_count": 1,
+                          "previous_hint_effective": True}],
+        },
+    )
+    initial = Recognition(**recognized)
+    session.ctx = ProblemContext(
+        hash="p13",
+        recognition=initial.model_copy(update={"student_work": []}),
+        match=MatchResult(tier=Tier.EXACT, concepts=reference.concepts,
+                          reference=reference),
+        reference=reference,
+    )
+    session.store.set_state(
+        StudentState(status="CALCULATION_ERROR", last_correct_step=3)
+    )
+    session.prev_work = ["g'(1) = -2"]
+    session.store.append_hint(
+        problem_hash="p13", step=1, level=1,
+        action="SOCRATIC_QUESTION", hint_text="오래된 질문",
+    )
+    current_hint = session.store.append_hint(
+        problem_hash="p13", step=4, level=2,
+        action="CONCEPT_HINT", hint_text="g'(1)은 어떻게 계산할까요?",
+    )
+
+    await session._handle_utterance(PCM, 16000)  # work confirmation
+
+    state = session.store.get_state()
+    assert state.status == "CORRECT" and state.last_correct_step == 3
+    assert session.store.pending_hint("p13").id == current_hint
+    confirmation = " ".join(speaker.spoken)
+    assert "이제" in confirmation and "g 프라임 1" in confirmation
+    assert "계산해 볼까요" in confirmation and "차례" not in confirmation
+    assert "l의 기울기" not in confirmation
+    assert session._continue_from is not None
+
+    await session._handle_utterance(PCM, 16000)  # "이 다음엔 어떻게?"
+
+    assert ws.captures == 1
+    assert llm.calls.count("evaluate") == 0
+    latest = session.store.get_history(problem_hash="p13")[-1]
+    assert latest.step == 4

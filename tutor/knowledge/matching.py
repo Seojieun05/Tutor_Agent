@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 
 from tutor.knowledge import mathnorm
 from tutor.knowledge.db import KnowledgeDB
@@ -28,6 +29,35 @@ from tutor.knowledge.models import (
 from tutor.vision.recognizer import Recognition
 
 log = logging.getLogger(__name__)
+
+_FUNCTION_DEF = re.compile(
+    r"^\s*([A-Za-z][A-Za-z0-9_]*)\s*\(\s*x\s*\)\s*=\s*(.+?)\s*$"
+)
+_GRAPH_ALIAS = re.compile(
+    r"^\s*y\s*=\s*([A-Za-z][A-Za-z0-9_]*)\s*\(\s*x\s*\)\s*$"
+)
+
+
+def _without_graph_aliases(equations: list[str]) -> list[str]:
+    """Drop ``y=f(x)`` only when the same read also defines ``f(x)=...``.
+
+    Vision models often return both the function definition and the curve
+    label from the prose.  The label adds no condition, but its presence made
+    a verified two-equation problem look like a new four-equation problem.
+    """
+    defined = set()
+    for equation in equations:
+        match = _FUNCTION_DEF.match(equation)
+        if match and match.group(2).strip() != "y":
+            defined.add(match.group(1))
+    return [
+        equation
+        for equation in equations
+        if not (
+            (alias := _GRAPH_ALIAS.match(equation))
+            and alias.group(1) in defined
+        )
+    ]
 
 
 def problem_hash(rec: Recognition) -> str:
@@ -79,18 +109,24 @@ class Matcher:
 
     def _match_exact(self, rec: Recognition) -> MatchResult | None:
         candidate = self.db.find_by_text_hash(problem_hash(rec))
-        if candidate is None and rec.equations:
+        equations = _without_graph_aliases(rec.equations)
+        if candidate is None and equations != rec.equations:
+            candidate = self.db.find_by_text_hash(
+                problem_hash(rec.model_copy(update={"equations": equations}))
+            )
+        if candidate is None and equations:
             # Indexed candidates only: same numbers and variables, which is a
             # necessary condition for the strict equivalence checked below.
-            signature = mathnorm.equations_signature(rec.equations)
+            signature = mathnorm.equations_signature(equations)
             for p in self.db.problems_by_signature(signature):
-                if len(p.equations) != len(rec.equations):
+                stored = _without_graph_aliases(p.equations)
+                if len(stored) != len(equations):
                     continue
                 # strict: a scalar multiple is a DIFFERENT problem — its
                 # parameters (and hint slot values) differ; TEMPLATE handles it
                 if all(
                     mathnorm.equations_equivalent(a, b, allow_scale=False)
-                    for a, b in zip(rec.equations, p.equations)
+                    for a, b in zip(equations, stored)
                 ):
                     candidate = p
                     break

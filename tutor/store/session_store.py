@@ -48,13 +48,17 @@ class SessionStore:
         ]
 
     def pending_hint(self, problem_hash: str | None = None) -> HintRecord | None:
-        """Latest real hint (level >= 1) for this problem whose effectiveness
-        is unresolved."""
+        """The latest real hint, if that latest hint is still unresolved.
+
+        An older unresolved record is history, not a question that can come
+        back from the dead after a newer question was answered.  Scanning past
+        a resolved latest hint resurrected a step-1 question during step 4.
+        """
         for h in reversed(self._history):
             if problem_hash is not None and h.problem_hash != problem_hash:
                 continue
-            if h.level >= 1 and h.effective is None:
-                return h
+            if h.level >= 1:
+                return h if h.effective is None else None
         return None
 
     # --- writes (orchestrator only) ------------------------------------------

@@ -371,7 +371,9 @@ def make_deps(
 def port_is_free(host: str, port: int) -> bool:
     """Ask the OS before spending 40s loading models we would then throw away."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # as serve() does
+        # Do not set SO_REUSEADDR on this PROBE.  Windows may then allow a
+        # second bind to an already-listening port and report it as free; the
+        # real server still cannot safely own that endpoint.
         try:
             probe.bind((host, port))
         except OSError as e:

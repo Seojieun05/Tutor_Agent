@@ -53,6 +53,27 @@ class TestHintWasEffective:
         new = self.prev.model_copy(update={"status": "UNCERTAIN"})
         assert not hint_was_effective(self.prev, new)
 
+    def test_a_better_status_cannot_hide_regressed_progress(self):
+        prev = StudentState(status="CALCULATION_ERROR", last_correct_step=2)
+        new = StudentState(status="CORRECT", last_correct_step=1)
+        assert not hint_was_effective(prev, new)
+
+
+class TestProgressDoesNotRewindOnACorrectCrop:
+    def test_correct_newest_line_preserves_the_proven_prefix(self, db):
+        est = StudentStateEstimator(EchoLLMClient(), db)
+        prev = StudentState(status="CALCULATION_ERROR", last_correct_step=2)
+        reported = StudentState(
+            current_step="현재 사진에 보이는 줄은 맞음",
+            status="CORRECT",
+            last_correct_step=1,
+        )
+
+        state = est._post_rules(reported, REFERENCE, prev, rec=None)
+
+        assert state.status == "CORRECT"
+        assert state.last_correct_step == 2
+
 
 class TestUncertainEcho:
     """A model shown a previous UNCERTAIN tends to answer UNCERTAIN. Live,

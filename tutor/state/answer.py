@@ -11,6 +11,7 @@ actually turns on arithmetic — no KB round trips, ever.
 The verdict drives the existing policy through the store, with no new rules:
 
     CORRECT   → the pending hint worked  → target step advances → next step L1
+    PARTIAL   → right direction, unfinished step → same step, new L1 question
     INCORRECT → the pending hint failed  → same step, escalate one level (L2)
     UNCLEAR   → no evidence either way   → same step, same level, re-ask
 """
@@ -29,7 +30,7 @@ from tutor.state.models import Status
 
 log = logging.getLogger(__name__)
 
-Verdict = Literal["CORRECT", "INCORRECT", "UNCLEAR"]
+Verdict = Literal["CORRECT", "PARTIAL", "INCORRECT", "UNCLEAR"]
 
 # What a student who just said "모르겠어요" hears — warmth, never "think more".
 # A module constant so the TTS cache can pre-render it like the other fixed
@@ -44,14 +45,24 @@ just asked, and what the student said (speech-to-text, so expect informal
 Korean, filler words and small transcription errors).
 
 verdict:
-- "CORRECT"   — the student answered the question correctly, or clearly shows
-                they understand the targeted step. Accept informal or partial
-                phrasing ("5를 빼면 돼요", "부호가 바뀌어요") when the idea is right.
-                Do not demand exact numbers unless the question asked for them.
+- "CORRECT"   — the student answered the question correctly AND completed what
+                that question asks. Informal phrasing is fine. A method answer
+                ("5를 빼면 돼요") completes a method question, but merely naming
+                a method does NOT complete a step whose requested value or
+                equation is still missing.
                 A student who runs AHEAD is correct, not wrong: if the question
                 asked for a slope and they give the whole tangent, they have
                 done the step and more. Grade what they demonstrated, not
                 whether it matches the question word for word.
+- "PARTIAL"   — the student's direction, prerequisite, or intermediate result
+                is mathematically right, but it does not yet complete the
+                targeted step or answer the tutor's actual question. This is
+                progress, not an error, and must stay on the same step.
+                Example: target step is "f'(x)=2x-4, f'(1)=-2" and the student
+                says "f를 미분하면 2x-4니까 거기에 1을 대입하면 될 것 같아요"
+                without calculating the resulting slope → PARTIAL, not CORRECT.
+                Example: target is the tangent-line equation and the student
+                only explains how to find its slope → PARTIAL, not CORRECT.
 - "INCORRECT" — the answer is wrong, targets the wrong idea, or the student says
                 they do not know / asks for more help ("모르겠어요", "힌트 더 주세요").
 - "UNCLEAR"   — off-topic, unintelligible, or too vague to judge either way.
@@ -74,20 +85,29 @@ For "QUESTION" and "WORK_CHECK" the verdict is ignored — use "UNCLEAR" and
 leave feedback empty.
 
 feedback: ONE short spoken Korean sentence reacting to the answer (친근한 반말체
-금지, 존댓말). For CORRECT confirm briefly ("맞아요, 그렇게 하면 돼요!").
+금지, 존댓말). For CORRECT confirm briefly, and when it is natural, name in a
+word or two WHAT was right — the idea or value they nailed ("맞아요, 기울기를
+정확히 봤어요!") — feedback that names what worked teaches more than a bare
+맞아요; still one clause, still never the next step. For PARTIAL affirm the
+direction without saying the step is finished ("맞아요, 방향은 잘 잡았어요.").
 For INCORRECT do NOT correct it and do NOT give the next step — just acknowledge
 warmly ("음, 조금 달라요."). For UNCLEAR say you did not catch it.
 This is the ONLY reaction the student hears — what follows it is written
 separately, so keep feedback to one clause and never continue into a hint.
 NEVER state the final answer, a later step, or the result of the current step.
 
-reached_step / reached_claim: only when the student answered BEYOND the step
+reached_step / reached_claim: only with CORRECT, when the student answered BEYOND the step
 they were asked about. `reached_step` is the highest reference step their
 answer demonstrably completes, and `reached_claim` is the expression they said
 that proves it, written in ASCII ("y = -2*x - 4"). The claim is checked
 mechanically against that step before anything moves, so an unprovable jump
 costs nothing — but a claim that does not match the step you named will simply
-be ignored. Leave both out when the answer is to the step that was asked.
+be ignored. Future step NAMES are supplied specifically so you can recognize a
+student who ran ahead; their expressions remain hidden. For example, if asked
+for the slope but the student says the whole tangent equation and a later step
+is named "접선 l의 방정식 쓰기", set reached_step to that step and transcribe the
+spoken equation into reached_claim. Leave both out only when the answer did not
+go beyond the step that was asked.
 
 misconception: an id from the given list if the wrong answer matches one, else null.
 status: the student's state after this answer, one of CORRECT, CALCULATION_ERROR,
@@ -145,6 +165,12 @@ class AnswerEvaluator:
             return surrendered
         context = self._context(problem_text, reference, question, target_step, transcript)
         verdict = self._judge(self.llm, context)
+        verdict = self._downgrade_unfinished_plan(
+            verdict, reference, target_step, transcript
+        )
+        verdict = self._normalize_partial_feedback(
+            verdict, reference, target_step
+        )
         log.info(
             "answer intent=%s verdict=%s target_step=%d transcript=%r",
             verdict.intent,
@@ -163,13 +189,78 @@ class AnswerEvaluator:
             log.info("second opinion before telling the student they are wrong")
             try:
                 better = self._judge(self.second_opinion, context)
+                better = self._downgrade_unfinished_plan(
+                    better, reference, target_step, transcript
+                )
+                better = self._normalize_partial_feedback(
+                    better, reference, target_step
+                )
             except Exception:  # noqa: BLE001 — the first verdict still stands
                 log.exception("second opinion failed; keeping the first verdict")
                 return verdict
-            if better.verdict == "CORRECT":
-                log.info("the second opinion overturns it: the answer was right")
+            if better.verdict in {"CORRECT", "PARTIAL"}:
+                log.info(
+                    "the second opinion overturns it: the answer was %s",
+                    "complete" if better.verdict == "CORRECT" else "partially right",
+                )
                 return better
         return verdict
+
+    _UNFINISHED_PLAN_RE = re.compile(
+        r"(?:대입|계산|정리|구하|쓰).{0,40}(?:하면|해서|해)\s*"
+        r"(?:될\s*것\s*같|되겠|돼요|볼(?:게|까|래)).*?[?.!~ ]*$"
+    )
+
+    @staticmethod
+    def _normalize_partial_feedback(
+        verdict: AnswerVerdict,
+        reference: ReferenceSolution,
+        target_step: int,
+    ) -> AnswerVerdict:
+        """A PARTIAL reaction acknowledges completed work; it gives no advice."""
+        if verdict.verdict != "PARTIAL":
+            return verdict
+        step = next((s for s in reference.steps if s.idx == target_step), None)
+        expression = step.expression if step is not None else ""
+        derivative = re.search(r"\b([A-Za-z])\s*['′]\s*\(\s*x\s*\)\s*=", expression)
+        feedback = (
+            f"맞아요, {derivative.group(1)}'(x)는 잘 구했어요."
+            if derivative is not None
+            else "맞아요, 여기까지는 잘했어요."
+        )
+        return verdict.model_copy(update={"feedback": feedback})
+
+    @classmethod
+    def _downgrade_unfinished_plan(
+        cls,
+        verdict: AnswerVerdict,
+        reference: ReferenceSolution,
+        target_step: int,
+        transcript: str,
+    ) -> AnswerVerdict:
+        """A future-tense plan cannot complete a multi-result reference step.
+
+        The LLM prompt carries the general distinction.  This narrow rule pins
+        the live failure deterministically: saying the derivative and planning
+        to substitute 1 is useful progress, but it is not yet the resulting
+        slope, much less the tangent equation after it.
+        """
+        if verdict.verdict != "CORRECT":
+            return verdict
+        step = next((s for s in reference.steps if s.idx == target_step), None)
+        expression = step.expression if step is not None else ""
+        composite = "," in expression or expression.count("=") >= 2
+        if not composite or not cls._UNFINISHED_PLAN_RE.search(transcript.strip()):
+            return verdict
+        log.info("correct direction but unfinished composite step; grading PARTIAL")
+        return verdict.model_copy(
+            update={
+                "verdict": "PARTIAL",
+                "feedback": "맞아요, 방향은 잘 잡았어요.",
+                "reached_step": None,
+                "reached_claim": "",
+            }
+        )
 
     # "잘 모르겠는데", "모르겠어요", "힌트 주세요" — surrender, not an attempt.
     # Nothing here needs a model: the verdict is INCORRECT by construction
@@ -213,7 +304,12 @@ class AnswerEvaluator:
         steps = "\n".join(
             f"  {s.idx}. {s.description} → {s.expression}"
             for s in reference.steps
-            if s.idx <= target_step  # never show the model steps beyond the target
+            if s.idx <= target_step  # future expressions stay hidden
+        )
+        future_steps = "\n".join(
+            f"  {s.idx}. {s.description}"
+            for s in reference.steps
+            if s.idx > target_step
         )
         parts = [
             f"문제: {problem_text}",
@@ -221,6 +317,11 @@ class AnswerEvaluator:
             f"튜터가 방금 한 질문: {question}",
             f"학생의 음성 답변: {transcript}",
         ]
+        if future_steps:
+            parts.append(
+                "이후 단계 이름 (학생이 질문보다 앞서 답했는지 판별할 때만 사용; "
+                "피드백이나 힌트에서 절대 언급하지 말 것):\n" + future_steps
+            )
         if self.db is not None:
             known = self.db.misconceptions_for(reference.concepts)
             if known:

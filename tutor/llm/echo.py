@@ -8,7 +8,8 @@ queues to script multi-turn scenarios.
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Sequence
+import re
+from typing import Any, Callable, Sequence
 
 from pydantic import BaseModel
 
@@ -122,3 +123,23 @@ class EchoLLMClient:
         max_rounds: int = 6,
     ) -> BaseModel:
         return self._next(purpose, schema, images)
+
+    def complete_json_stream(
+        self,
+        *,
+        purpose: str,
+        system: str,
+        user: str,
+        images: Sequence[bytes] = (),
+        schema: type[BaseModel],
+        text_field: str,
+        on_text_delta: Callable[[str], None],
+    ) -> BaseModel:
+        result = self._next(purpose, schema, images)
+        value = getattr(result, text_field, "")
+        if value:
+            # Echo mode has no model tokens. Word-sized callbacks keep its wire
+            # behaviour representative without pretending there was latency.
+            for part in re.findall(r"\S+\s*", str(value)):
+                on_text_delta(part)
+        return result

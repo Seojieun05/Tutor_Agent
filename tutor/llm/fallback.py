@@ -44,6 +44,9 @@ class FallbackLLM:
     def run_with_tools(self, **kwargs):
         return self._call("run_with_tools", kwargs)
 
+    def complete_json_stream(self, **kwargs):
+        return self._call("complete_json_stream", kwargs)
+
     # --- internals ------------------------------------------------------------
 
     def _call(self, method: str, kwargs):

@@ -49,6 +49,21 @@ def test_history_scoped_by_problem():
     assert store.pending_hint("pA") is not None
 
 
+def test_resolved_latest_hint_does_not_resurrect_an_older_question():
+    store = SessionStore()
+    store.append_hint(
+        problem_hash="pA", step=1, level=1,
+        action="SOCRATIC_QUESTION", hint_text="old",
+    )
+    latest = store.append_hint(
+        problem_hash="pA", step=4, level=2,
+        action="CONCEPT_HINT", hint_text="current",
+    )
+    store.mark_hint_effective(latest, True)
+
+    assert store.pending_hint("pA") is None
+
+
 def test_mark_unknown_id():
     with pytest.raises(KeyError):
         SessionStore().mark_hint_effective(99, True)

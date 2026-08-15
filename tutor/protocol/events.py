@@ -31,6 +31,12 @@ SERVER_EVENTS = {
     # what the tutor says, and the turn-taking state, for devices whose VAD runs
     # on the server (browser client): LISTENING/USER_SPEAKING/PROCESSING/AGENT_SPEAKING
     "tutor_says",
+    # A generated hint is committed word-by-word after its rolling leak guard.
+    # start/delta/done keeps one chat bubble and one TTS utterance across those
+    # commits; tutor_says remains the complete-line path for fixed reactions.
+    "tutor_stream_start",
+    "tutor_stream_delta",
+    "tutor_stream_done",
     "turn_state",
     "hint_issued",
     "error",

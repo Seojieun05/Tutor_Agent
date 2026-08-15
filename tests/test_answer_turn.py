@@ -6,6 +6,8 @@ latency contract that makes it usable: an answer never re-captures or
 re-recognizes the worksheet.
 """
 
+import asyncio
+
 import pytest
 
 from tutor.config import Settings
@@ -97,6 +99,34 @@ def ask_l1(session: Session, step: int = 1) -> int:
     )
 
 
+async def test_answer_that_arrives_during_turn_cleanup_is_queued(db):
+    session, _, _ = build_session(db, [])
+    ask_l1(session)
+    pending = session.store.pending_hint("p1")
+    handled = []
+
+    async def record_answer(transcript, hint):
+        handled.append((transcript, hint.id))
+
+    session._handle_answer = record_answer
+    # The previous hint has stopped speaking but has not cleared its turn yet.
+    session._busy = True
+    session._turn_idle.clear()
+
+    answer = asyncio.create_task(session.handle_answer("2x-4예요", pending))
+    await asyncio.sleep(0)
+    assert handled == []
+    assert session._turn_waiters == 1
+
+    session._busy = False
+    session._turn_idle.set()
+    await answer
+
+    assert handled == [("2x-4예요", pending.id)]
+    assert session._turn_waiters == 0
+    assert session._busy is False
+
+
 async def test_correct_answer_advances_to_next_step_l1(db):
     session, llm, speaker = build_session(
         db, [{"verdict": "CORRECT", "feedback": "맞아요!", "misconception": None, "status": "CORRECT"}]
@@ -115,6 +145,205 @@ async def test_correct_answer_advances_to_next_step_l1(db):
     assert "capture_request" not in session.ws.event_names()
     assert llm.calls.count("recognize") == 0 and llm.calls.count("estimate") == 0
     assert llm.calls.count("evaluate") == 1
+
+
+async def test_partial_answer_stays_on_the_same_step_and_gets_a_new_question(db):
+    session, llm, speaker = build_session(
+        db,
+        [{"verdict": "PARTIAL", "feedback": "맞아요, 방향은 잘 잡았어요.",
+          "misconception": None, "status": "STUCK"}],
+    )
+    first = ask_l1(session)
+
+    await session.handle_answer(
+        "식을 정리하면 될 것 같아요", session.store.pending_hint("p1")
+    )
+
+    history = session.store.get_history(problem_hash="p1")
+    assert history[0].id == first and history[0].effective is True
+    assert (history[-1].step, history[-1].level) == (1, 1)
+    state = session.store.get_state()
+    assert state.last_correct_step == 0 and state.status == "STUCK"
+    assert speaker.spoken and "여기까지는 잘했어요" in speaker.spoken[0]
+    assert llm.calls.count("recognize") == 0 and llm.calls.count("estimate") == 0
+
+
+async def test_problem_13_derivative_partial_fades_l2_and_asks_only_for_slope(db):
+    """Exact 16:23 regression: f'(x)=2x-4 is real progress inside step 1.
+    It must not repeat the derivative concept at L2 or fall back generically;
+    the remaining question is only f'(1)."""
+    reference = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="f'(x)로 접선 l의 기울기 구하기",
+                         expression="f'(x) = 2*x - 4, f'(1) = -2"),
+            SolutionStep(idx=2, description="점 (1, -6)을 지나는 l의 방정식 쓰기",
+                         expression="l: y = -2*x - 4"),
+            SolutionStep(idx=3, description="곱의 미분법으로 g'(x) 쓰기",
+                         expression="g'(x) = u'(x)*v(x) + u(x)*v'(x)"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="49"),
+        concepts=["differentiation"], verified=True, origin="db",
+    )
+    session, _, speaker = build_session(
+        db,
+        [{"verdict": "PARTIAL", "feedback": "맞아요, 도함수를 먼저 구하면 돼요.",
+          "misconception": None, "status": "STUCK"}],
+    )
+    session.ctx.reference = reference
+    session.ctx.match = MatchResult(
+        tier=Tier.EXACT, concepts=reference.concepts, reference=reference
+    )
+    session.store.set_state(
+        StudentState(status="STUCK", last_correct_step=0, misconception=None)
+    )
+    old = session.store.append_hint(
+        problem_hash="p1", step=1, level=2, action="CONCEPT_HINT",
+        hint_text="도함수의 뜻을 떠올려 볼까요?",
+    )
+
+    await session.handle_answer(
+        "그러니까 f 2분하면 2x 마이너스 4.", session.store.pending_hint("p1")
+    )
+
+    history = session.store.get_history(problem_hash="p1")
+    assert next(h for h in history if h.id == old).effective is True
+    latest = history[-1]
+    assert (latest.step, latest.level, latest.action) == (1, 1, "SOCRATIC_QUESTION")
+    assert latest.hint_text == (
+        "이제 구한 f'(x)에 x = 1을 대입하면 접선 l의 기울기는 얼마일까요?"
+    )
+    assert "가장 확실한 줄" not in latest.hint_text
+    assert speaker.spoken and "잘 구했어요" in speaker.spoken[0]
+
+
+def test_future_plan_does_not_complete_problem_13s_composite_slope_step():
+    reference = ReferenceSolution(
+        steps=[
+            SolutionStep(
+                idx=1,
+                description="f'(x)로 접선 l의 기울기 구하기",
+                expression="f'(x) = 2*x - 4, f'(1) = -2",
+            ),
+            SolutionStep(
+                idx=2,
+                description="점 (1, -6)을 지나는 l의 방정식 쓰기",
+                expression="l: y = -2*(x - 1) - 6 = -2*x - 4",
+            ),
+        ],
+        final_answer=Answer(kind="SCALAR", value="49"),
+        concepts=["differentiation"],
+        verified=True,
+        origin="db",
+    )
+    llm = EchoLLMClient({"evaluate": [{
+        "verdict": "CORRECT", "feedback": "맞아요, 그렇게 구하면 돼요!",
+        "misconception": None, "status": "CORRECT",
+    }]})
+
+    verdict = AnswerEvaluator(llm).evaluate(
+        problem_text="접선 l을 구하시오",
+        reference=reference,
+        question="접선 l의 기울기는 어떻게 구할까요?",
+        target_step=1,
+        transcript="f를 미분하면 2x-4니까 거기에 1을 대입하면 될 것 같은데?",
+    )
+
+    assert verdict.verdict == "PARTIAL"
+    assert "f'(x)는 잘 구했어요" in verdict.feedback
+
+
+async def test_problem_13_partial_slope_talk_never_jumps_to_product_rule(db):
+    reference = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="f'(x)로 접선 l의 기울기 구하기",
+                         expression="f'(x) = 2*x - 4, f'(1) = -2"),
+            SolutionStep(idx=2, description="점 (1, -6)을 지나는 l의 방정식 쓰기",
+                         expression="l: y = -2*(x - 1) - 6 = -2*x - 4"),
+            SolutionStep(idx=3, description="곱의 미분법으로 g'(x) 쓰기",
+                         expression="g'(x) = (3*x**2 - 2)*f(x) + (x**3 - 2*x)*f'(x)"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="49"),
+        concepts=["differentiation"], verified=True, origin="db",
+    )
+    session, llm, speaker = build_session(
+        db,
+        [{"verdict": "CORRECT", "feedback": "맞아요, 그렇게 구하면 돼요!",
+          "misconception": None, "status": "CORRECT"}],
+    )
+    session.ctx.reference = reference
+    session.ctx.match = MatchResult(
+        tier=Tier.EXACT, concepts=reference.concepts, reference=reference
+    )
+    ask_l1(session, step=2)
+
+    await session.handle_answer(
+        "f를 미분하면 2x-4니까 거기에 1을 대입하면 될 것 같은데?",
+        session.store.pending_hint("p1"),
+    )
+
+    state = session.store.get_state()
+    latest = session.store.get_history(problem_hash="p1")[-1]
+    assert state.last_correct_step == 1
+    assert (latest.step, latest.level) == (2, 1)
+    assert "곱의 미분법" not in " ".join(speaker.spoken)
+
+    # Once l itself is actually complete, step 3 may open — as a question
+    # about the product structure, never as an internal step announcement.
+    llm._queues.setdefault("evaluate", []).append({
+        "verdict": "CORRECT", "feedback": "맞아요!",
+        "misconception": None, "status": "CORRECT",
+    })
+    await session.handle_answer(
+        "l은 y = -2x - 4예요", session.store.pending_hint("p1")
+    )
+
+    latest = session.store.get_history(problem_hash="p1")[-1]
+    assert session.store.get_state().last_correct_step == 2
+    assert (latest.step, latest.level) == (3, 1)
+    assert latest.hint_text == \
+        "이제 g(x)가 두 식의 곱이라는 점을 보고, 어떻게 미분하면 좋을까요?"
+    assert "곱의 미분법" not in latest.hint_text and "차례" not in latest.hint_text
+
+
+async def test_problem_13_whole_tangent_answer_skips_the_repeated_line_question(db):
+    """Exact 16:05 regression: the stored question was tagged step 1 even
+    though it asked for step 2. The spoken tangent itself proves step 2, so the
+    next question must open step 3 rather than ask for l again."""
+    reference = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="f'(x)로 접선 l의 기울기 구하기",
+                         expression="f'(x) = 2*x - 4, f'(1) = -2"),
+            SolutionStep(idx=2, description="점 (1, -6)을 지나는 l의 방정식 쓰기",
+                         expression="l: y = -2*(x - 1) - 6 = -2*x - 4"),
+            SolutionStep(idx=3, description="곱의 미분법으로 g'(x) 쓰기",
+                         expression="g'(x) = (3*x**2 - 2)*f(x) + (x**3 - 2*x)*f'(x)"),
+            SolutionStep(idx=4, description="g'(1) 계산", expression="g'(1) = -4"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="49"),
+        concepts=["differentiation"], verified=True, origin="db",
+    )
+    session, _, _ = build_session(
+        db,
+        [{"verdict": "CORRECT", "feedback": "맞아요!",
+          "misconception": None, "status": "CORRECT"}],
+    )
+    session.ctx.reference = reference
+    session.ctx.match = MatchResult(
+        tier=Tier.EXACT, concepts=reference.concepts, reference=reference
+    )
+    ask_l1(session, step=1)
+
+    await session.handle_answer(
+        "마이너스 2x 마이너스 4, 맞아?", session.store.pending_hint("p1")
+    )
+
+    state = session.store.get_state()
+    latest = session.store.get_history(problem_hash="p1")[-1]
+    assert state.last_correct_step == 2
+    assert (latest.step, latest.level) == (3, 1)
+    assert latest.hint_text == \
+        "이제 g(x)가 두 식의 곱이라는 점을 보고, 어떻게 미분하면 좋을까요?"
+    assert "l의 방정식" not in latest.hint_text
 
 
 async def test_wrong_answer_escalates_same_step_to_l2(db):
@@ -577,10 +806,8 @@ class TestSurrenderIsNotGraded:
 
 
 class TestConfirmedWorkPointsForward:
-    """Live, problem 13 at step 4 of 7: "맞아요! 이대로 하면 돼요. 또 궁금한 게
-    있으면 물어봐 주세요" — confirmed, and abandoned. Naming where to go next
-    is not a hint (the ladder does not move); it is the answer to the question
-    the student is about to ask."""
+    """A correct work check opens the next idea as a question, without reading
+    an internal DB step label aloud like a navigation instruction."""
 
     def state(self, step):
         from tutor.state.models import StudentState
@@ -601,7 +828,8 @@ class TestConfirmedWorkPointsForward:
             concepts=["differentiation"], verified=True, origin="db",
         )
         assert self.line(1, ref) == \
-            "맞아요! 여기까지 잘했어요. 다음은 점 (1, -6)을 지나는 l의 방정식 쓰기 차례예요."
+            "맞아요! 여기까지 잘했어요. 이제 점 (1, -6)을 지나는 l의 방정식을 어떻게 쓰면 좋을까요?"
+        assert "차례" not in self.line(1, ref)
 
     def test_a_finished_problem_gets_the_congratulation(self):
         from tutor.knowledge.models import Answer, ReferenceSolution, SolutionStep

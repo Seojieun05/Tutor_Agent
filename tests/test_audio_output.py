@@ -126,10 +126,25 @@ class TestWebSocketTts:
         assert list(speaker.synthesize_stream("첫 문장")) == [b"one", b"two"]
         assert list(speaker.synthesize_stream("둘째 문장")) == [b"three"]
         assert len(connects) == 1                    # ONE dial, many utterances
+        assert "optimize_streaming_latency=2" in connects[0]
         assert [m["type"] for m in ws.sent] == [
             "text.delta", "text.done", "text.delta", "text.done",
         ]
         assert not ws.closed
+
+    def test_live_text_deltas_feed_one_audio_utterance(self, monkeypatch):
+        speaker, ws, _ = self._speaker(monkeypatch, [
+            {"type": "audio.delta", "delta": b64(b"early")},
+            {"type": "audio.done"},
+        ])
+        assert list(speaker.synthesize_text_stream(iter(["첫 어절 ", "둘째 어절"]))) == [
+            b"early"
+        ]
+        assert ws.sent == [
+            {"type": "text.delta", "delta": "첫 어절 "},
+            {"type": "text.delta", "delta": "둘째 어절"},
+            {"type": "text.done"},
+        ]
 
     def test_a_dead_socket_falls_back_to_http_for_that_line(self, monkeypatch):
         monkeypatch.setattr(tts.shutil, "which", lambda name: None)

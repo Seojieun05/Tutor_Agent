@@ -82,16 +82,28 @@ def decide(state: StudentState, history: list[HintRecord], trigger: Trigger) -> 
     # HINT_REQUEST from here on.
     prior = [h for h in history if h.step == target and h.level >= 1]
 
+    # Progress can happen *inside* one reference step.  A composite step such
+    # as "differentiate f, then evaluate f'(1)" may need L2 for its first
+    # half, but once that hint works the remaining half starts again at L1.
+    # Only hints after the latest proven-helpful one belong to the active
+    # escalation run; older strong support must not make the next nudge L3.
+    latest_progress = next(
+        (i for i in range(len(prior) - 1, -1, -1) if prior[i].effective is True),
+        None,
+    )
+    active = prior[latest_progress + 1:] if latest_progress is not None else prior
+
     # R5-R7: first hint at this step (including CORRECT students asking ahead) is L1.
-    if not prior:
+    if not active:
         return Decision(
-            LEVEL_ACTIONS[1], 1, target, state.misconception, "first hint at step: weakest"
+            LEVEL_ACTIONS[1], 1, target, state.misconception,
+            "first hint after progress: weakest" if prior else "first hint at step: weakest",
         )
 
-    last = prior[-1]
+    last = active[-1]
     if last.effective is False:
         # R8: escalate exactly one level past the strongest hint tried here.
-        level = min(max(h.level for h in prior) + 1, MAX_LEVEL)
+        level = min(max(h.level for h in active) + 1, MAX_LEVEL)
         return Decision(
             LEVEL_ACTIONS[level],
             level,
@@ -100,8 +112,8 @@ def decide(state: StudentState, history: list[HintRecord], trigger: Trigger) -> 
             f"hint L{last.level} ineffective: escalate to L{level}",
         )
 
-    # R9: last hint helped (or is unresolved) but the student asks again —
-    # repeat the level, don't escalate on effective=None.
+    # R9: the active hint is unresolved but the student asks again — repeat
+    # its level. A proven-helpful hint was sliced out above and faded to L1.
     return Decision(
         LEVEL_ACTIONS[last.level],
         last.level,

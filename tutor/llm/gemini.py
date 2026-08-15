@@ -32,12 +32,12 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Sequence, TypeVar
+from typing import Callable, Sequence, TypeVar
 
 from pydantic import BaseModel
 
 from tutor.config import Settings
-from tutor.llm.client import LLMError, parse_into
+from tutor.llm.client import JsonStringFieldStream, LLMError, parse_into
 
 log = logging.getLogger(__name__)
 
@@ -134,6 +134,54 @@ class GeminiClient:
             return parse_into(schema, text)
         except Exception as e:  # noqa: BLE001 — same seam
             raise LLMError(f"{purpose}: gemini output failed validation: {e}") from e
+
+    def complete_json_stream(
+        self,
+        *,
+        purpose: str,
+        system: str,
+        user: str,
+        images: Sequence[bytes] = (),
+        schema: type[M],
+        text_field: str,
+        on_text_delta: Callable[[str], None],
+    ) -> M:
+        """Stream one field from Gemini's structured JSON response."""
+        from google.genai import types
+
+        parts = [
+            types.Part.from_bytes(data=jpeg, mime_type="image/jpeg") for jpeg in images
+        ]
+        parts.append(types.Part.from_text(text=user))
+        extractor = JsonStringFieldStream(text_field)
+        text = ""
+        try:
+            responses = self._client.models.generate_content_stream(
+                model=self.model,
+                contents=[types.Content(role="user", parts=parts)],
+                config=types.GenerateContentConfig(
+                    system_instruction=system,
+                    response_mime_type="application/json",
+                    response_schema=schema,
+                    temperature=0,
+                ),
+            )
+            for response in responses:
+                delta = getattr(response, "text", None) or ""
+                if not delta:
+                    continue
+                text += delta
+                visible = extractor.feed(delta)
+                if visible:
+                    on_text_delta(visible)
+        except Exception as e:  # noqa: BLE001 — fallback seam handles provider failures
+            raise LLMError(f"{purpose}: gemini streaming call failed: {e}") from e
+        if not text.strip():
+            raise LLMError(f"{purpose}: gemini returned nothing to parse")
+        try:
+            return parse_into(schema, text)
+        except Exception as e:  # noqa: BLE001
+            raise LLMError(f"{purpose}: gemini streamed output failed validation: {e}") from e
 
     def run_with_tools(
         self,

@@ -48,6 +48,9 @@ Return ONLY the JSON object."""
 
 def hint_was_effective(prev: StudentState, new: StudentState) -> bool:
     """Effective = step progress OR misconception resolved OR status improved."""
+    if new.last_correct_step < prev.last_correct_step:
+        # A nicer status word cannot make lost progress evidence of success.
+        return False
     progress = new.last_correct_step > prev.last_correct_step
     resolved = prev.misconception is not None and new.misconception != prev.misconception
     improved = STATUS_RANK.get(new.status, 0) > STATUS_RANK.get(prev.status, 0)
@@ -319,15 +322,28 @@ class StudentStateEstimator:
         state = self._arithmetic_check(state, reference, rec)
         max_step = len(reference.steps)
         clamped = min(max(state.last_correct_step, 0), max_step)
+        if (
+            prev_state is not None
+            and state.status == "CORRECT"
+            and clamped < prev_state.last_correct_step
+        ):
+            # CORRECT means "everything shown is sound", not "previously
+            # proven work vanished".  A camera crop or VLM that returns only
+            # the newest line must not send a same-problem lesson backwards.
+            log.warning(
+                "correct estimate regressed from step %d to %d; preserving the proven prefix",
+                prev_state.last_correct_step, clamped,
+            )
+            clamped = min(prev_state.last_correct_step, max_step)
         attempts = 1
         if prev_state is not None and clamped == prev_state.last_correct_step:
             attempts = prev_state.attempt_count + 1
         effective = None
+        normalized = state.model_copy(update={"last_correct_step": clamped})
         if prev_state is not None:
-            effective = hint_was_effective(prev_state, state)
-        return state.model_copy(
+            effective = hint_was_effective(prev_state, normalized)
+        return normalized.model_copy(
             update={
-                "last_correct_step": clamped,
                 "attempt_count": attempts,
                 "previous_hint_effective": effective,
             }

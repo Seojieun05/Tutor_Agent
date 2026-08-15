@@ -32,7 +32,7 @@ from tutor.server.session import Deps
 from tutor.solver.grok_solver import GrokSolver
 from tutor.speech.stt import EchoTranscriber
 from tutor.speech.tts import NullSpeaker
-from tutor.speech.turn import TurnConfig
+from tutor.speech.turn import TurnConfig, TurnState
 from tutor.state.estimator import StudentStateEstimator
 from tutor.store.session_store import SessionStore
 from tutor.vision.recognizer import Recognizer
@@ -74,6 +74,7 @@ class FakeBrowser:
         self.states: list[str] = []
         self.heard: list[str] = []
         self.tutor_said: list[str] = []
+        self.tutor_deltas: list[str] = []
         self.audio: list[TtsAudioFrame] = []
         self.captures = 0
         self.gated = True  # like the page: stop sending unless LISTENING/USER_SPEAKING
@@ -125,6 +126,10 @@ class FakeBrowser:
             elif ev.event == "transcript":
                 self.heard.append(ev.data["text"])
             elif ev.event == "tutor_says":
+                self.tutor_said.append(ev.data["text"])
+            elif ev.event == "tutor_stream_delta":
+                self.tutor_deltas.append(ev.data["text"])
+            elif ev.event == "tutor_stream_done":
                 self.tutor_said.append(ev.data["text"])
             elif ev.event == "config":
                 self.barge_in = bool(ev.data.get("barge_in"))
@@ -230,6 +235,133 @@ async def test_one_turn_streams_pcm_in_and_audio_out(deps):
     ]
 
 
+async def test_generated_words_reach_chat_and_one_tts_utterance(deps):
+    original = deps.hint_gen
+
+    class StreamingHintGen:
+        db = original.db
+        write_preflight = original.write_preflight
+
+        def generate(self, *args, on_delta=None, **kwargs):
+            parts = ["첫째 ", "줄에서 ", "부호가 ", "어떻게 ", "바뀌었는지 ", "볼까요?"]
+            for part in parts:
+                on_delta(part)
+            return "".join(parts)
+
+    deps.hint_gen = StreamingHintGen()
+    vad = ScriptedVAD()
+    async with await browser_server(deps, vad) as server:
+        port = server.sockets[0].getsockname()[1]
+        async with FakeBrowser(f"ws://127.0.0.1:{port}/browser", vad, JPEG) as browser:
+            await browser.speak_a_turn()
+
+    assert browser.tutor_deltas == [
+        "첫째 ", "줄에서 ", "부호가 ", "어떻게 ", "바뀌었는지 ", "볼까요?"
+    ]
+    assert "".join(browser.tutor_deltas) == browser.tutor_said[-1]
+    assert deps.speaker.synthesized[-1] == browser.tutor_said[-1]
+    assert len(browser.audio) == 1
+    assert browser.states[-3:] == ["AGENT_SPEAKING", "PROCESSING", "LISTENING"]
+
+
+async def test_live_hint_settles_filler_before_activating_stream(deps):
+    events = []
+
+    class StreamingHintGen:
+        def generate(self, *args, on_delta=None, **kwargs):
+            events.append("generate")
+            on_delta("안전한 ")
+            return "안전한 질문이에요?"
+
+    class Sink:
+        def push(self, text):
+            events.append(("delta", text))
+
+        def activate(self):
+            events.append("activate")
+
+        async def finish(self, text):
+            events.append("finish")
+            return True
+
+        async def abort(self):
+            events.append("abort")
+
+    deps.hint_gen = StreamingHintGen()
+    session = BrowserSession(object(), deps, vad=ScriptedVAD())
+
+    def new_sink(paused=False):
+        events.append(("paused", paused))
+        return Sink()
+
+    async def settle_filler():
+        events.append("settle-start")
+        await asyncio.sleep(0)
+        events.append("settle-done")
+
+    session._new_hint_stream = new_sink
+    session._settle_filler = settle_filler
+
+    text, streamed = await session._generate_hint(
+        None, None, None, None, [], None, live=True,
+    )
+
+    assert text == "안전한 질문이에요?"
+    assert streamed is True
+    assert ("paused", True) in events
+    assert events.index("settle-done") < events.index("activate") < events.index("finish")
+
+
+async def test_turn_finish_recovers_if_a_queued_answer_disappears(deps):
+    class Taker:
+        state = TurnState.PROCESSING
+
+        def listen(self):
+            self.state = TurnState.LISTENING
+
+    session = BrowserSession(object(), deps, vad=ScriptedVAD())
+    session.taker = Taker()
+    session._busy = False
+    session._turn_waiters = 1
+
+    async def drop_cancelled_waiter():
+        session._turn_waiters = 0
+
+    waiter = asyncio.create_task(drop_cancelled_waiter())
+    session._push_state = lambda: asyncio.sleep(0)
+    await session._turn_finished()
+    await waiter
+
+    assert session.taker.state is TurnState.LISTENING
+
+
+async def test_listening_is_never_advertised_while_the_turn_is_busy(deps):
+    violations = []
+
+    class CheckedSession(BrowserSession):
+        async def _push_state(self):
+            if (self.taker is not None
+                    and self.taker.state is TurnState.LISTENING
+                    and self._sent_state is not TurnState.LISTENING
+                    and self._busy):
+                violations.append("LISTENING while busy")
+            await super()._push_state()
+
+    vad = ScriptedVAD()
+
+    async def handler(ws):
+        await CheckedSession(ws, deps, vad=vad).run()
+
+    async with serve(handler, "127.0.0.1", 0, max_size=16 * 1024 * 1024,
+                     process_request=serve_static) as server:
+        port = server.sockets[0].getsockname()[1]
+        async with FakeBrowser(f"ws://127.0.0.1:{port}/browser", vad, JPEG) as browser:
+            await browser.speak_a_turn()
+
+    assert violations == []
+    assert browser.states[-1] == "LISTENING"
+
+
 async def test_streamed_speech_arrives_in_ordered_chunks(db):
     """One utterance, many frames: seq in order, exactly one `last`, ONE
     playback_done — and the first frame goes out before the tail exists,
@@ -287,6 +419,46 @@ async def test_the_ear_hears_korean_and_the_eye_sees_notation(deps):
     eye = next(e["data"]["text"] for e in ws.events if e["event"] == "tutor_says")
     assert "f'(1)" in eye and "2·x²" in eye
     assert "프라임" not in eye and "제곱" not in eye
+
+
+async def test_text_is_sent_before_the_first_tts_chunk(deps):
+    """The chat must not pay TTS time-to-first-audio after the hint is ready."""
+    import asyncio
+    import json as _json
+
+    class RecorderWS:
+        def __init__(self):
+            self.events = []
+
+        async def send(self, raw):
+            if isinstance(raw, str):
+                self.events.append(_json.loads(raw))
+
+    gate = asyncio.Event()
+
+    def delayed_stream(text):
+        deps.speaker.synthesized.append(text)
+        # The blocking pump runs in a worker thread. Do not yield audio until
+        # the assertion below has observed the tutor_says event.
+        import time
+        while not gate.is_set():
+            time.sleep(0.005)
+        yield MP3
+
+    deps.speaker.synthesize_stream = delayed_stream
+    ws = RecorderWS()
+    session = BrowserSession(ws, deps, vad=ScriptedVAD())
+    task = asyncio.create_task(session._say("먼저 보이는 문장"))
+    for _ in range(100):
+        if any(e["event"] == "tutor_says" for e in ws.events):
+            break
+        await asyncio.sleep(0.005)
+    assert any(e["event"] == "tutor_says" for e in ws.events)
+    gate.set()
+    # No real browser acknowledges playback in this unit test; interrupt after
+    # the ordering assertion so _say can cleanly stop its playback wait.
+    session._interrupted = True
+    await task
 
 
 async def test_server_speaker_is_never_used(deps):
@@ -361,6 +533,11 @@ async def test_without_barge_in_the_mic_is_ignored_while_the_tutor_answers(deps)
         port = server.sockets[0].getsockname()[1]
         async with FakeBrowser(f"ws://127.0.0.1:{port}/browser", vad, JPEG) as browser:
             browser.gated = False  # worst case: the page's own gate is broken
+            # Keep playback open until all simulated echo frames have crossed.
+            # The live word stream can now finish generating faster than this
+            # test can enqueue 60 websocket frames; without the hold, its tail
+            # is legitimately student audio after the tutor has stopped.
+            browser.hold_playback = True
             await browser.send_frames([True] * 30 + [False] * SILENCE_FRAMES)
             # only PROCESSING proves the endpoint frame itself was consumed
             await browser.wait_until(
@@ -369,6 +546,10 @@ async def test_without_barge_in_the_mic_is_ignored_while_the_tutor_answers(deps)
             seen_after_turn = vad.seen
             # the tutor's own voice, straight back into the mic
             await browser.send_frames([True] * 60)
+            assert vad.seen == seen_after_turn
+            browser.hold_playback = False
+            browser.queue.clear()
+            await browser._ws.send(make_event("playback_done"))
             await browser.wait_until(lambda: browser.state == "LISTENING")
 
     assert vad.seen == seen_after_turn  # not one frame reached the model

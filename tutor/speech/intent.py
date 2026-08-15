@@ -77,10 +77,32 @@ _LOST_TRAILING = re.compile(
     r"어떻게 되더라|기억이 안\s*나)\s*[?.!…~요]*$"
 )
 
+# A request to CONTINUE is not an answer to the question just asked.  It is
+# especially important immediately after a work confirmation: the session has
+# already armed `_continue_from`, so HINT_REQUEST goes straight to the next
+# diagnosed step without another photo.  The broad `has_pending -> ANSWER`
+# fallback used to swallow this exact live utterance.
+_NEXT_STEP = re.compile(r"(?:이\s*다음|그\s*다음|다음(?:\s*단계)?|이제|이어서)")
+_NEXT_HELP = re.compile(
+    r"(?:어떻게|뭘|무엇|뭐(?:를)?|어느\s*걸|알려|도와|할까)"
+)
+
 
 def trails_off_lost(text: str) -> bool:
     """Did the utterance end on a lost self-question and then stop?"""
     return bool(_LOST_TRAILING.search(text.strip()))
+
+
+def asks_for_next_step(text: str) -> bool:
+    """"응, 이 다음엔 어떻게 해야 돼?" — continue, do not grade."""
+    stripped = text.strip()
+    cue = _NEXT_STEP.search(stripped)
+    if cue is None:
+        return False
+    # The request must come AFTER the continuation cue.  "이게 뭐지 싶었는데
+    # 이제 알겠어요" contains both word families but explicitly recovered.
+    tail = stripped[cue.end():]
+    return bool(_NEXT_HELP.search(tail) or tail.rstrip().endswith("?"))
 
 
 def asks_about_the_verdict(text: str) -> bool:
@@ -166,6 +188,10 @@ def _answer_shaped(text: str) -> bool:
 
 def rule_intent(text: str, *, has_problem: bool, has_pending: bool) -> Intent | None:
     """The confident cases, decided without an LLM. None means "ask the model"."""
+    if has_pending and trails_off_lost(text):
+        return "ANSWER"
+    if has_problem and asks_for_next_step(text):
+        return "HINT_REQUEST"
     # First, because it outranks the keywords: "5 맞아요?" is a student saying
     # five, not asking for a photo of their page. The evaluator's own WORK_CHECK
     # verdict is the net for the ones this reads too eagerly.

@@ -1,5 +1,5 @@
 from tutor.knowledge.matching import Matcher, problem_hash
-from tutor.knowledge.models import Tier
+from tutor.knowledge.models import Answer, Problem, ReferenceSolution, SolutionStep, Tier
 from tutor.vision.recognizer import Recognition
 
 
@@ -57,6 +57,53 @@ class TestCascade:
         m = Matcher(db).match(rec("일차방정식", ["20 = 3*x + 5"]))
         assert m.tier == Tier.EXACT
         assert m.problem.id == "lin_001"
+
+    def test_graph_labels_do_not_hide_a_verified_function_problem(self, db):
+        base = rec(
+            "함수 f와 g의 접선을 구하시오",
+            ["f(x) = x**2 - 4*x - 3", "g(x) = (x**3 - 2*x)*f(x)"],
+            problem_type="derivative_applications",
+            concepts=["differentiation"],
+        )
+        problem = Problem(
+            id="known-functions",
+            problem_type="derivative_applications",
+            problem_text=base.problem_text,
+            equations=base.equations,
+            answer=Answer(kind="SCALAR", value="49"),
+            source="test",
+            verified=True,
+            concepts=["differentiation"],
+        )
+        db.insert_problem(
+            problem,
+            normalized_text=base.problem_text,
+            text_hash=problem_hash(base),
+            verified=True,
+        )
+        db.insert_solution(
+            problem.id,
+            ReferenceSolution(
+                steps=[SolutionStep(idx=1, description="미분", expression="f'(1) = -2")],
+                final_answer=problem.answer,
+                concepts=problem.concepts,
+                verified=True,
+                origin="db",
+            ),
+            verified=True,
+        )
+        vision_read = base.model_copy(update={"equations": [
+            "f(x) = x**2 - 4*x - 3",
+            "y = f(x)",
+            "g(x) = (x**3 - 2*x)*f(x)",
+            "y = g(x)",
+        ]})
+
+        match = Matcher(db).match(vision_read)
+
+        assert match.tier == Tier.EXACT
+        assert match.problem.id == "known-functions"
+        assert match.reference.verified is True
 
     def test_scalar_multiple_is_template_not_exact(self, db):
         # 6x+10=40 is lin_001 scaled by 2: its parameters differ, so reusing

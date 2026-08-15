@@ -87,8 +87,16 @@ class TestRules:
         d = decide(state(), history, "HINT_REQUEST")
         assert (d.level, d.action) == (4, Action.PARTIAL_STEP)
 
-    def test_r9_effective_hint_repeats_level(self):
+    def test_effective_hint_fades_to_l1_within_the_same_composite_step(self):
         history = [hint(level=2, action="CONCEPT_HINT", effective=True)]
+        d = decide(state(), history, "HINT_REQUEST")
+        assert (d.level, d.action) == (1, Action.SOCRATIC_QUESTION)
+
+    def test_failure_after_partial_progress_escalates_from_the_new_l1_run(self):
+        history = [
+            hint(level=2, action="CONCEPT_HINT", effective=True, hint_id=1),
+            hint(level=1, action="SOCRATIC_QUESTION", effective=False, hint_id=2),
+        ]
         d = decide(state(), history, "HINT_REQUEST")
         assert (d.level, d.action) == (2, Action.CONCEPT_HINT)
 

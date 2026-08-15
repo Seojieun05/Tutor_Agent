@@ -1351,6 +1351,9 @@ function onEvent(msg) {
     case "barge_in":    stopSpeaking(); break;
     case "transcript":  addTurn("you", d.text || "(인식 실패)"); break;
     case "tutor_says":  onTutorSays(d); break;
+    case "tutor_stream_start": startTutorStream(d); break;
+    case "tutor_stream_delta": appendTutorStream(d); break;
+    case "tutor_stream_done":  finishTutorStream(d); break;
     case "board":       for (const line of d.lines || []) boardWrite(line); break;
     case "figure":      boardDraw(d); break;
     case "stage":       setStage(d.text); break;
@@ -2213,6 +2216,13 @@ function stopSpeaking(announce = true) {
   player.removeAttribute("src");
   player.load();
   reveal.finish();                       // a line nobody is hearing is not still arriving
+  // Keep the safe prefix that was actually shown, but detach it from the live
+  // stream so late deltas/done after a barge-in cannot finish the sentence.
+  for (const st of tutorStreams.values()) {
+    st.div.classList.remove("typing");
+    if (st.text) currentDialogue.push({ kind: "tutor", text: st.text });
+  }
+  tutorStreams.clear();
   dryBoard();
   settleHome();
   // Deliberately no playback_done: the server already knows, it told us to stop.
@@ -2376,6 +2386,42 @@ function addTurn(kind, text) {
   } else if (kind === "you") {
     div.querySelector(".bubble").append(mathify(text).frag);
   }
+  scrollChat();
+}
+
+// Real model streaming. Unlike `reveal`, these words did not exist on the
+// server beforehand: each delta crossed the rolling answer-leak guard first.
+// Keep prose plain while incomplete (half a formula must not be typeset), then
+// replace it once with the fully validated/math-normalized line on done.
+const tutorStreams = new Map();
+
+function startTutorStream(d) {
+  reveal.finish();
+  const div = document.createElement("div");
+  div.className = "msg tutor typing";
+  div.innerHTML = `<div class="who">튜터</div><div class="bubble"></div>`;
+  $("chat").appendChild(div);
+  tutorStreams.set(d.stream_id, { div, bubble: div.querySelector(".bubble"), text: "" });
+  scrollChat();
+}
+
+function appendTutorStream(d) {
+  const st = tutorStreams.get(d.stream_id);
+  if (!st) return;                       // tail of a cancelled/barge-in stream
+  st.text += d.text || "";
+  st.bubble.textContent = st.text;
+  scrollChat();
+}
+
+function finishTutorStream(d) {
+  const st = tutorStreams.get(d.stream_id);
+  if (!st) return;
+  const text = d.text || st.text;
+  st.text = text;
+  st.bubble.replaceChildren(mathify(text).frag);
+  st.div.classList.remove("typing");
+  currentDialogue.push({ kind: "tutor", text });
+  tutorStreams.delete(d.stream_id);
   scrollChat();
 }
 

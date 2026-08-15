@@ -47,11 +47,13 @@ def has_local_audio_output() -> bool:
         return True  # macOS/Windows: assume the default device works
     if os.environ.get("PULSE_SERVER"):
         return True
-    try:
-        if Path(f"/run/user/{os.getuid()}/pulse/native").exists():
-            return True
-    except OSError:
-        pass
+    getuid = getattr(os, "getuid", None)
+    if callable(getuid):
+        try:
+            if Path(f"/run/user/{getuid()}/pulse/native").exists():
+                return True
+        except OSError:
+            pass
     try:
         cards = Path("/proc/asound/cards").read_text()
     except OSError:
@@ -136,13 +138,41 @@ class XaiSpeaker:
             resp.raise_for_status()
             yield from resp.iter_bytes()
 
+    def synthesize_text_stream(self, chunks):
+        """Stream not-yet-complete text in and stream generated MP3 back out.
+
+        This is the latency path used by live LLM hints: safe word units arrive
+        over ``chunks`` while Grok is still writing, and xAI begins synthesis
+        once it has enough context instead of waiting for ``text.done``.
+        """
+        if self.settings.tts_transport != "ws":
+            text = "".join(chunks)
+            yield from self.synthesize_stream(text)
+            return
+        spoke = False
+        try:
+            for chunk in self._stream_ws_text(chunks):
+                spoke = True
+                yield chunk
+        except GeneratorExit:
+            raise
+        except Exception as e:  # noqa: BLE001
+            # Unlike the complete-text path, the iterator may already have
+            # been consumed by the sender thread. Replaying a partial spoken
+            # line would stutter, so fail closed and let the next turn redial.
+            log.warning(
+                "streaming-input TTS websocket failed%s: %s",
+                " mid-utterance" if spoke else " before audio", e,
+            )
+
     # --- the websocket transport ---------------------------------------------
 
     def _ws_url(self) -> str:
         host = (self.settings.xai_base_url.rstrip("/")
                 .replace("https://", "wss://").replace("http://", "ws://"))
         return (f"{host}/tts?language={quote(self.settings.tutor_language)}"
-                f"&voice={quote(self.settings.tts_voice)}&codec=mp3")
+                f"&voice={quote(self.settings.tts_voice)}&codec=mp3"
+                f"&optimize_streaming_latency={self.settings.tts_streaming_latency}")
 
     def _ws_open(self):
         if self._ws is None:
@@ -197,6 +227,51 @@ class XaiSpeaker:
                 self._ws_reset()
                 raise
 
+    def _stream_ws_text(self, chunks):
+        """Send text deltas and receive audio concurrently on the shared WS."""
+        with self._ws_lock:
+            feeder_error: list[BaseException] = []
+            feeder_done = threading.Event()
+            clean = False
+            try:
+                ws = self._ws_open()
+
+                def feed() -> None:
+                    try:
+                        for delta in chunks:
+                            if delta:
+                                ws.send(json.dumps({"type": "text.delta", "delta": delta}))
+                        ws.send(json.dumps({"type": "text.done"}))
+                    except BaseException as e:  # carried back to the receiver thread
+                        feeder_error.append(e)
+                        self._ws_reset()
+                    finally:
+                        feeder_done.set()
+
+                feeder = threading.Thread(target=feed, name="tts-text-feed", daemon=True)
+                feeder.start()
+                while True:
+                    msg = json.loads(ws.recv(timeout=30))
+                    kind = msg.get("type")
+                    if kind == "audio.delta":
+                        audio = base64.b64decode(msg.get("delta") or "")
+                        if audio:
+                            yield audio
+                    elif kind == "audio.done":
+                        clean = True
+                        feeder.join(timeout=1)
+                        if feeder_error:
+                            raise feeder_error[0]
+                        return
+                    elif kind == "error":
+                        raise RuntimeError(msg.get("message") or "tts websocket error")
+            except BaseException:
+                self._ws_reset()
+                raise
+            finally:
+                if not clean:
+                    self._ws_reset()
+
     def speak(self, text: str) -> None:
         audio = self.synthesize(text)
         if audio:
@@ -244,6 +319,10 @@ class EchoSpeaker:
         self.speak(text)
         return iter(())
 
+    def synthesize_text_stream(self, chunks):
+        self.speak("".join(chunks))
+        return iter(())
+
     def play(self, audio: bytes) -> None:
         pass  # echo mode has no audio to play
 
@@ -278,6 +357,10 @@ class NullSpeaker:
         size = max(1, -(-len(audio) // n))  # ceil division: n pieces, none empty
         for i in range(0, len(audio), size):
             yield audio[i : i + size]
+
+    def synthesize_text_stream(self, chunks):
+        text = "".join(chunks)
+        yield from self.synthesize_stream(text)
 
     def speak(self, text: str) -> None:
         if text:

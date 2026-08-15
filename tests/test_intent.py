@@ -187,6 +187,29 @@ def test_a_value_with_a_check_word_is_still_an_answer():
     assert rule_intent("5 맞아요?", has_problem=True, has_pending=True) == "ANSWER"
 
 
+@pytest.mark.parametrize("text", [
+    "응, 이 다음엔 어떻게 해야 돼?",
+    "다음은 어떻게 해요?",
+    "그다음은?",
+    "이제 뭘 해야 해요",
+    "이어서 어느 걸 하면 돼?",
+])
+def test_asking_how_to_continue_is_not_graded_as_an_answer(text):
+    assert rule_intent(text, has_problem=True, has_pending=True) == "HINT_REQUEST"
+
+
+def test_saying_the_next_operation_is_still_an_answer():
+    for text in (
+        "이제 양변을 3으로 나누면 돼요",
+        "다음은 1을 대입하면 돼요",
+    ):
+        assert rule_intent(
+            text,
+            has_problem=True,
+            has_pending=True,
+        ) == "ANSWER"
+
+
 @pytest.mark.parametrize("text", AGREEMENTS)
 def test_agreeing_with_the_tutor_never_takes_a_photo(text):
     """The regression this whole narrowing is for. A bare "맞아" used to mean

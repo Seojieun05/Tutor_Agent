@@ -41,6 +41,7 @@ from tutor.config import Settings
 from tutor.hints.generator import (
     SENTENCE_STEP_RE,
     HintGenerator,
+    guided_step_question,
     strip_leading_acknowledgement,
     visible_to_student,
 )
@@ -95,6 +96,59 @@ WORK_CHECK_REACTIONS: dict[str, str] = {
     "PROCEDURAL_ERROR": WORK_CHECK_WRONG,
     "MISREAD": WORK_CHECK_WRONG,
 }
+
+
+def _step_claim_variants(expression: str) -> list[str]:
+    """Comparable claims contained in a stored step expression.
+
+    Verified steps often keep the whole derivation on one line, for example
+    ``l: y = -2*(x-1)-6 = -2*x-4``.  A student naturally says only the final
+    equation.  Treat every equality pair in that chain as evidence for the
+    same step, while keeping the normal strict symbolic checker underneath.
+    """
+    variants: list[str] = []
+    for chunk in (expression or "").split(","):
+        chunk = re.sub(r"^\s*[A-Za-z]\s*:\s*", "", chunk.strip())
+        if not chunk:
+            continue
+        parts = [part.strip() for part in chunk.split("=") if part.strip()]
+        if len(parts) < 2:
+            variants.append(chunk)
+            continue
+        for left in range(len(parts) - 1):
+            for right in range(left + 1, len(parts)):
+                variants.append(f"{parts[left]} = {parts[right]}")
+    return variants
+
+
+def _claim_matches_step(claim: str, expression: str) -> bool:
+    if mathnorm.equations_equivalent(claim, expression):
+        return True
+    return any(
+        mathnorm.equations_equivalent(claim, variant)
+        for variant in _step_claim_variants(expression)
+    )
+
+
+def _spoken_linear_claim(transcript: str, expression: str) -> str | None:
+    """Conservatively recover a spoken linear expression such as ``-2x-4``."""
+    text = (transcript or "").lower().replace("−", "-")
+    for source, target in (
+        ("마이너스", "-"), ("플러스", "+"), ("더하기", "+"), ("빼기", "-"),
+        ("엑스", "x"),
+    ):
+        text = text.replace(source, target)
+    compact = re.sub(r"\s+", "", text)
+    found = re.search(r"[+-]?(?:\d+(?:\.\d+)?)?x(?:[+-]\d+(?:\.\d+)?)?", compact)
+    if found is None:
+        return None
+    rhs = found.group(0)
+    rhs = re.sub(r"([+-]?\d+(?:\.\d+)?)x", r"\1*x", rhs)
+    if re.search(r"(?:^|[:\s])y\s*=", expression):
+        return f"y = {rhs}"
+    return rhs
+
+
 WORK_CHECK_DEFAULT = "음, 지금 쓴 줄을 같이 볼까요?"
 
 # The filler openers for a work check: fixed, so their TTS is cached and one
@@ -276,6 +330,13 @@ class Session:
         self._capture_seq = 0
         self._audio_buffers: dict[str, list[bytes]] = {}
         self._busy = False
+        # An answer can finish STT while the hint turn is still doing its last
+        # bookkeeping.  Dropping it at that boundary makes the tutor look as
+        # though it is listening while being deaf.  Keep an explicit idle
+        # signal so answers wait for that tiny overlap instead.
+        self._turn_idle = asyncio.Event()
+        self._turn_idle.set()
+        self._turn_waiters = 0
         # Which pending hint THIS turn answered, so a turn the student never
         # hears can put it back. Per turn: cleared when one starts.
         self._resolved_hint: int | None = None
@@ -621,6 +682,7 @@ class Session:
             log.info("hint request ignored: already handling one")
             return
         self._busy = True
+        self._turn_idle.clear()
         self._resolved_hint = None
         # a work check earns its own opener: they asked about THEIR page, and
         # "네, 지금 쓴 풀이를 확인하고 있어요" answers that before the camera has
@@ -651,15 +713,28 @@ class Session:
                 log.exception("recovery delivery failed (connection likely gone)")
         finally:
             # A turn that says nothing (WAIT) still owes the filler an ending.
-            await self._settle_filler()
-            self._busy = False
+            try:
+                await self._settle_filler()
+            finally:
+                self._busy = False
+                self._turn_idle.set()
+                await self._turn_finished()
 
     async def handle_answer(self, transcript: str, pending: HintRecord) -> None:
         """The student answered the tutor's question out loud."""
         if self._busy:
-            log.info("answer ignored: a turn is already running")
-            return
+            # This is normally the end of the hint that asked `pending`: audio
+            # has stopped, while history/illustration bookkeeping is still
+            # unwinding.  The student already did their part; preserve it.
+            log.info("answer queued: waiting for the current turn to finish")
+            self._turn_waiters += 1
+            try:
+                while self._busy:
+                    await self._turn_idle.wait()
+            finally:
+                self._turn_waiters -= 1
         self._busy = True
+        self._turn_idle.clear()
         self._resolved_hint = None
         # the echo IS the acknowledgement of having heard them — and it plays
         # while the evaluator is still grading the very value it echoes
@@ -680,8 +755,16 @@ class Session:
             except Exception:
                 log.exception("recovery delivery failed (connection likely gone)")
         finally:
-            await self._settle_filler()
-            self._busy = False
+            try:
+                await self._settle_filler()
+            finally:
+                self._busy = False
+                self._turn_idle.set()
+                await self._turn_finished()
+
+    async def _turn_finished(self) -> None:
+        """Device-specific floor handoff after all turn bookkeeping is done."""
+        return None
 
     async def _handle_answer(self, transcript: str, pending: HintRecord) -> None:
         ctx = self.ctx
@@ -764,7 +847,7 @@ class Session:
         # the pending hint IS the signal that moves it up, down or nowhere.
         prev = self.store.get_state() or StudentState()
         if verdict.verdict == "CORRECT":
-            reached = self._reached_step(verdict, reference, pending.step)
+            reached = self._reached_step(verdict, reference, pending.step, transcript)
             self.store.set_state(
                 prev.model_copy(
                     update={
@@ -785,6 +868,32 @@ class Session:
             if pending.step >= len(reference.steps):
                 await self._finish_problem(ctx, verdict, pending.step)
                 return
+        elif verdict.verdict == "PARTIAL":
+            # A correct idea is not the same thing as a completed reference
+            # step.  Live on problem 13, "f를 미분하면 2x-4니까 1을 대입하면
+            # 될 것 같아요" was praised as CORRECT and advanced past the
+            # still-missing slope/tangent work to the product rule. Keep the
+            # frontier, record that the hint helped, and clear an old
+            # misconception because the direction itself was sound.
+            self.store.set_state(
+                prev.model_copy(
+                    update={
+                        "current_step": f"{pending.step}단계를 말로 진행 중",
+                        "status": "STUCK",
+                        "misconception": None,
+                        "attempt_count": prev.attempt_count + 1,
+                        "previous_hint_effective": None,
+                    }
+                )
+            )
+            log.info(
+                "answer partially correct: staying at step %d until the step is complete",
+                pending.step,
+            )
+            # The hint did help even though the coarse reference step is not
+            # finished. Resolve it positively so the policy fades back to L1
+            # for the remaining sub-result instead of repeating L2/L3 support.
+            self._resolve_hint(pending.id, True)
         elif verdict.verdict == "INCORRECT":
             self.store.set_state(
                 prev.model_copy(
@@ -812,30 +921,42 @@ class Session:
         # "맞아요, 그렇게 하면 돼요!" WHILE the next question is being written
         # is where the answer turn stops feeling slow: first meaningful sound
         # at evaluate-time instead of evaluate+phrase+TTS-time.
-        hint_task = asyncio.create_task(
-            asyncio.to_thread(
-                self.deps.hint_gen.generate,
-                decision, ctx.match, ctx.reference, ctx.recognition, history, transcript,
-            )
-        )
+        sink = self._new_hint_stream(paused=True)
+        kwargs = {"partial": verdict.verdict == "PARTIAL"}
+        if sink is not None:
+            kwargs["on_delta"] = sink.push
+        hint_task = asyncio.create_task(asyncio.to_thread(
+            self.deps.hint_gen.generate,
+            decision, ctx.match, ctx.reference, ctx.recognition, history, transcript,
+            **kwargs,
+        ))
         try:
             spoke_feedback = await self._react(verdict.feedback, decision)
+            if sink is not None:
+                sink.activate()
             text = await hint_task
+            streamed = await sink.finish(text) if sink is not None else False
         except Exception:
             hint_task.cancel()
+            if sink is not None:
+                await sink.abort()
             raise
         # read before any strip loses the subclass that carries them
         board = getattr(text, "board", ())  # before any strip loses the subclass
-        if spoke_feedback:
+        if spoke_feedback and not streamed:
             # one acknowledgement per turn: the reaction already was it
             text = strip_leading_acknowledgement(text)
         # A correct answer often IS the reason the picture changes — the
         # tangent they just found is what replaces the curve it came from.
-        said = transcript if verdict.verdict == "CORRECT" else None
-        await self._deliver(decision, text, ctx.hash, board, said)
+        said = transcript if verdict.verdict in {"CORRECT", "PARTIAL"} else None
+        await self._deliver(
+            decision, text, ctx.hash, board, said, already_spoken=streamed
+        )
 
     @staticmethod
-    def _reached_step(verdict, reference: ReferenceSolution, asked: int) -> int:
+    def _reached_step(
+        verdict, reference: ReferenceSolution, asked: int, transcript: str = ""
+    ) -> int:
         """How far the student actually got, in steps we can prove.
 
         A student who answers the slope question with the whole tangent has
@@ -851,24 +972,34 @@ class Session:
           · the next photo overrules all of it, because the estimator writes
             last_correct_step from what is actually on the page
         """
-        proposed = verdict.reached_step
-        if not isinstance(proposed, int) or proposed <= asked:
-            return asked
         ceiling = len(reference.steps) - 1     # never the final step
-        proposed = min(proposed, ceiling)
-        if proposed <= asked:
-            return asked
-        step = next((s for s in reference.steps if s.idx == proposed), None)
+        proposed = verdict.reached_step
         claim = (verdict.reached_claim or "").strip()
-        if step is None or not claim or not step.expression:
-            log.info("no way to check a jump to step %s; staying at %s", proposed, asked)
-            return asked
-        if not mathnorm.equations_equivalent(claim, step.expression):
-            log.info("claim %r does not match step %d; staying at %s",
-                     claim[:40], proposed, asked)
-            return asked
-        log.info("student ran ahead to step %d (%r checks out)", proposed, claim[:40])
-        return proposed
+        if isinstance(proposed, int) and proposed > asked:
+            proposed = min(proposed, ceiling)
+            step = next((s for s in reference.steps if s.idx == proposed), None)
+            if step is not None and claim and step.expression and _claim_matches_step(
+                claim, step.expression
+            ):
+                log.info("student ran ahead to step %d (%r checks out)", proposed, claim[:40])
+                return proposed
+            log.info("claim %r does not prove proposed step %s; checking the transcript",
+                     claim[:40], proposed)
+
+        # Gemini sometimes correctly grades the whole tangent but omits the
+        # optional reached_step fields.  Recover only the narrow, mechanically
+        # provable case: a spoken linear expression that matches a later step.
+        for step in reversed(reference.steps):
+            if step.idx <= asked or step.idx > ceiling or not step.expression:
+                continue
+            inferred = _spoken_linear_claim(transcript, step.expression)
+            if inferred and _claim_matches_step(inferred, step.expression):
+                log.info(
+                    "spoken claim %r proves the student ran ahead to step %d",
+                    inferred, step.idx,
+                )
+                return step.idx
+        return asked
 
     async def _answer_question(
         self, ctx: ProblemContext, pending: HintRecord, question: str
@@ -882,7 +1013,9 @@ class Session:
         # already made — without it the explanation motivates the step in the
         # abstract and never says where the student went wrong.
         state = self.store.get_state()
-        text = await asyncio.to_thread(
+        sink = self._new_hint_stream(paused=True)
+        kwargs = {"on_delta": sink.push} if sink is not None else {}
+        explain_task = asyncio.create_task(asyncio.to_thread(
             self.deps.hint_gen.explain,
             student_question=question,
             tutor_question=pending.hint_text,
@@ -891,9 +1024,22 @@ class Session:
             rec=ctx.recognition,
             target_step=pending.step,
             diagnosis=state,
-        )
+            **kwargs,
+        ))
+        try:
+            if sink is not None:
+                await self._settle_filler()
+                sink.activate()
+            text = await explain_task
+            streamed = await sink.finish(text) if sink is not None else False
+        except BaseException:
+            explain_task.cancel()
+            if sink is not None:
+                await sink.abort()
+            raise
         log.info("explained a student question at step %d", pending.step)
-        await self._speak(text, final=True)
+        if not streamed:
+            await self._speak(text, final=True)
 
     async def _finish_problem(self, ctx: ProblemContext, verdict, target_step: int) -> None:
         """The last step was answered correctly: congratulate and close.
@@ -989,13 +1135,14 @@ class Session:
         decision = decide(current, fresh_history, "HINT_REQUEST")
         log.info("decision: %s", decision)
         await self._stage("힌트를 만들고 있어요")
-        text = await asyncio.to_thread(
-            self.deps.hint_gen.generate,
+        text, streamed = await self._generate_hint(
             decision, self.ctx.match, reference, self.ctx.recognition,
-            fresh_history, None,
+            fresh_history, None, live=True,
         )
         board = getattr(text, "board", ())
-        await self._deliver(decision, text, self.ctx.hash, board)
+        await self._deliver(
+            decision, text, self.ctx.hash, board, already_spoken=streamed
+        )
         return True
 
     async def _handle_hint_request(self, question: str | None = None) -> None:
@@ -1136,17 +1283,29 @@ class Session:
         # A skipped estimate (reference still solving) carries none either.
         if (reference is not None and pending is not None and prev_state is not None
                 and new_state.status != "UNCERTAIN"):
-            effective = hint_was_effective(prev_state, new_state)
+            if (new_state.status == "CORRECT"
+                    and new_state.last_correct_step < pending.step):
+                # Correct SO FAR is not evidence that the pending next step was
+                # attempted.  Keep that question current; resolving it exposed
+                # an ancient unresolved step-1 hint underneath.
+                log.info(
+                    "hint L%d at step %d remains pending: correct work reaches only step %d",
+                    pending.level, pending.step, new_state.last_correct_step,
+                )
+                effective = None
+            else:
+                effective = hint_was_effective(prev_state, new_state)
             # The escalation one turn later reads "hint L1 ineffective" and
             # names no evidence. This is the evidence: two states and the
             # comparison between them, at the moment it is made.
-            log.info(
-                "hint L%d at step %d: %s (was %s at step %d)",
-                pending.level, pending.step,
-                "helped" if effective else "did not help",
-                prev_state.status, prev_state.last_correct_step,
-            )
-            self._resolve_hint(pending.id, effective)
+            if effective is not None:
+                log.info(
+                    "hint L%d at step %d: %s (was %s at step %d)",
+                    pending.level, pending.step,
+                    "helped" if effective else "did not help",
+                    prev_state.status, prev_state.last_correct_step,
+                )
+                self._resolve_hint(pending.id, effective)
 
         # Always read state/history through the store right before the policy.
         current = self.store.get_state() or new_state
@@ -1161,13 +1320,13 @@ class Session:
             # But the verdict alone ended the conversation. A student four
             # steps into a seven-step problem heard "이대로 하면 돼요. 또 궁금한
             # 게 있으면 물어봐 주세요" and was left standing — confirmed, and
-            # abandoned. Naming WHERE to go next is not a hint (the ladder
-            # does not move, nothing enters the history): it is the answer to
-            # the question they are about to ask.
+            # abandoned. Opening the next piece of work here does not move the
+            # ladder or enter history; it answers the question they are about
+            # to ask without reading an internal step label aloud.
             log.info("work check at step %d: correct so far", current.last_correct_step)
             line = self._confirmed_line(current, reference)
             await self._speak(line, final=True)
-            # "다음은 X 차례예요" invites exactly one reply — "그거 어떻게
+            # The forward invitation often gets one reply — "그거 어떻게
             # 해요?" — and that reply must not begin with a camera shutter:
             # the diagnosis it needs is the one that was just made.
             self._continue_from = (ctx.hash, time.monotonic())
@@ -1195,25 +1354,87 @@ class Session:
         # Same overlap as the answer turn: the reaction ("음, 지금 쓴 줄을 같이
         # 볼까요?") is fixed text with cached TTS, so it plays at once while the
         # hint is still being generated.
-        hint_task = asyncio.create_task(
-            asyncio.to_thread(
-                self.deps.hint_gen.generate,
+        # A plain hint has no reaction in front of it, so its safe word stream
+        # can go straight to the student. Work checks deliberately keep the
+        # reaction first; their generated follow-up uses the complete path.
+        if question is None:
+            text, streamed = await self._generate_hint(
                 decision, ctx.match, reference, rec, fresh_history, question,
+                live=True,
             )
-        )
+            board = getattr(text, "board", ())
+            await self._deliver(
+                decision, text, ctx.hash, board, already_spoken=streamed
+            )
+            return
+
+        sink = self._new_hint_stream(paused=True)
+        kwargs = {"on_delta": sink.push} if sink is not None else {}
+        hint_task = asyncio.create_task(asyncio.to_thread(
+            self.deps.hint_gen.generate,
+            decision, ctx.match, reference, rec, fresh_history, question,
+            **kwargs,
+        ))
         try:
             spoke_reaction = bool(question) and await self._react(
                 self._work_reaction(current), decision
             )
+            if sink is not None:
+                sink.activate()
             text = await hint_task
+            streamed = await sink.finish(text) if sink is not None else False
         except Exception:
             hint_task.cancel()
+            if sink is not None:
+                await sink.abort()
             raise
         # read before any strip loses the subclass that carries them
         board = getattr(text, "board", ())  # before any strip loses the subclass
-        if spoke_reaction:
+        if spoke_reaction and not streamed:
             text = strip_leading_acknowledgement(text)
-        await self._deliver(decision, text, ctx.hash, board)
+        await self._deliver(
+            decision, text, ctx.hash, board, already_spoken=streamed
+        )
+
+    async def _generate_hint(
+        self, decision, match, reference, rec, history, student_answer,
+        *, live: bool = False,
+    ) -> tuple[str, bool]:
+        """Generate one hint, optionally committing safe words as they arrive.
+
+        Device sessions have no incremental text/audio sink and naturally use
+        the old complete-line path. BrowserSession overrides
+        ``_new_hint_stream``; only then is ``on_delta`` attached.
+        """
+        # A filler may still own the speaker while the model starts writing.
+        # Buffer safe deltas immediately, but do not let the final hint compete
+        # with that filler for the one TTS websocket.  The model and filler
+        # still run concurrently; activation is merely the audio hand-off.
+        sink = self._new_hint_stream(paused=True) if live else None
+        kwargs = {"on_delta": sink.push} if sink is not None else {}
+        hint_task = asyncio.create_task(asyncio.to_thread(
+            self.deps.hint_gen.generate,
+            decision, match, reference, rec, history, student_answer,
+            **kwargs,
+        ))
+        try:
+            if sink is not None:
+                await self._settle_filler()
+                sink.activate()
+            text = await hint_task
+            if sink is None:
+                return text, False
+            heard = await sink.finish(text)
+            return text, heard
+        except BaseException:
+            hint_task.cancel()
+            if sink is not None:
+                await sink.abort()
+            raise
+
+    def _new_hint_stream(self, paused: bool = False):
+        """BrowserSession supplies the live eye/ear sink."""
+        return None
 
     @staticmethod
     def _work_reaction(state: StudentState) -> str:
@@ -1222,13 +1443,12 @@ class Session:
 
     @staticmethod
     def _confirmed_line(state: StudentState, reference) -> str:
-        """The verdict, plus where to go — when the next step can be NAMED.
+        """The verdict, plus a question that opens the next piece of work.
 
         Only a noun-form step description rides in the sentence (the same rule
         the hint templates follow: a sentence cannot wear a particle), only
-        its description is spoken (never an expression), and the composed line
-        still passes the leak guard upstream of nothing — the description of
-        the step they are about to do is exactly what L4 is allowed to say.
+        its description becomes an invitation (never an expression), and the composed line
+        stays at the level of an action rather than revealing its expression.
         A finished problem gets the congratulation instead.
         """
         if reference is None:
@@ -1242,7 +1462,7 @@ class Session:
         name = nxt.description.strip().rstrip(" .!?…")
         if not name or SENTENCE_STEP_RE.search(name):
             return WORK_CONFIRMED
-        return f"맞아요! 여기까지 잘했어요. 다음은 {name} 차례예요."
+        return f"맞아요! 여기까지 잘했어요. {guided_step_question(name, nxt.idx)}"
 
     def _same_problem(self, rec: Recognition) -> bool:
         """Is this the worksheet we are already working on?
@@ -1649,6 +1869,7 @@ class Session:
     async def _deliver(
         self, decision: Decision, text: str, problem_hash: str = "",
         board: tuple[str, ...] = (), student_said: str | None = None,
+        *, already_spoken: bool = False,
     ) -> None:
         if board:
             # written as the voice starts, like a tutor's hand reaching the
@@ -1668,7 +1889,7 @@ class Session:
             self._spawn(
                 self._illustrate(decision, text, board, problem_hash, student_said)
             )
-            if not await self._speak(text, final=True):
+            if not already_spoken and not await self._speak(text, final=True):
                 # The student talked over this whole turn, so _say skipped every
                 # line of it: this hint exists only in the log. Recording it
                 # would escalate the ladder for a question that was never asked

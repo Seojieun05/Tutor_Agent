@@ -41,6 +41,8 @@ cp .env.example .env   # if you don't have one; fill XAI_API_KEY
 - **Live mode** — with `XAI_API_KEY` set: Grok VLM recognition + solver +
   estimator (via `CHAT_MODEL`), STT `POST /v1/stt`, TTS `POST /v1/tts`
   (voice `TTS_VOICE`, Korean). No STT/TTS model names are needed.
+  With `TTS_TRANSPORT=ws`, `TTS_STREAMING_LATENCY=0..2` controls xAI's
+  streaming lookahead; `2` (the default) gives the shortest first-audio delay.
 
 Device simulator (no hardware needed) in a second terminal:
 
@@ -113,6 +115,20 @@ browser mic → AudioWorklet → 16 kHz mono int16 PCM → AUDIO frames
   → Silero VAD on the server → utterance → STT → RAG/hint pipeline
   → TTS bytes → TTS_AUDIO frame → browser speaker → playback_done
 ```
+
+Generated hints use a guarded duplex stream rather than waiting for the whole
+line:
+
+```text
+Hint-model token (Gemini/Grok) → incremental JSON `hint` field → 4-word quarantine
+  → answer-leak check → tutor_stream_delta + TTS `text.delta`
+  → TTS_AUDIO chunks while Grok is still writing → final schema validation
+```
+
+The rolling quarantine is intentional: an answer split across tokens (for
+example `정답은` … `5예요`) must be recognized before either the screen or the
+speaker receives the revealing word. Fixed/cached reactions still use the
+complete-line path because they have no model-generation wait to hide.
 
 On the server:
 

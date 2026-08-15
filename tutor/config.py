@@ -88,6 +88,10 @@ class Settings:
     # (~0.3s to first audio instead of ~1.3s per-request HTTP). Any websocket
     # failure falls back to the HTTP stream for that line, loudly.
     tts_transport: str = "http"
+    # xAI's websocket TTS can trade a little prosody/lookahead for a shorter
+    # time-to-first-audio. 2 is the documented aggressive/lowest-latency mode;
+    # it affects only the streaming transport and leaves HTTP unchanged.
+    tts_streaming_latency: int = 2
     ws_host: str = "0.0.0.0"
     ws_port: int = 8765
     # HTTPS/WSS, for the phone camera only. getUserMedia runs in a secure
@@ -227,6 +231,9 @@ def load_settings(env_file: Path | None = None) -> Settings:
     s.tts_transport = (
         os.getenv("TTS_TRANSPORT", s.tts_transport).strip().lower() or s.tts_transport
     )
+    s.tts_streaming_latency = max(0, min(2, int(os.getenv(
+        "TTS_STREAMING_LATENCY", str(s.tts_streaming_latency)
+    ))))
     s.gemini_vision_model = (
         os.getenv("GEMINI_VISION_MODEL", s.gemini_vision_model).strip()
         or s.gemini_vision_model
