@@ -41,7 +41,6 @@ Rules:
 - misconception: prefer an id from the provided misconception list when the student's
   error matches its indicators; otherwise a short free-text description or null.
 - current_step: short Korean description of what the student is currently doing.
-- You may look up misconception details in the domain knowledge base.
 
 Return ONLY the JSON object."""
 
@@ -87,7 +86,12 @@ class StudentStateEstimator:
         if quick is not None:
             return self._post_rules(quick, reference, prev_state, rec)
 
-        state = self.llm.run_with_tools(
+        # complete_json, deliberately not run_with_tools: everything the
+        # diagnosis may consult — the reference, the work, the misconception
+        # list — is already IN the context, and live the model still spent a
+        # tool round on search_domain_kb (measured: 17.6s for one estimate,
+        # two rounds). A diagnosis has nothing to look up.
+        state = self.llm.complete_json(
             purpose="estimate",
             system=_SYSTEM,
             user=self._build_context(rec, reference, prev_state, history, transcript),
@@ -105,7 +109,7 @@ class StudentStateEstimator:
             # IS work on it: look again with fresh eyes (no previous state, no
             # history) before giving up on a verdict.
             log.info("estimate UNCERTAIN on a legible page; retrying without bias")
-            state = self.llm.run_with_tools(
+            state = self.llm.complete_json(
                 purpose="estimate",
                 system=_SYSTEM,
                 user=self._build_context(rec, reference, None, [], transcript),
@@ -124,7 +128,7 @@ class StudentStateEstimator:
             # r**3, still "diagnosed" with the r-relation misconception). Same
             # medicine as the UNCERTAIN echo: one look with fresh eyes.
             log.info("old misconception repeated on changed work; retrying without bias")
-            state = self.llm.run_with_tools(
+            state = self.llm.complete_json(
                 purpose="estimate",
                 system=_SYSTEM,
                 user=self._build_context(rec, reference, None, [], transcript),
