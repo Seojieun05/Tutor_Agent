@@ -743,9 +743,12 @@
     transition:transform .24s cubic-bezier(.34,1.6,.5,1), opacity .16s;
   }
   #tutor.puffed .pf-spikes { transform:scale(1); opacity:1; }
-  /* puffed, the oval rounds toward a ball under the spikes */
-  .pf-body { transform-box:fill-box; transform-origin:50% 50%; transition:transform .24s; }
-  #tutor.puffed .pf-body { transform:scale(.96,1.1); }
+  /* TWO portraits, not one morph: the reference sheet draws the puffed fish
+     as its own animal (black almond eyes, its own fins), so the puff swaps
+     drawings. The puffed portrait rides the .pf-spikes spring above — same
+     bounce, same clocks — and the resting one steps aside under it. */
+  .pf-normal { transition:opacity .18s ease; }
+  #tutor.puffed .pf-normal { opacity:0; }
 
   .pf-fin {
     transform-box:fill-box;
@@ -997,100 +1000,170 @@
                Same classed skeleton as before — the CSS and the choreography
                animate CLASSES, so only the drawing changed hands. -->
           <g class="flip" stroke-linejoin="round" stroke-linecap="round">
-            <!-- the spikes, one short wide cone rotated round the centre -->
-            <g class="pf-spikes" fill="#f58a4b" stroke="#1d120b" stroke-width="3.5">
-              <path d="M90 56 L100 28 L110 56 Z"/>
-              <path d="M90 56 L100 28 L110 56 Z" transform="rotate(30 100 92)"/>
-              <path d="M90 56 L100 28 L110 56 Z" transform="rotate(60 100 92)"/>
-              <path d="M90 56 L100 28 L110 56 Z" transform="rotate(90 100 92)"/>
-              <path d="M90 56 L100 28 L110 56 Z" transform="rotate(120 100 92)"/>
-              <path d="M90 56 L100 28 L110 56 Z" transform="rotate(150 100 92)"/>
-              <path d="M90 56 L100 28 L110 56 Z" transform="rotate(180 100 92)"/>
-              <path d="M90 56 L100 28 L110 56 Z" transform="rotate(210 100 92)"/>
-              <path d="M90 56 L100 28 L110 56 Z" transform="rotate(240 100 92)"/>
-              <path d="M90 56 L100 28 L110 56 Z" transform="rotate(270 100 92)"/>
-              <path d="M90 56 L100 28 L110 56 Z" transform="rotate(300 100 92)"/>
-              <path d="M90 56 L100 28 L110 56 Z" transform="rotate(330 100 92)"/>
-            </g>
-
-            <!-- the side fin, a pointed wing off the right edge -->
-            <g class="pf-fin tail" fill="#f58a4b" stroke="#1d120b" stroke-width="4">
-              <path d="M146 78 Q172 72 190 88 Q170 98 148 98 Q152 88 146 78 Z"/>
-            </g>
-
-            <!-- the body: a loaf of orange under a torn darker saddle,
-                 chunky paint-dab speckles on the saddle. No dorsal fin —
-                 the reference's back is smooth. -->
-            <g class="pf-body">
-              <path d="M42 88 Q40 62 66 52 Q88 42 118 46 Q150 50 156 76
-                       Q160 100 138 118 Q112 136 78 130 Q46 122 42 88 Z"
-                    fill="#f79a5f" stroke="#1d120b" stroke-width="5"/>
-              <path d="M60 118 Q92 132 124 118 Q104 128 84 126 Q70 124 60 118 Z"
-                    fill="#faa76f"/>
-              <path d="M44 80 Q46 58 68 50 Q90 42 116 46 Q104 50 108 58
-                       Q96 54 90 64 Q80 58 72 70 Q60 66 58 82 Q50 78 44 80 Z"
-                    fill="#ed7434"/>
-              <!-- the speckles: dabs, not dots -->
-              <g fill="#4f2410">
-                <ellipse cx="70" cy="57" rx="4" ry="3" transform="rotate(-18 70 57)"/>
-                <ellipse cx="87" cy="50" rx="3" ry="2.2" transform="rotate(12 87 50)"/>
-                <ellipse cx="101" cy="48" rx="4.6" ry="2.6" transform="rotate(-8 101 48)"/>
-                <ellipse cx="79" cy="66" rx="2.8" ry="2" transform="rotate(20 79 66)"/>
-                <ellipse cx="61" cy="72" rx="2.4" ry="1.8"/>
-                <ellipse cx="94" cy="59" rx="2" ry="1.6"/>
-                <ellipse cx="119" cy="52" rx="2.2" ry="1.6" transform="rotate(14 119 52)"/>
-                <ellipse cx="128" cy="60" rx="1.8" ry="1.4"/>
+            <!-- ================= THE RESTING FISH (reference 2) ==========
+                 A bun of orange, wall-eyed: one ivory eye budding off the
+                 left edge, one big white eye high on the right, a long calm
+                 smile between them, a fingered fin below. ============== -->
+            <g class="pf-normal">
+              <!-- the side fin behind, pointing down-right -->
+              <g class="pf-fin tail" fill="#f58a4b" stroke="#1d120b" stroke-width="4">
+                <path d="M148 94 Q176 98 186 118 Q166 122 150 112 Q153 102 148 94 Z"/>
+              </g>
+              <g class="pf-body">
+                <path d="M34 90 Q34 64 60 52 Q88 40 122 44 Q156 48 164 74
+                         Q170 98 148 116 Q118 134 76 128 Q40 120 34 90 Z"
+                      fill="#f79a5f" stroke="#1d120b" stroke-width="5"/>
+                <path d="M58 116 Q94 132 128 116 Q106 128 84 126 Q68 122 58 116 Z"
+                      fill="#faa76f"/>
+                <path d="M56 70 Q62 52 84 46 Q106 42 118 48 Q108 52 112 60
+                         Q100 54 96 64 Q86 58 80 68 Q70 64 68 76 Q60 72 56 70 Z"
+                      fill="#ed7434"/>
+                <!-- chunky dabs in the saddle, loose dots past its edge -->
+                <g fill="#4a2008">
+                  <ellipse cx="76" cy="56" rx="4.4" ry="3.2" transform="rotate(-16 76 56)"/>
+                  <ellipse cx="92" cy="50" rx="3.4" ry="2.4" transform="rotate(10 92 50)"/>
+                  <ellipse cx="103" cy="55" rx="4.8" ry="2.8" transform="rotate(-6 103 55)"/>
+                  <ellipse cx="84" cy="65" rx="3" ry="2.2" transform="rotate(22 84 65)"/>
+                  <ellipse cx="68" cy="66" rx="2.4" ry="1.8"/>
+                  <ellipse cx="96" cy="60" rx="2" ry="1.6"/>
+                  <ellipse cx="120" cy="56" rx="2.2" ry="1.6" transform="rotate(14 120 56)"/>
+                  <ellipse cx="128" cy="66" rx="1.8" ry="1.4"/>
+                  <ellipse cx="112" cy="68" rx="1.6" ry="1.3"/>
+                </g>
+                <!-- the belly crease -->
+                <path d="M120 120 Q130 118 138 112" fill="none"
+                      stroke="#1d120b" stroke-width="3"/>
+              </g>
+              <!-- the fingered fin below -->
+              <g class="pf-fin pect" fill="#f58a4b" stroke="#1d120b" stroke-width="4">
+                <path d="M86 122 Q80 140 90 150 Q102 156 112 146 Q118 134 108 124
+                         Q97 130 86 122 Z"/>
+                <path d="M93 132 L90 148 M101 133 L101 150" fill="none"
+                      stroke="#1d120b" stroke-width="2.5"/>
+              </g>
+              <!-- the face -->
+              <g class="pf-face">
+                <g class="pf-eye">
+                  <ellipse cx="42" cy="86" rx="14" ry="17.5" fill="#f2ead9"
+                           stroke="#1d120b" stroke-width="5"
+                           transform="rotate(-14 42 86)"/>
+                  <g class="pf-pupil"><g class="pf-iris">
+                    <ellipse cx="43" cy="88" rx="8" ry="11" fill="#14100b"
+                             transform="rotate(-14 43 88)"/>
+                    <path d="M37 94 Q40 98 45 97" fill="none"
+                          stroke="#fff" stroke-width="2"/>
+                  </g></g>
+                </g>
+                <g class="pf-eye">
+                  <circle cx="130" cy="72" r="19" fill="#faf6ec"
+                          stroke="#1d120b" stroke-width="5"/>
+                  <g class="pf-pupil"><g class="pf-iris">
+                    <ellipse cx="132" cy="74" rx="10" ry="13" fill="#14100b"/>
+                    <path d="M126 84 Q132 88 139 84" fill="none"
+                          stroke="#fff" stroke-width="2.2"/>
+                    <circle cx="128" cy="66" r="2.4" fill="#fff"/>
+                  </g></g>
+                </g>
+                <path class="pf-mouth-smile" d="M62 100 Q86 112 110 100"
+                      fill="none" stroke="#1d120b" stroke-width="5"/>
+                <path d="M58 94 q-4 5 -2 10" fill="none"
+                      stroke="#1d120b" stroke-width="3"/>
+                <g class="pf-mouth-o">
+                  <path d="M66 100 Q86 112 106 100 Q94 120 66 100 Z"
+                        fill="#3a1610" stroke="#1d120b" stroke-width="3"/>
+                  <ellipse cx="86" cy="108" rx="8" ry="3.6" fill="#f2a0ae"/>
+                </g>
               </g>
             </g>
 
-            <!-- the lower fin, rounded, with its finger rays -->
-            <g class="pf-fin pect" fill="#f58a4b" stroke="#1d120b" stroke-width="4">
-              <path d="M78 124 Q74 148 96 150 Q108 146 104 128 Q92 134 78 124 Z"/>
-              <path d="M86 132 L84 146 M94 134 L94 148" fill="none"
-                    stroke="#1d120b" stroke-width="2.5"/>
-            </g>
-
-            <!-- the face: the huge ivory eye at the face's edge, the white
-                 eye above it, and the long thin smile -->
-            <g class="pf-face">
-              <g class="pf-eye">
-                <ellipse cx="54" cy="86" rx="17" ry="21" fill="#f5eee0"
-                         stroke="#1d120b" stroke-width="5"
-                         transform="rotate(-12 54 86)"/>
-                <g class="pf-pupil"><g class="pf-iris">
-                  <ellipse cx="54" cy="88" rx="9.5" ry="13" fill="#171008"
-                           transform="rotate(-12 54 88)"/>
-                  <circle cx="50" cy="79" r="2.6" fill="#fff"/>
-                </g></g>
+            <!-- ================= THE PUFFED FISH (reference 1) ===========
+                 Its own animal on its own layer: a great spiked ball, black
+                 almond eyes with lashes, an open grin, sail fins. It rides
+                 the .pf-spikes spring, so the puff pops it in whole. ==== -->
+            <g class="pf-spikes pf-puffed">
+              <!-- the ring of spikes, mains and smalls alternating -->
+              <g fill="#f58a4b" stroke="#1d120b" stroke-width="3.5">
+                <path d="M91 42 L100 14 L109 42 Z"/>
+                <path d="M91 42 L100 14 L109 42 Z" transform="rotate(30 100 92)"/>
+                <path d="M91 42 L100 14 L109 42 Z" transform="rotate(60 100 92)"/>
+                <path d="M91 42 L100 14 L109 42 Z" transform="rotate(90 100 92)"/>
+                <path d="M91 42 L100 14 L109 42 Z" transform="rotate(120 100 92)"/>
+                <path d="M91 42 L100 14 L109 42 Z" transform="rotate(150 100 92)"/>
+                <path d="M91 42 L100 14 L109 42 Z" transform="rotate(180 100 92)"/>
+                <path d="M91 42 L100 14 L109 42 Z" transform="rotate(210 100 92)"/>
+                <path d="M91 42 L100 14 L109 42 Z" transform="rotate(240 100 92)"/>
+                <path d="M91 42 L100 14 L109 42 Z" transform="rotate(270 100 92)"/>
+                <path d="M91 42 L100 14 L109 42 Z" transform="rotate(300 100 92)"/>
+                <path d="M91 42 L100 14 L109 42 Z" transform="rotate(330 100 92)"/>
+                <path d="M95 40 L100 22 L105 40 Z" transform="rotate(15 100 92)"/>
+                <path d="M95 40 L100 22 L105 40 Z" transform="rotate(105 100 92)"/>
+                <path d="M95 40 L100 22 L105 40 Z" transform="rotate(165 100 92)"/>
+                <path d="M95 40 L100 22 L105 40 Z" transform="rotate(255 100 92)"/>
+                <path d="M95 40 L100 22 L105 40 Z" transform="rotate(345 100 92)"/>
               </g>
-              <g class="pf-eye">
-                <circle cx="104" cy="72" r="17" fill="#fff"
-                        stroke="#1d120b" stroke-width="5"/>
-                <g class="pf-pupil"><g class="pf-iris">
-                  <ellipse cx="104" cy="74" rx="9" ry="12" fill="#171008"/>
-                  <circle cx="100" cy="66" r="2.8" fill="#fff"/>
-                  <path d="M99 81 Q104 85 110 82" fill="none"
-                        stroke="#fff" stroke-width="2"/>
-                </g></g>
+              <!-- the top-left sail fin and the right tail fin -->
+              <g class="pf-fin dorsal" fill="#f58a4b" stroke="#1d120b" stroke-width="4">
+                <path d="M46 46 Q30 22 60 26 Q56 36 58 46 Q50 50 46 46 Z"/>
+                <path d="M44 38 L52 32" fill="none" stroke="#1d120b" stroke-width="2.5"/>
               </g>
-              <path class="pf-mouth-smile" d="M40 102 Q58 116 84 104"
-                    fill="none" stroke="#1d120b" stroke-width="4.5"/>
-              <g class="pf-mouth-o">
-                <path d="M44 102 Q60 116 80 103 Q68 124 44 102 Z"
+              <g class="pf-fin tail" fill="#f58a4b" stroke="#1d120b" stroke-width="4">
+                <path d="M152 70 Q186 54 190 78 Q188 100 156 96 Q162 82 152 70 Z"/>
+                <path d="M164 70 L176 64 M166 88 L180 86" fill="none"
+                      stroke="#1d120b" stroke-width="2.5"/>
+              </g>
+              <!-- the ball, its deeper crown, its lighter face -->
+              <circle cx="100" cy="92" r="60" fill="#f7a470"
+                      stroke="#1d120b" stroke-width="5.5"/>
+              <path d="M42 76 Q56 40 100 36 Q144 40 158 74 Q140 48 100 46
+                       Q62 48 42 76 Z" fill="#ee7d3c"/>
+              <path d="M52 58 Q66 44 84 40 Q76 52 80 60 Q66 56 60 66 Q54 62 52 58 Z"
+                    fill="#e96f30"/>
+              <!-- the quills strewn across the ball -->
+              <g fill="none" stroke="#8a3c12" stroke-width="3">
+                <path d="M60 84 l7 6 6 -7"/>
+                <path d="M84 96 l7 6 6 -7"/>
+                <path d="M112 90 l7 6 6 -7"/>
+                <path d="M70 112 l7 6 6 -7"/>
+                <path d="M98 120 l7 6 6 -7"/>
+                <path d="M126 110 l7 6 6 -7"/>
+                <path d="M52 102 l6 5 5 -6"/>
+                <path d="M110 132 l6 5 5 -6"/>
+              </g>
+              <g fill="#f58a4b" stroke="#1d120b" stroke-width="2.5">
+                <path d="M76 78 L82 70 L86 79 Z"/>
+                <path d="M104 106 L110 98 L114 107 Z"/>
+                <path d="M132 84 L138 76 L142 85 Z"/>
+                <path d="M64 126 L70 118 L74 127 Z"/>
+              </g>
+              <!-- the face, high on the ball -->
+              <g class="pf-face">
+                <g class="pf-eye">
+                  <ellipse cx="64" cy="56" rx="10" ry="12.5" fill="#f9dcbe"
+                           transform="rotate(-14 64 56)"/>
+                  <g class="pf-pupil"><g class="pf-iris">
+                    <ellipse cx="64" cy="56" rx="8" ry="10.5" fill="#14100b"
+                             transform="rotate(-14 64 56)"/>
+                    <circle cx="61" cy="51" r="2.6" fill="#fff"/>
+                  </g></g>
+                  <path d="M54 46 l-5 -4 M58 42 l-3 -6" fill="none"
+                        stroke="#1d120b" stroke-width="2.5"/>
+                </g>
+                <g class="pf-eye">
+                  <ellipse cx="112" cy="52" rx="13" ry="15.5" fill="#f9dcbe"
+                           transform="rotate(8 112 52)"/>
+                  <g class="pf-pupil"><g class="pf-iris">
+                    <ellipse cx="112" cy="52" rx="10.5" ry="13" fill="#14100b"
+                             transform="rotate(8 112 52)"/>
+                    <circle cx="108" cy="46" r="3.4" fill="#fff"/>
+                    <circle cx="116" cy="60" r="1.6" fill="#fff"/>
+                  </g></g>
+                </g>
+                <path d="M70 68 Q86 76 102 69" fill="none"
+                      stroke="#1d120b" stroke-width="3"/>
+                <path d="M72 70 Q86 80 100 71 Q92 88 72 70 Z"
                       fill="#3a1610" stroke="#1d120b" stroke-width="3"/>
-                <ellipse cx="60" cy="111" rx="7" ry="3.5" fill="#f2839b"/>
+                <ellipse cx="86" cy="77" rx="7" ry="3.5" fill="#f2a0ae"/>
               </g>
-            </g>
-
-            <!-- the quill-marks the puffed ball wears on its face: same
-                 class as the spikes, so they swing out on the same puff -->
-            <g class="pf-spikes" fill="none" stroke="#8a3c12" stroke-width="3">
-              <path d="M64 76 l7 7 7 -7"/>
-              <path d="M88 62 l7 7 7 -7"/>
-              <path d="M118 84 l7 7 7 -7"/>
-              <path d="M72 106 l7 7 7 -7"/>
-              <path d="M102 112 l7 7 7 -7"/>
-              <path d="M128 98 l7 7 7 -7"/>
             </g>
           </g>
         </svg>
