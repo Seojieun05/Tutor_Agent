@@ -284,6 +284,10 @@ class Session:
         self._filler_spoke = False
         self._filler_open = False
         self._filler_lines: asyncio.Queue = asyncio.Queue()
+        # Armed by a confirmed work check: (problem_hash, monotonic time). The
+        # very next hint request may continue from that diagnosis instead of
+        # asking the camera again — see _continue_confirmed.
+        self._continue_from: tuple[str, float] | None = None
 
     def _spawn(self, coro) -> None:
         """Run the hint flow concurrently with the receive loop — it awaits
@@ -682,6 +686,9 @@ class Session:
     async def _handle_answer(self, transcript: str, pending: HintRecord) -> None:
         ctx = self.ctx
         assert ctx is not None  # a pending hint implies a problem context
+        # a graded answer moves the diagnosis: a follow-through armed by an
+        # earlier confirmation would now continue from a stale picture
+        self._continue_from = None
 
         # The reference is the measuring stick for a spoken answer, so this
         # turn cannot start without it. The wait is almost always zero: the
@@ -945,8 +952,55 @@ class Session:
         # barge-in was not heard, so the hint after it keeps its own opening.
         return await self._speak(feedback)
 
+    # How long a confirmed work check keeps its follow-through open. Long
+    # enough for "네, 다음은 어떻게 해요?" to be spoken and transcribed; short
+    # enough that a page revisited after real thinking time is photographed.
+    CONTINUE_WINDOW_S = 90.0
+
+    async def _continue_confirmed(self, marker: tuple[str, float] | None) -> bool:
+        """The follow-through: hint at the next step straight from a diagnosis
+        made seconds ago, without asking the camera again.
+
+        Only the turn right after a confirmed work check qualifies. The tutor
+        just said "다음은 X 차례예요", the student asked to proceed, and
+        nothing has had time to change on the page — a recapture would spend
+        ~8 seconds of camera, VLM and estimator re-deriving the very state
+        that produced the sentence they are replying to. Everything a fresh
+        photo would yield — context, reference, diagnosis — is already in
+        hand, so this goes straight to policy and hint. Any doubt (context
+        gone, reference missing, window expired) falls back to the full
+        capture pipeline; returning False costs nothing but the photo.
+        """
+        if marker is None or self.ctx is None:
+            return False
+        p_hash, stamped = marker
+        if p_hash != self.ctx.hash or time.monotonic() - stamped > self.CONTINUE_WINDOW_S:
+            return False
+        current = self.store.get_state()
+        reference = self.ctx.reference_if_ready()
+        if current is None or reference is None:
+            return False
+        log.info(
+            "follow-through after a confirmed work check: hinting at step %d "
+            "without a recapture", current.last_correct_step + 1,
+        )
+        await self._stage("다음 단계를 짚어 보고 있어요")
+        fresh_history = self.store.get_history(problem_hash=self.ctx.hash)
+        decision = decide(current, fresh_history, "HINT_REQUEST")
+        log.info("decision: %s", decision)
+        await self._stage("힌트를 만들고 있어요")
+        text = await asyncio.to_thread(
+            self.deps.hint_gen.generate,
+            decision, self.ctx.match, reference, self.ctx.recognition,
+            fresh_history, None,
+        )
+        board = getattr(text, "board", ())
+        await self._deliver(decision, text, self.ctx.hash, board)
+        return True
+
     async def _handle_hint_request(self, question: str | None = None) -> None:
         """Capture → recognize → diagnose → hint, over a fresh photo.
+
 
         `question` is set when the student asked about their own work
         ("풀이 맞아?"). The pipeline is identical — that is the point:
@@ -954,6 +1008,9 @@ class Session:
         changes what comes out: their question reaches the hint phrasing, and
         the tutor says what it saw before hinting.
         """
+        marker, self._continue_from = self._continue_from, None  # single use
+        if question is None and await self._continue_confirmed(marker):
+            return
         await self._stage("카메라에서 사진을 받고 있어요")
         jpeg = await self._request_capture()
         state = self.store.get_state() or StudentState()
@@ -1110,6 +1167,10 @@ class Session:
             log.info("work check at step %d: correct so far", current.last_correct_step)
             line = self._confirmed_line(current, reference)
             await self._speak(line, final=True)
+            # "다음은 X 차례예요" invites exactly one reply — "그거 어떻게
+            # 해요?" — and that reply must not begin with a camera shutter:
+            # the diagnosis it needs is the one that was just made.
+            self._continue_from = (ctx.hash, time.monotonic())
             # the confirmation is also the one moment the whole picture is
             # right so far — let the board show it
             self._spawn(self._illustrate(

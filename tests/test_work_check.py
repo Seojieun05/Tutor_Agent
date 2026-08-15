@@ -545,3 +545,127 @@ async def test_an_evaluator_work_check_without_the_words_stays_off_camera(db):
     assert speaker.spoken                     # the student still hears something
     # nothing was graded: the pending question is still waiting for its answer
     assert session.store.pending_hint("p1") is not None
+
+
+# --- the hole in the middle, and the follow-through -------------------------
+# Two defects from one demo run of 수능 13 (접선 l과 m). The student found l의
+# 기울기, skipped l의 방정식, computed m의 기울기 — and the tutor confirmed
+# "step 4 done" and pointed past the hole. Then, told "다음은 X 차례예요", the
+# student asked "다음은 어떻게 해요?" and the tutor reached for the camera.
+
+
+# Three INDEPENDENT sub-results, the shape of 수능 13: a (l의 기울기),
+# b (l의 방정식), c (m의 기울기) — no later step is the same equation as an
+# earlier one, so nothing vouches for a skipped middle.
+REF3 = ReferenceSolution(
+    steps=[
+        SolutionStep(idx=1, description="a 구하기", expression="a = 2"),
+        SolutionStep(idx=2, description="b 구하기", expression="b = a + 1"),
+        SolutionStep(idx=3, description="c 구하기", expression="c = 3*a"),
+    ],
+    final_answer=Answer(kind="SCALAR", value="6"),
+    concepts=["linear_equation"],
+    verified=True,
+    origin="db",
+)
+
+
+def read_page(work: list[str]) -> Recognition:
+    return Recognition(
+        problem_text="2a = 4일 때 a, b = a+1, c = 3a를 구하시오",
+        equations=["2*a = 4"],
+        student_work=work,
+        confidence=0.95,
+    )
+
+
+class TestTheHoleInTheMiddle:
+    """last_correct_step is a PREFIX over what the page accounts for.
+
+    A later line vouches for an earlier step only when it IS that step
+    transformed (one equation, same solution set) — 'x = 5' vouches for
+    '3*x = 15'. It never vouches across threads: c says nothing about b.
+    """
+
+    def test_a_skipped_step_declines_the_fast_path(self, db):
+        """Steps 1 and 3 on the page, 2 missing: 'step 3 done' would walk the
+        lesson right past the hole, so the symbolic path hands it to the full
+        diagnosis instead of confirming."""
+        est = StudentStateEstimator(EchoLLMClient({}), db)
+        state = est._rule_based_progress(read_page(["a = 2", "c = 3*a"]), REF3, None)
+        assert state is None
+
+    def test_a_contiguous_page_is_still_confirmed_without_an_llm(self, db):
+        est = StudentStateEstimator(EchoLLMClient({}), db)
+        state = est._rule_based_progress(read_page(["a = 2", "b = a + 1"]), REF3, None)
+        assert state is not None
+        assert state.status == "CORRECT"
+        assert state.last_correct_step == 2
+
+    def test_a_transformed_line_still_vouches_for_its_own_step(self, db):
+        """The other half of the bargain, pinned: skipping WITHIN one thread
+        stays credited ('x = 5' alone is step 2 of the linear problem)."""
+        est = StudentStateEstimator(EchoLLMClient({}), db)
+        rec = Recognition(
+            problem_text="p", equations=["3*x + 5 = 20"],
+            student_work=["x = 5"], confidence=0.9,
+        )
+        state = est._rule_based_progress(rec, REFERENCE, None)
+        assert state is not None
+        assert state.last_correct_step == 2
+
+    def test_a_restated_problem_reports_the_prefix_not_the_peak(self, db):
+        est = StudentStateEstimator(EchoLLMClient({}), db)
+        state = est._rule_based_progress(
+            read_page(["a = 2", "c = 3*a", "2*a = 4"]), REF3, None
+        )
+        assert state is not None
+        assert state.status == "STUCK"
+        assert state.last_correct_step == 1   # the hole at 2 caps it
+
+
+class TestTheFollowThrough:
+    """'다음은 어떻게 해요?' seconds after a confirmation must not begin with
+    a camera shutter: the diagnosis it needs is the one just made."""
+
+    async def confirmed(self, db):
+        session, llm, speaker, ws = build(
+            db, "풀이 맞아?",
+            llm_responses={"recognize": [seen(["3*x = 15"]), seen(["3*x = 15"])]},
+        )
+        ask_l1(session)
+        await session._handle_utterance(PCM, 16000)   # the confirmation turn
+        assert ws.captures == 1
+        assert session._continue_from is not None
+        return session, llm, speaker, ws
+
+    async def test_the_next_hint_request_skips_the_camera(self, db):
+        session, llm, speaker, ws = await self.confirmed(db)
+        spoken_before = len(speaker.spoken)
+
+        await session.handle_hint_request()           # "다음은 어떻게 해요?"
+
+        assert ws.captures == 1                       # no second photo
+        assert llm.calls.count("recognize") == 1      # and no second read
+        assert len(speaker.spoken) > spoken_before    # the next step was hinted
+        hint = session.store.get_history(problem_hash="p1")[-1]
+        assert hint.step == 2 and hint.level == 1     # L1 at the NEXT step
+
+    async def test_the_window_is_single_use(self, db):
+        session, llm, speaker, ws = await self.confirmed(db)
+        await session.handle_hint_request()
+        assert ws.captures == 1
+
+        await session.handle_hint_request()           # asked again, later
+
+        assert ws.captures == 2                       # back to the real pipeline
+
+    async def test_a_stale_window_takes_the_photo(self, db):
+        import time as _time
+        session, llm, speaker, ws = await self.confirmed(db)
+        p_hash, _ = session._continue_from
+        session._continue_from = (p_hash, _time.monotonic() - 120)
+
+        await session.handle_hint_request()
+
+        assert ws.captures == 2                       # expired: look again
