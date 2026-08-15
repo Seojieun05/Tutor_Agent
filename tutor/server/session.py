@@ -393,7 +393,7 @@ class Session:
             log.info("utterance rejected (%s): %r", quality, text)
             await self._send_transcript(text, True)
             try:
-                await self._speak(RETRY_PROMPTS[quality])
+                await self._speak(RETRY_PROMPTS[quality], final=True)
             except Exception:
                 log.exception("could not ask the student to repeat")
             return
@@ -886,7 +886,7 @@ class Session:
             diagnosis=state,
         )
         log.info("explained a student question at step %d", pending.step)
-        await self._speak(text)
+        await self._speak(text, final=True)
 
     async def _finish_problem(self, ctx: ProblemContext, verdict, target_step: int) -> None:
         """The last step was answered correctly: congratulate and close.
@@ -911,7 +911,9 @@ class Session:
         except Exception:
             log.debug("could not send solved event (connection gone)")
         try:
-            await self._speak(" ".join(part for part in (feedback, PROBLEM_DONE) if part))
+            await self._speak(
+                " ".join(part for part in (feedback, PROBLEM_DONE) if part), final=True
+            )
         finally:
             log.info("problem %s solved; context closed", ctx.hash[:8])
             self.ctx = None
@@ -1107,7 +1109,7 @@ class Session:
             # the question they are about to ask.
             log.info("work check at step %d: correct so far", current.last_correct_step)
             line = self._confirmed_line(current, reference)
-            await self._speak(line)
+            await self._speak(line, final=True)
             # the confirmation is also the one moment the whole picture is
             # right so far — let the board show it
             self._spawn(self._illustrate(
@@ -1312,12 +1314,17 @@ class Session:
         task.add_done_callback(done)
         return task
 
-    async def _speak(self, text: str) -> bool:
+    async def _speak(self, text: str, *, final: bool = False) -> bool:
         """Say something to the student, after the filler has had its say.
 
         `text` stays ORIGINAL all the way to _say: the ear and the eye part
         ways there, and nowhere earlier — the hint history, the leak guard and
         the TTS cache keys all see what was actually generated.
+
+        `final` is a LABEL, not logic: it marks the line that ends its turn
+        (the hint, the confirmation, the retry prompt), so the browser can
+        choreograph the mascot's return before this one and stay put through
+        fillers and mid-turn reactions. Nothing on the server branches on it.
 
         Returns whether the student heard any of it — False only when the line
         was dropped whole, which is a barge-in that started before this one
@@ -1326,7 +1333,7 @@ class Session:
         await self._settle_filler()
         # TTS is part of the wait, and a cached phrase is not — worth telling apart.
         with timing.stage("speak"):
-            return await self._say(text) is not False
+            return await self._say(text, final=final) is not False
 
     # --- filling the thinking silence ----------------------------------------
 
@@ -1399,12 +1406,13 @@ class Session:
         except (asyncio.CancelledError, Exception):  # noqa: BLE001
             pass
 
-    async def _say(self, text: str) -> None:
+    async def _say(self, text: str, final: bool = False) -> None:
         """Say it on the machine running the server (same room as the student).
 
         BrowserSession overrides this to ship the audio to the device instead.
         The ear gets the spoken form here — "f 프라임 1" — and only the ear:
-        nothing on this path is displayed.
+        nothing on this path is displayed. `final` is the turn-ending label
+        from _speak; a local speaker has no mascot, so it is ignored here.
         """
         await self.ws.send(make_event("speech_state", {"state": "speaking"}))
         try:
@@ -1599,7 +1607,7 @@ class Session:
             self._spawn(
                 self._illustrate(decision, text, board, problem_hash, student_said)
             )
-            if not await self._speak(text):
+            if not await self._speak(text, final=True):
                 # The student talked over this whole turn, so _say skipped every
                 # line of it: this hint exists only in the log. Recording it
                 # would escalate the ladder for a question that was never asked

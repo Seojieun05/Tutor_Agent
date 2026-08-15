@@ -44,7 +44,7 @@ class TalkedOver(Session):
 
     silenced = True
 
-    async def _say(self, text: str):
+    async def _say(self, text: str, final: bool = False):
         if self.silenced:
             return False
         return None  # spoke it (the base session returns None too)

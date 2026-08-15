@@ -14,287 +14,217 @@
 
   Barge-in: the mic stays open while the tutor speaks so the student can cut
   in. What keeps the tutor from hearing itself is echoCancellation in
-  getUserMedia — the browser subtracts what it is playing from what it hears —
-  plus a higher onset bar on the server for those frames. Without working AEC
-  (an external speaker, a bad driver) the tutor will interrupt itself; that is
-  what BARGE_IN=0 is for.
-
-  The mic still shuts during PROCESSING: there is nothing to interrupt while it
-  thinks, and a half-turn must not survive into the answer.
+  getUserMedia, plus a higher onset bar on the server for those frames. The mic
+  still shuts during PROCESSING: there is nothing to interrupt while it thinks,
+  and a half-turn must not survive into the answer.
 
   Chrome/Edge recommended (AudioWorklet at a 16 kHz AudioContext).
 
-  DESIGN. This page is answering a latency problem, not a decoration one. A
-  hint costs the pipeline several seconds — vision, retrieval, solver, policy,
-  TTS — and none of that can be hurried from here. What CAN be changed is how
-  long it FEELS, and the whole interface is built around three ideas:
+  DESIGN. One scene: the MEDITERRANEAN, from inside. The page is deep, clear
+  cobalt water — sunlight falling from a surface just out of sight, a slow
+  caustic shimmer, a few motes and bubbles, a reef asleep at the bottom — and
+  the two working surfaces float in it: the BOARD, a sheet of glass the lesson
+  is written on, and the CONVERSATION, a bright submarine window on the right.
+  The board is deliberately of the water (translucent navy, cyan rim) and the
+  chat is deliberately not (warm daylight glass in the #b5e48c→#1e6091 family):
+  the lesson lives in the sea, the talk happens at the porthole. One committed
+  look, no schemes: the depth IS the dark and the panel IS the light.
 
-    1. Something moves within one frame of the student finishing. Every state
-       change is a class toggle on nodes that already exist, so the first
-       feedback is a paint, not a fetch: no image is loaded, no element is
-       created, nothing is measured. Measured at 5 ms from event to painted
-       frame; the budget was 200.
-    2. The waiting is narrated by a CHARACTER, not a spinner. The squid is one
-       element on a fixed layer that flies between two anchors — the
-       conversation's header, where it lives, and the board, where it writes —
-       so "it has gone to write something" is a thing you watch happen rather
-       than a thing that appears. It swims while the pipeline works and the
-       maths it is chewing on drifts around it.
-    3. The answer arrives as it is read, not when it is finished. The server
-       sends one tutor_says with the whole line; the page reveals it at reading
-       speed, with the formulas popping in whole because a half-typeset
-       equation is worse than no equation.
+  Nothing decorative may cost the pipeline anything. Every ambient motion is
+  transform/opacity on its own layer, blur exists only on the static reef
+  silhouette, and there is no backdrop-filter anywhere: this machine is also
+  running a VAD, an STT call and TTS.
 
-  Everything the tutor writes is typeset (KaTeX) on the BOARD, which takes
-  about three quarters of the width; the CONVERSATION takes the rest, with its
-  own header and the voice controls pinned at its foot. Underneath is one
-  undersea scene in three planes (a blurred seabed far off, light, caustics and
-  bubbles in the middle, the reef in focus at the front), all drawn in this
-  file: no external images, nothing hotlinked, nothing whose licence anyone has
-  to take on trust.
+  THE TUTOR IS A PUFFERFISH, and it replaces the spinner. It is one inline SVG
+  (no asset to load, recolorable, and its eyes can actually look at things) on
+  a fixed layer, flown between two homes: the conversation's header, where it
+  lives, and the board's margin, where it goes to read. The waiting is
+  narrated by its body:
 
-  Surfaces are opaque and lit from above rather than frosted; radius is a
-  hierarchy (panel 24, card 16, bubble 14, button 12, chip full) so a bubble
-  never reads as a panel. Every control on this page is wired to something
-  real; there are deliberately no decorative buttons.
+    hears you finish  → it puffs up round and spiky ("어? 질문했구나!")
+    thinking          → it swims over to the problem and READS it — eyes
+                        tracking title → equation → work, a slow ∞ drift,
+                        a few faint math glyphs rising off it
+    answer ready      → it freezes, eyes wide, hops, puffs once ("아!") and
+                        darts home — and only then does the answer speak
+    fillers, 맞아요    → spoken from wherever it already is; it does not
+                        shuttle for lines that are not the turn's last word
 
-  Both colour schemes are the same water at different depths: the surface in
-  light mode, the deep in dark. Every colour is a token, including the four the
-  server names when it draws a curve (--accent-deep, --err, --dim, --line in
-  tutor/hints/plot.py), and each one used as ink was picked against the surface
-  it actually sits on rather than by eye.
+  The server labels that last word (`final` on tutor_says); everything else
+  about which line is which stays server-side. The page HOLDS the final line's
+  text and audio while the fish returns — bounded by a hard 1.9 s timer, so a
+  lost flight can never keep an answer from a student.
 
-  THE TUTOR'S TWO IMAGES. squid.webp (still) and squid-thinking.webp (the
-  tumbling loop) are cut from one clip under one crop, so swapping between them
-  never moves the character. The clip we were handed was VP9-with-alpha whose
-  RGB is premultiplied by alpha; a browser composites it as straight alpha,
-  multiplies by alpha a second time, and draws a grey outline round the
-  character. Repairing that per frame at runtime measured 5.6 ms of main thread
-  per frame at 208x210 — during PROCESSING, the one moment this page must not
-  stutter — so it is baked into the asset instead: a browser is the only
-  VP9-with-alpha decoder to hand, so the frames were decoded there, divided
-  back through their own alpha, cropped as ONE box (the tumble is the
-  animation; cropping each frame to its subject would pin the character still)
-  and written out as an animated WebP.
+  The state of the turn is written in the conversation's header as a live
+  status line ("풀이를 살펴보는 중...") whose dots breathe one at a time up to
+  three and back — progress lives there now, not as bubbles inside the chat.
 
   MATH: the server sends one normalized display vocabulary (x², ·, √, log₃,
   1/5 — see tutor/speech/mathspeak.py displayable()). This page converts that
   small alphabet to TeX and typesets it with KaTeX. If the KaTeX CDN cannot be
-  reached, everything falls back to the plain unicode text, which is exactly
-  what the page showed before KaTeX existed.
+  reached, everything falls back to the plain unicode text.
 -->
 <html lang="ko">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Visual Socratic Tutor</title>
+<title>복어 튜터 · Visual Socratic Tutor</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.css">
 <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.22/dist/katex.min.js"></script>
-<!-- the thinking loop must be decoded BEFORE the first time it is wanted, or
-     the one frame this page cannot afford to be slow is the one that waits on
-     a 573 KB image -->
-<link rel="preload" as="image" href="squid-thinking.webp">
 <style>
   /* ===================================================================
-     TOKENS. Colour, radius and shadow live here and nowhere else; four of
-     the colour names are also the server's, because tutor/hints/plot.py
-     writes var(--accent-deep), var(--err), var(--dim) and var(--line) into
-     the figures it draws. Anything used as TEXT is picked for contrast on
-     the panel, not for prettiness: the water is pale and a pale ink on it
-     is unreadable, whatever the reference does at poster size.
+     TOKENS. Four of the colour names are also the server's contract:
+     tutor/hints/plot.py writes var(--accent-deep), var(--err), var(--dim)
+     and var(--line) into the figures it draws, and those figures land on
+     the BOARD — so at :root the four are inks for deep water. The chat
+     panel is a different climate and re-declares them inside its own
+     scope, which is exactly what custom properties are for.
      =================================================================== */
   :root {
-    /* the water, top to floor */
-    --sea-top:#ddf3ff; --sea-mid:#b6e4f5; --sea-bottom:#8fd3ea;
-    --sea-deep:#43a9c6;
-    /* the clay palette. Only what the interface itself uses lives here; the
-       reef's own creams, mints and lilacs are gradient stops inside its SVG,
-       where they belong, rather than tokens nothing references. */
-    --coral:#f3a6a8; --peach:#ffd0a6;
-    /* surfaces */
-    --panel:rgba(248,253,255,.94); --panel-solid:#f8fdff;
-    --panel-rim:rgba(255,255,255,.75);
-    --panel-tint:#eef8fd;          /* the board, a shade cooler than the chat */
-    --line:#d3e6f3;                /* hairlines, and the figure's grid */
-    /* Ink, measured against the surface it actually sits on. --dim is checked
-       against the BOARD (#eef8fd), which is darker than the chat panel, so it
-       passes on both: 4.9:1 and 5.2:1. */
-    --text:#1c3d57; --text-mid:#315b7d; --dim:#476f92;
-    --accent:#43a9c6;              /* fills and borders, never small text */
-    --accent-deep:#166d88;         /* accent as INK: 5.5:1 on the board */
-    --accent-soft:#e2f4fa; --accent-line:#a8dcea;
-    /* The student's own bubble is filled with this, in white: aqua at the
-       reference's own lightness is 2.7:1 under white, which is not a colour
-       choice but an unreadable message. */
-    --aqua-fill:#237789; --aqua-fill-lit:#2a7d93;   /* both ends ≥4.7:1 under white */
-    --err:#b34a43;                 /* 4.6:1 on its own tint, 5.2:1 on a panel */
-    --err-soft:#fdeceb;
-    /* THE THREE STATES, as ink. The student has to be able to tell listening
-       from thinking from talking at a glance and from across a desk, so they
-       are three different hues rather than three brightnesses of one — and
-       each is the darkened, readable version of a palette colour, because the
-       clay peach and coral are object colours: --peach on the disabled fill
-       is 1.3:1, which is a light that is not on. */
-    --hear-ink:#166d88;            /* aqua   — listening, 5.2:1 on its tint */
-    --think-ink:#915b12;           /* amber  — working,   5.0:1 */
-    --talk-ink:#a24b46;            /* coral  — speaking,  5.1:1 */
-    --hear-soft:#e2f4fa; --think-soft:#fdf0dd; --talk-soft:#fdeceb;
-    --squid-lit:#ffe6cf; --squid-mid:#f8c49d; --squid-deep:#e79b6d;
-    /* Radius is a hierarchy, not a habit: the further in you go, the tighter
-       the corner, so a bubble never reads as a panel. */
+    /* the water column, surface light to floor */
+    --sea-0:#1a86b8; --sea-1:#0f5f92; --sea-2:#093f6c; --sea-3:#041e3d;
+    /* ink on the open water (header, chrome) */
+    --page-ink:#e9f6fd; --page-dim:#a5cde4;
+    /* THE BOARD: glass in the sea. Text was picked against the panel it
+       actually sits on (rgba navy over the gradient ≈ #0b3a5f). */
+    --board-bg-hi:rgba(10,49,82,.68); --board-bg-lo:rgba(6,35,60,.74);
+    --board-rim:rgba(139,224,255,.20);
+    --text:#ecf7ff;                /* board ink: 12.9:1 */
+    --text-mid:#c8e3f5;
+    /* the server's four, tuned as board inks */
+    --dim:#a9cee6;                 /* axes, ticks, captions: 7.4:1 */
+    --line:rgba(148,205,235,.17);  /* hairlines and the figure's grid */
+    --accent-deep:#6fdcf5;         /* the curve's own stroke, and cyan ink */
+    --err:#ff9e8c;                 /* the wrong thing, softly */
+    --accent-soft:rgba(111,220,245,.14);
+    --accent-line:rgba(111,220,245,.38);
+    /* THE CHAT: daylight glass, in the given family
+       #b5e48c #99d98c #76c893 #52b69a #34a0a4 #168aad #1a759f #1e6091 */
+    --c-bg-0:#f3fbf2; --c-bg-1:#e2f3ec; --c-bg-2:#d5eeea;
+    --c-line:rgba(26,117,159,.16);
+    --c-text:#143c4e; --c-mid:#1e6091; --c-dim:#48707d;
+    --c-solid:#ffffff;
+    --c-fill:#1a759f; --c-fill-lit:#1e6091;   /* the student's bubble, ≥4.9:1 under white */
+    --c-err:#a8503f; --c-err-soft:#fbe9e3;
+    /* THE THREE STATES, one hue each, legible from across a desk. Declared
+       on :root because the chip, the orb and the header all use them and
+       all sit on the light panel. */
+    --hear-ink:#0f6d8a; --hear-soft:#d9f0f5;
+    --think-ink:#8a5a12; --think-soft:#f7ecd7;
+    --talk-ink:#a8503f; --talk-soft:#fbe7e0;
+    /* radius is a hierarchy, not a habit */
     --r-panel:24px; --r-card:16px; --r-bubble:14px; --r-btn:12px; --r-chip:999px;
-    /* Shadows are the sea's own blue, never black — and the colour is a token
-       too, so the one-off shadows on bubbles and buttons darken with the
-       scheme instead of staying a pale blue smudge on deep water. */
-    --sink:49 91 125;
-    --shadow-soft:0 2px 6px rgb(var(--sink) / .07), 0 14px 30px rgb(var(--sink) / .10);
-    --shadow-lift:0 4px 10px rgb(var(--sink) / .09), 0 26px 52px rgb(var(--sink) / .16);
-    --lip:inset 0 1px 0 rgba(255,255,255,.95);
+    /* shadows are the deep's own blue, never black */
+    --sink:2 16 30;
+    --shadow-soft:0 4px 12px rgb(var(--sink) / .30), 0 18px 44px rgb(var(--sink) / .38);
+    --lip:inset 0 1px 0 rgba(212,242,255,.14);
     --font:"Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
            "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
     --math:"STIX Two Math", "Cambria Math", "Times New Roman", serif;
-    /* the tutor's own box. The character is about 0.9 of this tall and 0.4 of
-       it wide when upright, and fills it the other way round when it tumbles
-       — the clip's crop is the character's own LENGTH, in every orientation. */
-    --sq:78px;
-  }
-  /* Night in the same sea. The panels stay opaque and the ink inverts;
-     --accent-deep goes LIGHT because the server hands it to a curve stroke
-     and a caption that both sit on the panel. */
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --sea-top:#123a52; --sea-mid:#0e2c40; --sea-bottom:#0a2032;
-      --sea-deep:#2b7d97;
-      --panel:rgba(20,49,68,.94); --panel-solid:#143144;
-      --panel-rim:rgba(154,205,226,.20); --panel-tint:#122c3e;
-      --line:#2c5570;
-      --text:#e4f3fb; --text-mid:#bcd9ea; --dim:#8fb4c9;
-      --accent:#4fb8d4; --accent-deep:#8fd9ee;
-      --accent-soft:rgba(79,184,212,.16); --accent-line:rgba(79,184,212,.40);
-      /* the lit end has to be darkened here too: #2a879d is 4.16:1 under the
-         white it carries, which is under AA. #237e93 is 4.69:1. */
-      --aqua-fill:#1e6d80; --aqua-fill-lit:#237e93;
-      /* opaque, unlike its light twin's tint: #hangup sits on the water rather
-         than on a panel, so a translucent hover fill composited onto the
-         gradient and left --err at 4.3:1 on 11.8px text */
-      --err:#f0938a; --err-soft:#33404f;
-      --hear-ink:#8fd9ee; --think-ink:#e9b567; --talk-ink:#f0a49c;
-      --hear-soft:rgba(79,184,212,.16); --think-soft:#3a3325; --talk-soft:#33404f;
-      --sink:0 0 0;
-      --shadow-soft:0 2px 6px rgb(var(--sink) / .30), 0 14px 30px rgb(var(--sink) / .34);
-      --shadow-lift:0 4px 10px rgb(var(--sink) / .34), 0 26px 52px rgb(var(--sink) / .42);
-      --lip:inset 0 1px 0 rgba(190,225,240,.16);
-    }
+    /* the pufferfish's own box (the SVG is 200×176) */
+    --pf:78px;
   }
   * { box-sizing:border-box; }
   html, body { height:100%; }
   /* Typeset maths does not wrap: a formula is laid out as one run with no
-     break opportunity in it, so a long one paints straight out of whatever
-     holds it — a chat bubble, a board line, the problem heading.
-
-     The box that scrolls has to be OURS. `.katex` itself computes to
-     display:inline, and neither max-width nor overflow applies to a
-     non-replaced inline box, so styling it does nothing at all; every math
-     run gets this wrapper in mathify() instead. vertical-align:bottom because
-     an inline-block with overflow aligns on its bottom margin edge, and the
-     default baseline alignment drops the whole line by the formula's descent. */
+     break opportunity in it. The box that scrolls has to be OURS — `.katex`
+     computes to display:inline, and neither max-width nor overflow applies
+     to a non-replaced inline box, so every math run gets this wrapper in
+     mathify(). vertical-align:bottom because an inline-block with overflow
+     aligns on its bottom margin edge. */
   .mathrun {
     display:inline-block; max-width:100%; vertical-align:bottom;
     overflow-x:auto; overflow-y:hidden;
   }
   body {
     margin:0; min-height:100dvh; display:flex; flex-direction:column;
-    color:var(--text); font:15px/1.6 var(--font);
-    background:linear-gradient(178deg, var(--sea-top) 0%, var(--sea-mid) 52%,
-               var(--sea-bottom) 100%);
+    color:var(--page-ink); font:15px/1.6 var(--font);
+    background:linear-gradient(180deg, var(--sea-0) 0%, var(--sea-1) 32%,
+               var(--sea-2) 64%, var(--sea-3) 100%);
     background-attachment:fixed;
+  }
+  .visually-hidden {
+    position:absolute; width:1px; height:1px; overflow:hidden;
+    clip:rect(0 0 0 0); white-space:nowrap;
   }
 
   /* ===================================================================
-     THE SCENE, in three planes. Distance is carried by blur and contrast,
-     so only the far plane is blurred: a blurred foreground reads as a
-     smudge on the lens rather than as something close.
+     THE SCENE. Layers of one sea, back to front: sunlight, caustics,
+     motes and bubbles, a shoal in the middle distance, and the reef
+     asleep at the bottom — the only blurred thing here, and static.
+     Nothing in the scene may compete with a line of mathematics.
      =================================================================== */
   .scene { position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden; }
 
-  /* far: two dunes of seabed, out of focus */
-  .scene .far {
-    position:absolute; inset:0; filter:blur(26px); opacity:.85;
-    background:
-      radial-gradient(58% 42% at 18% 74%, rgba(255,255,255,.55), transparent 62%),
-      radial-gradient(70% 46% at 82% 88%, rgba(67,169,198,.34), transparent 66%),
-      radial-gradient(46% 30% at 62% 58%, rgba(255,255,255,.38), transparent 64%);
-  }
-  /* mid: shafts of light from the surface, and the floor they fall on */
-  .scene .mid {
+  /* light from a surface just above the top edge */
+  .scene .glow {
     position:absolute; inset:0;
-    background:
-      linear-gradient(104deg, transparent 28%, rgba(255,255,255,.30) 40%,
-                      transparent 50%, rgba(255,255,255,.20) 62%, transparent 72%),
-      radial-gradient(120% 46% at 50% 104%, rgba(255,255,255,.42), transparent 70%);
+    background:radial-gradient(64% 36% at 50% -8%, rgba(163,235,255,.30), transparent 72%);
   }
-  /* mid: the wobble the surface throws on everything below it. Two soft
-     lattices at different scales sliding past each other read as water
-     moving; one alone reads as a pattern. */
-  .scene .caustic {
-    position:absolute; inset:-12%; opacity:.5; mix-blend-mode:soft-light;
+  /* two shafts of it, falling steeply — barely there, and very slow */
+  .scene .rays {
+    position:absolute; inset:-6%;
     background:
-      radial-gradient(38% 24% at 20% 30%, rgba(255,255,255,.9), transparent 70%),
-      radial-gradient(30% 18% at 62% 16%, rgba(255,255,255,.75), transparent 72%),
-      radial-gradient(44% 26% at 84% 44%, rgba(255,255,255,.7), transparent 70%),
-      radial-gradient(34% 20% at 40% 62%, rgba(255,255,255,.7), transparent 72%);
+      linear-gradient(104deg, transparent 26%, rgba(180,235,255,.10) 34%,
+                      transparent 44%, rgba(180,235,255,.07) 58%, transparent 68%);
+  }
+  /* the wobble the surface throws on everything below it: two soft lattices
+     at different scales sliding past each other read as water moving */
+  .scene .caustic {
+    position:absolute; inset:-12%; opacity:.16; mix-blend-mode:soft-light;
+    background:
+      radial-gradient(38% 24% at 20% 30%, rgba(220,245,255,.9), transparent 70%),
+      radial-gradient(30% 18% at 62% 16%, rgba(220,245,255,.75), transparent 72%),
+      radial-gradient(44% 26% at 84% 44%, rgba(220,245,255,.7), transparent 70%),
+      radial-gradient(34% 20% at 40% 62%, rgba(220,245,255,.7), transparent 72%);
     background-size:60% 44%, 44% 34%, 66% 48%, 50% 38%;
   }
-  @media (prefers-color-scheme: dark) {
-    .scene .far { opacity:.5; }
-    .scene .mid { opacity:.28; }
-    .scene .caustic { opacity:.22; }
-  }
   @media (prefers-reduced-motion: no-preference) {
-    .scene .caustic { animation:drift 34s ease-in-out infinite alternate; }
+    .scene .rays { animation:sway 46s ease-in-out infinite alternate; }
+    .scene .caustic { animation:drift 38s ease-in-out infinite alternate; }
+    @keyframes sway {
+      0%   { transform:translate3d(-1.5%, 0, 0); }
+      100% { transform:translate3d(1.5%, 0, 0); }
+    }
     @keyframes drift {
       0%   { transform:translate3d(0,0,0) scale(1); }
       100% { transform:translate3d(3%, 2%, 0) scale(1.08); }
     }
   }
 
-  /* mid: bubbles, small and few, rising the whole height */
-  .bubbles { position:absolute; inset:0; }
+  /* bubbles (few, bright-rimmed) and motes (many, faint): both rise, on very
+     different clocks. Under reduced motion they hang where they are — still,
+     not gone, because they are part of the middle distance either way. */
+  .bubbles, .motes { position:absolute; inset:0; }
   .bubbles i {
     position:absolute; bottom:-8vh; border-radius:50%;
-    background:radial-gradient(circle at 32% 28%, rgba(255,255,255,.95),
-               rgba(255,255,255,.22) 58%, rgba(255,255,255,.06));
-    border:1px solid rgba(255,255,255,.55);
+    background:radial-gradient(circle at 32% 28%, rgba(235,250,255,.9),
+               rgba(235,250,255,.18) 58%, rgba(235,250,255,.04));
+    border:1px solid rgba(220,245,255,.42);
   }
-  /* Still, not gone. The rising is the animation; the bubble itself is part of
-     the middle distance, and hiding it under reduced motion emptied that whole
-     plane of the scene. They hang where they were placed instead. */
+  .motes i {
+    position:absolute; bottom:-4vh; border-radius:50%;
+    background:rgba(205,240,255,.35);
+  }
   @media (prefers-reduced-motion: reduce) {
-    .bubbles i { bottom:auto; top:22%; opacity:.5; }
-    .bubbles i:nth-child(even) { top:58%; }
+    .bubbles i, .motes i { bottom:auto; top:24%; opacity:.4; }
+    .bubbles i:nth-child(even), .motes i:nth-child(even) { top:56%; }
   }
   @media (prefers-reduced-motion: no-preference) {
-    .bubbles i { opacity:0; animation:rise linear infinite; }
+    .bubbles i, .motes i { opacity:0; animation:rise linear infinite; }
     @keyframes rise {
       0%   { transform:translateY(0) scale(.7); opacity:0; }
-      14%  { opacity:.75; }
-      86%  { opacity:.5; }
+      14%  { opacity:.7; }
+      86%  { opacity:.4; }
       100% { transform:translateY(-118vh) scale(1); opacity:0; }
     }
   }
 
-  /* mid: a few fish, far enough off to be shapes rather than animals. They
-     cross behind the panels, which is the only place there is room for them.
-     Positioned as elements rather than inside one stretched SVG: the scene
-     spans the window, and a fish in a viewBox scaled to a 16:9 window is a
-     fish stretched to twice its length. */
+  /* a few fish, far enough off to be shapes rather than animals */
   .shoal .fish {
     position:absolute; top:var(--y); left:0; width:calc(30px * var(--k));
-    height:auto; fill:#ffffff; opacity:.34; transform:translateX(-12vw);
+    height:auto; fill:#cfeeff; opacity:.12; transform:translateX(-12vw);
   }
-  @media (prefers-color-scheme: dark) { .shoal .fish { opacity:.16; } }
-  /* parked in view, not off the left edge: the crossing is the animation, the
-     fish are part of the middle distance either way */
   @media (prefers-reduced-motion: reduce) {
     .shoal .fish { transform:translateX(var(--park, 22vw)); }
     .shoal .fish:nth-child(even) { --park:64vw; }
@@ -307,26 +237,19 @@
     }
   }
 
-  /* near: the reef, in focus, standing on its own floor rather than being
-     cut off by the bottom of the window */
-  #reef {
-    position:absolute; left:0; bottom:0; width:100%; height:auto;
-    /* one soft ground shadow, not a blur on the objects themselves */
-    filter:drop-shadow(0 10px 16px rgb(var(--sink) / .16));
+  /* the reef: a silhouette, out of focus, and the one place blur is allowed —
+     it is painted once and never moves */
+  #reefSil {
+    position:absolute; left:0; bottom:-6px; width:100%; height:auto;
+    filter:blur(5px); opacity:.85;
   }
-  @media (prefers-color-scheme: dark) { #reef { opacity:.55; } }
 
   header, main { position:relative; z-index:1; }
 
   /* ===================================================================
-     TOP BAR. Three things only, in falling order of importance: whose
-     tutor this is, whether it is connected, and the way out. The voice
-     controls live at the foot of the conversation, next to the words they
-     produce.
+     TOP BAR. Whose tutor this is, whether it is connected, the way out.
+     It sits on open water, so its ink is the page's.
      =================================================================== */
-  /* the same arithmetic main uses, so the brand starts exactly above the
-     board's left edge: box-sizing is border-box, so the gutters have to be
-     inside the max-width here as they are inside main's padding there */
   header {
     flex:none; display:flex; align-items:center; gap:1rem;
     width:100%; max-width:calc(1440px + 3rem); margin:0 auto;
@@ -334,52 +257,40 @@
   }
   .brand { display:flex; align-items:baseline; gap:.55rem; min-width:0; margin-right:auto; }
   .brand .name {
-    font-size:1.12rem; font-weight:800; letter-spacing:-.01em; color:var(--text);
+    font-size:1.12rem; font-weight:800; letter-spacing:-.01em; color:var(--page-ink);
   }
   .brand .sub {
-    font-size:.64rem; font-weight:700; color:var(--text-mid);
+    font-size:.64rem; font-weight:700; color:var(--page-dim);
     letter-spacing:.15em; text-transform:uppercase; white-space:nowrap;
   }
-  /* a status chip, not a button: it says a thing, it does not do one */
   #conn {
     flex:none; display:inline-flex; align-items:center; gap:.4rem;
-    font-size:.74rem; font-weight:700; color:var(--dim);
-    background:var(--panel); border:1px solid var(--line);
+    font-size:.74rem; font-weight:700; color:var(--page-dim);
+    background:rgba(7,42,70,.55); border:1px solid rgba(148,205,235,.22);
     border-radius:var(--r-chip); padding:.26rem .7rem .26rem .58rem;
-    box-shadow:var(--shadow-soft);
   }
   #conn::before {
     content:""; width:.45rem; height:.45rem; border-radius:50%;
     background:currentColor; opacity:.7;
   }
-  #conn.ok { color:var(--accent-deep); border-color:var(--accent-line); }
+  #conn.ok { color:#8fe9d8; border-color:rgba(143,233,216,.4); }
   #conn.down { color:var(--err); }
-  /* the way out: quiet until you reach for it, then plainly a red door */
-  /* text-mid rather than dim: this one sits on the open water, where dim is
-     4.2:1 against the paler part of the gradient */
   #hangup {
-    flex:none; font:700 .74rem var(--font); color:var(--text-mid); cursor:pointer;
+    flex:none; font:700 .74rem var(--font); color:var(--page-dim); cursor:pointer;
     background:transparent; border:1px solid transparent;
     border-radius:var(--r-btn); padding:.3rem .7rem;
     transition:color .18s, background .18s, border-color .18s;
   }
   #hangup[hidden] { display:none; }
-  #hangup:hover { color:var(--err); background:var(--err-soft); border-color:var(--err); }
+  #hangup:hover { color:var(--err); background:rgba(255,158,140,.12); border-color:var(--err); }
   #hangup:active { transform:translateY(1px); }
-  #hangup:focus-visible {
-    outline:2px solid var(--err); outline-offset:2px; color:var(--err);
-  }
+  #hangup:focus-visible { outline:2px solid var(--err); outline-offset:2px; color:var(--err); }
 
   /* ===================================================================
      LAYOUT. The board is the lesson, so it takes about three quarters;
-     the conversation takes the rest and never drops below a readable
-     column. Both start at the same y and end at the same y, because they
-     are siblings in one grid row rather than a stack beside a panel.
+     the conversation takes the rest. Siblings in one grid row, same top,
+     same bottom.
      =================================================================== */
-  /* The panels run nearly to the bottom of the window and cover most of the
-     reef, which is what scenery is for: it shows in the gutters, under the
-     panels and behind the header, and gives way to the lesson everywhere
-     else. */
   main {
     flex:1 1 auto; min-height:0; width:100%;
     display:flex; justify-content:center;
@@ -390,24 +301,41 @@
     display:grid; gap:1.1rem; align-items:stretch;
     grid-template-columns:minmax(0,74fr) minmax(310px,26fr);
   }
-
-  /* One surface recipe: opaque enough to read on, a lit top edge, and the
-     sea's own shadow underneath. No backdrop blur anywhere: a page-wide
-     frosted veil is the look this was asked to stop being. */
-  .panel {
-    background:var(--panel); border:1px solid var(--panel-rim);
-    border-radius:var(--r-panel); box-shadow:var(--lip), var(--shadow-soft);
-  }
   .cardlabel {
     display:inline-block; font-size:.7rem; font-weight:800; letter-spacing:.02em;
     color:var(--accent-deep); background:var(--accent-soft);
     border-radius:var(--r-chip); padding:.2rem .7rem;
   }
 
+  /* ===================================================================
+     THE BOARD. A pane of glass hanging in the water: translucent navy,
+     a whisper of cyan at the rim, the problem as its heading and
+     everything the tutor writes below — ONE surface, never a stack of
+     cards. The dot grid is a texture, not a feature. No backdrop-filter:
+     the translucency alone lets the caustics breathe through it.
+     =================================================================== */
+  #board {
+    position:relative;
+    min-height:0; display:flex; flex-direction:column;
+    padding:1.1rem 1.5rem 1.3rem;
+    background:linear-gradient(180deg, var(--board-bg-hi), var(--board-bg-lo));
+    border:1px solid var(--board-rim);
+    border-radius:var(--r-panel);
+    box-shadow:var(--lip), inset 0 0 46px rgba(2,16,30,.30), var(--shadow-soft);
+    background-image:
+      radial-gradient(circle, rgba(160,215,245,.09) 1px, transparent 1px),
+      linear-gradient(180deg, var(--board-bg-hi), var(--board-bg-lo));
+    background-size:26px 26px, 100% 100%;
+    background-position:13px 13px, 0 0;
+    overflow:hidden;
+  }
+  #boardHead { flex:none; }
+  #boardLines { color-scheme:dark; }   /* the board's own scrollbar, in its own night */
+
   /* ---- the problem, as the board's own heading ---- */
   #problemCard {
     padding:0 0 .9rem; margin-bottom:.2rem;
-    border-bottom:1px solid var(--line);
+    border-bottom:1px solid rgba(139,224,255,.14);
   }
   #problemCard[hidden] { display:none; }
   #problemCard .cardlabel { margin-bottom:.5rem; }
@@ -420,20 +348,17 @@
   }
   #problemEqs div { padding:.1rem 0; }
 
-  /* ---- worksheet photo (click / drag / paste) ----
-     Hidden until the server says this laptop is the eye (INPUT_MODE=upload).
-     With a phone on /camera the box would be a dead end: the phone is asked
-     first and answers every capture. */
+  /* ---- worksheet photo (click / drag / paste); shown only in upload mode ---- */
   #sheet { display:none; }
   #drop[hidden] { display:none; }
   #drop {
     display:flex; align-items:center; gap:.9rem; margin-bottom:.7rem;
-    background:var(--panel-tint); border:1.5px dashed var(--line);
+    background:rgba(9,44,72,.55); border:1.5px dashed rgba(148,205,235,.32);
     border-radius:var(--r-card); padding:.7rem .9rem;
     color:var(--dim); font-size:.8rem; line-height:1.5; cursor:pointer;
     transition:border-color .18s, color .18s, background .18s;
   }
-  #drop:hover, #drop.over { border-color:var(--accent); color:var(--text); }
+  #drop:hover, #drop.over { border-color:var(--accent-deep); color:var(--text); }
   #drop:active { transform:translateY(1px); }
   #drop:focus-visible { outline:2px solid var(--accent-deep); outline-offset:2px; }
   #drop.has {
@@ -443,97 +368,16 @@
   #drop b { font-weight:800; color:var(--text-mid); }
   #thumb { max-height:2.6rem; border-radius:8px; display:none; }
   #thumb.has { display:block; }
-  /* a filename has no spaces to break at, and this one is whatever the
-     student's camera named it */
   .meta { font-size:.72rem; color:var(--dim); overflow-wrap:anywhere; }
   #drop > div { min-width:0; }
 
-  /* ===================================================================
-     THE BOARD. A cool near-white slate with a whisper of a dot grid, the
-     problem as its heading, and everything the tutor writes below. The
-     tutor itself does not live here — it comes over from the conversation
-     when it has something to write, and goes back.
-     =================================================================== */
-  #board {
-    position:relative;              /* the ink trail is drawn over it */
-    min-height:0; display:flex; flex-direction:column;
-    padding:1.1rem 1.5rem 1.3rem;
-    background-color:var(--panel-tint);
-    /* the grid is a texture, not a feature: one dot every 26px at a tenth
-       of the hairline's weight */
-    background-image:radial-gradient(circle, var(--line) 1px, transparent 1px);
-    background-size:26px 26px; background-position:13px 13px;
-    overflow:hidden;                /* the ink stops at the board's edge */
-  }
-  #boardHead { flex:none; }
-
-  /* The writing area: everything the tutor puts on the board, and the ink it
-     lays it down with. A layer of its own because the sweep belongs to the
-     WRITING, not to the board — the board's top left is the problem
-     statement, and a squid swimming over the question it was asked is the
-     one place on this page it must not be. */
+  /* the writing area, and the fish's reading spot at its right margin —
+     a real element, so a resize has something live to measure */
   .writing { position:relative; flex:1 1 auto; min-height:0; display:flex; }
-  /* Where the tutor stands when it is at the board and not moving — a real
-     element, so a resize has something live to measure rather than a point
-     remembered from before the window changed size. Out at the right margin,
-     not at 9%/10%: that put it directly on top of the first step it had just
-     written, which is the one place on the board it must never sit. */
-  #squidBoard { position:absolute; right:1%; top:6%; width:0; height:0; }
-
-  /* The ink. Its viewBox is set to the area's own pixel size before each pass,
-     so one unit is one pixel — a stretched viewBox made the dash that draws
-     the stroke a different length from the stroke itself, and the trail came
-     out as four separate smears.
-
-     UNDER the writing, not over it. That is both the legibility fix and the
-     whole meaning of the thing: ink on top of a formula is a smear the student
-     has to read through, ink underneath is the ground the letters rise out of
-     — which is what 먹물이 지나간 자리에 판서가 시작된다 actually describes. It also
-     buys the ink permission to be more present, since it can no longer touch
-     the contrast of anything being read.
-
-     A PLUME, not a stroke: ink in water blooms and thins, and a single even
-     line is a highlighter, which is exactly what the first attempt looked
-     like. Three things make it not one — a wide blurred bloom, a thin front so
-     the eye can see where it is coming from, and a gradient along the whole
-     length, because UNIFORMITY is the tell. The ink at the launch is the
-     oldest and most spread; the ink at the head was let go a moment ago. */
-  #boardInk {
-    position:absolute; inset:0; width:100%; height:100%;
-    pointer-events:none; opacity:0; z-index:0;
-    transition:opacity .55s ease;
-  }
-  #boardInk.wet { opacity:1; transition:none; }
-  /* Four round-capped strokes on one path instead of one blurred stroke.
-     Overlapping round caps at falling width and rising opacity give the same
-     soft shoulder, and nothing has to be re-rasterised through a filter every
-     frame — which matters because this plays while the same laptop is running
-     the VAD, an STT call and TTS. */
-  #boardInk .ink {
-    fill:none; stroke:url(#inkFade);
-    stroke-linecap:round; stroke-linejoin:round;
-  }
-  #inkA { stroke-width:30;  opacity:.085; }
-  #inkB { stroke-width:17;  opacity:.14; }
-  #inkC { stroke-width:8.5; opacity:.30; }
-  #inkTrail { stroke-width:3; opacity:.46; }
-  /* var() is not valid inside an SVG presentation attribute, so the stops are
-     coloured from here — where it also follows the scheme like everything else */
-  #inkFade stop, #inkPuff stop { stop-color:var(--accent-deep); }
-  /* fill-box, or the transform-origin is the whole SVG and a swelling blob
-     slides across the board instead of blooming where it was let go */
-  #boardInk .puff {
-    fill:url(#inkPuff); opacity:0;
-    transform-box:fill-box; transform-origin:50% 50%;
-  }
-  /* the writing sits above its own ink */
-  #boardLines { position:relative; z-index:1; }
+  #boardPerch { position:absolute; right:clamp(34px, 5%, 72px); top:10%; width:0; height:0; }
 
   #boardLines {
     flex:1 1 auto; min-width:0; overflow-y:auto;
-    /* the top padding is exactly the fade below: the fade is there to dissolve
-       a line scrolled halfway off, and it must not wash out the first line
-       when nothing is scrolled at all */
     padding:16px .1rem 0; scrollbar-width:thin;
     -webkit-mask-image:linear-gradient(180deg, transparent 0, #000 16px,
                        #000 calc(100% - 8px), transparent 100%);
@@ -541,13 +385,7 @@
                        #000 calc(100% - 8px), transparent 100%);
   }
   /* What the tutor deliberately WROTE, one step of the argument: the biggest
-     type on the board, with the reason scribbled under it in the margin
-     voice. Written, not framed.
-
-     One rule, not two: boardWrite has written `boardline key` unconditionally
-     since sentence transcription left the board, so a plain `.boardline` rule
-     could only ever be shadowed by this one. Its typography sat there looking
-     editable and changed nothing. */
+     type on the board, with the reason underneath in the margin voice. */
   .boardline {
     padding:.5rem .2rem .8rem; margin:.15rem 0;
     font-size:1.36rem; line-height:1.5; color:var(--text);
@@ -559,9 +397,8 @@
     letter-spacing:-.01em; word-break:keep-all;
   }
   @media (prefers-reduced-motion: no-preference) {
-    /* A line that arrives outside a pass simply surfaces — and it surfaces
-       out of the ink's own colour into the writing's, which is the cheapest
-       possible way of saying the ink BECAME the step. */
+    /* A line surfaces out of the water's own cyan into the chalk's white —
+       the cheapest possible way of saying the sea became the step. */
     .boardline { animation:inked .5s cubic-bezier(.2,.7,.3,1) both; }
     @keyframes inked {
       0%   { opacity:0; transform:translateY(-4px); filter:blur(3px);
@@ -569,23 +406,18 @@
       100% { opacity:1; transform:none; filter:none; color:var(--text); }
     }
 
-    /* A line the ink is laying down is UNCOVERED left to right, in the wake of
-       the squid, so the writing looks put there rather than switched on.
+    /* A line in a burst is UNCOVERED left to right, like writing being put
+       there. The wipe is mask-position, whose own default — 0%, the solid
+       end — is FULLY VISIBLE: if the animation never runs, for any reason,
+       the student still reads the step.
 
-       The wipe is mask-position and not a registered @property: a custom
-       property needs @property to animate at all, and where that is missing
-       the mask would sit at its initial value and hide the line for good.
-       mask-position animates everywhere, and its own default — 0%, the solid
-       end of the gradient — is FULLY VISIBLE. If the animation never runs, for
-       any reason, the student still reads the step. */
-    /* The geometry has to be exact or the mechanism silently half-works. A
+       The geometry has to be exact or the mechanism silently half-works. A
        percentage mask-position lines the image's P% up with the box's P%, so
        at 300% the box sees image fractions 0–33% at 0% and 67–100% at 100%.
-       Stops at 34% and 66% therefore put the box ENTIRELY inside the solid end
-       at one extreme and ENTIRELY inside the clear end at the other. The first
-       attempt used 210% with stops at 46/60, where the box sees 0–47.6% and
-       52.4–100%: it never quite finished uncovering and never quite started
-       covered, which is a wipe that does not wipe. */
+       Stops at 34% and 66% put the box ENTIRELY inside the solid end at one
+       extreme and ENTIRELY inside the clear end at the other. (210% with
+       stops at 46/60 never quite finishes uncovering and never quite starts
+       covered — a wipe that does not wipe.) */
     .boardline.laying, .boardfigure.laying {
       animation:inked 0s both, laydown var(--lay, .46s) cubic-bezier(.3,.6,.35,1) both;
       -webkit-mask-image:linear-gradient(90deg, #000 0 34%, transparent 66%);
@@ -593,8 +425,8 @@
       -webkit-mask-size:300% 100%;   mask-size:300% 100%;
       -webkit-mask-repeat:no-repeat; mask-repeat:no-repeat;
     }
-    /* and the mask comes OFF when it is done: a board holding a lesson's worth
-       of steps should not keep every one of them on its own composited layer */
+    /* the mask comes OFF when it is done: a board holding a lesson's worth
+       of steps should not keep every one on its own composited layer */
     .boardline.dry, .boardfigure.dry {
       -webkit-mask-image:none; mask-image:none;
     }
@@ -609,18 +441,12 @@
     position:relative; padding:.4rem 0 .2rem;
     overflow:hidden;                 /* the drag preview stops at its frame */
     /* A sideways finger pans the GRAPH; an up-down finger still scrolls the
-       BOARD. Taking both would make the sketch a dead zone in the page's own
-       scrolling, and the board is taller than the screen exactly when it has
-       a figure on it. */
+       BOARD, which is taller than the screen exactly when it has a figure. */
     touch-action:pan-y;
     cursor:grab;
   }
   .boardfigure:active { cursor:grabbing; }
   .boardfigure:focus-visible { outline:2px solid var(--accent-deep); outline-offset:2px; }
-  /* The window controls: the automatic window is a guess about what matters,
-     and these are how the student overrules it. − widens (more of the plane,
-     the fix when a curve runs out of the frame), + moves closer. Quiet until
-     hovered, because they sit on the sketch itself. */
   .figzoom {
     position:absolute; top:.55rem; right:.15rem; z-index:1;
     display:flex; gap:.3rem; opacity:.55; transition:opacity .18s;
@@ -629,9 +455,9 @@
   .figzoom button {
     width:1.7rem; height:1.7rem; display:grid; place-items:center;
     font:700 1.05rem var(--font); line-height:1;
-    color:var(--text-mid); background:var(--panel-solid);
-    border:1px solid var(--line); border-radius:var(--r-btn);
-    cursor:pointer; box-shadow:0 1px 3px rgb(var(--sink) / .10);
+    color:var(--text-mid); background:rgba(9,44,72,.9);
+    border:1px solid rgba(148,205,235,.28); border-radius:var(--r-btn);
+    cursor:pointer;
     transition:color .15s, border-color .15s, background .15s;
   }
   .figzoom button:hover { color:var(--accent-deep); border-color:var(--accent-line); }
@@ -641,8 +467,6 @@
     .boardfigure { transition:opacity .18s ease; }
     .boardfigure.fading { opacity:.15; }
   }
-  /* The server draws the sketch at about the board's width, so it fills it at
-     roughly 1:1 and the tick labels stay the size they were drawn. */
   .boardfigure svg { display:block; width:100%; height:auto; }
   .boardfigure .grid line { stroke:var(--line); stroke-width:1; }
   .boardfigure .axes line { stroke:var(--dim); stroke-width:1.4; }
@@ -653,13 +477,13 @@
     color:var(--accent-deep); word-break:keep-all;
   }
 
-  /* Empty state: not a message floating in the middle of nothing, but a note
-     pinned to the top of the board saying the tutor is ready. */
+  /* Empty state: a note pinned to the top of the board saying the tutor is
+     ready — not a message floating in the middle of nothing. */
   #boardEmpty {
     max-width:30rem; margin:.2rem 0 0 .1rem; position:relative;
-    background:var(--panel-solid); border:1px solid var(--line);
+    background:rgba(10,52,84,.66); border:1px solid rgba(139,224,255,.18);
     border-radius:var(--r-card); border-top-left-radius:6px;
-    padding:.85rem 1.1rem; box-shadow:var(--shadow-soft);
+    padding:.85rem 1.1rem;
     color:var(--dim); font-size:.88rem; line-height:1.65;
   }
   #boardEmpty b {
@@ -668,36 +492,53 @@
   }
 
   /* ===================================================================
-     THE CONVERSATION. Its own header — the tutor's face, its name and
-     what it is doing right now — and the voice controls pinned at its
-     foot, where the words it produces appear.
+     THE CONVERSATION. A porthole of daylight: the panel is BRIGHT — the
+     one bright thing on the page — in the green-teal family, glass only
+     by suggestion (a white rim, a lit top edge; no frosting). Its header
+     carries the tutor's nest and the live status line; the voice
+     controls are pinned at its foot, next to the words they produce.
      =================================================================== */
   #chatPanel {
+    /* the server's four names, re-tuned for daylight, so anything inside
+       the panel that speaks the shared vocabulary stays readable here */
+    --line:var(--c-line); --dim:var(--c-dim);
+    --accent-deep:#0f6d8a; --err:var(--c-err);
+    --accent-soft:#dff0e8; --accent-line:#8fd0c4;
     min-height:0; display:flex; flex-direction:column; overflow:hidden;
-    padding:0;                      /* the head and foot run edge to edge */
+    padding:0; color:var(--c-text);
+    background:linear-gradient(180deg, var(--c-bg-0), var(--c-bg-1) 52%, var(--c-bg-2));
+    border:1px solid rgba(255,255,255,.75);
+    border-radius:var(--r-panel);
+    box-shadow:inset 0 1px 0 #ffffff, var(--shadow-soft);
   }
   .chathead {
     flex:none; display:flex; align-items:center; gap:.7rem;
-    padding:.7rem 1rem; border-bottom:1px solid var(--line);
-    background:linear-gradient(180deg, var(--accent-soft), transparent);
+    padding:.7rem 1rem; border-bottom:1px solid var(--c-line);
+    background:linear-gradient(180deg, rgba(181,228,140,.28),
+               rgba(82,182,154,.12) 68%, transparent);
   }
-  /* the niche the tutor sits in. The character itself is on a layer above
-     the whole page (it has to be able to fly to the board), so this is an
-     empty socket that reserves the space and says where to land. */
-  #squidHome {
-    flex:none; width:calc(var(--sq) * .58); height:calc(var(--sq) * .92);
+  /* the nest the fish sits in: an empty socket that reserves the space and
+     says where to land — the character itself is on the page-wide layer */
+  #pufferHome {
+    flex:none; width:calc(var(--pf) * .84); height:calc(var(--pf) * .7);
     border-radius:var(--r-chip);
-    background:radial-gradient(60% 46% at 50% 88%, rgb(var(--sink) / .10), transparent 70%);
+    background:radial-gradient(60% 42% at 50% 86%, rgba(20,60,78,.16), transparent 70%);
   }
   .chathead .who { min-width:0; margin-right:auto; }
-  .chathead .who b { display:block; font-size:.92rem; font-weight:800; color:var(--text); }
-  /* the state, said once and plainly: a coloured dot, a word, and a hue that
-     does not repeat between states */
+  .chathead .who b { display:block; font-size:.92rem; font-weight:800; color:var(--c-text); }
+  /* the status line: what is happening right now, with dots that breathe
+     one at a time up to three and back — written by script, read at a
+     glance, never a bubble inside the conversation */
+  #stageLine {
+    display:block; font-size:.74rem; font-weight:600; color:var(--c-dim);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  #stageDots { letter-spacing:.08em; }
   #stateChip {
     display:inline-flex; align-items:center; gap:.38rem;
     font-size:.74rem; font-weight:800; letter-spacing:-.01em;
     border-radius:var(--r-chip); padding:.22rem .62rem .22rem .5rem;
-    color:var(--dim); background:var(--panel-solid); border:1px solid var(--line);
+    color:var(--c-dim); background:var(--c-solid); border:1px solid var(--c-line);
     transition:color .2s, background .2s, border-color .2s;
   }
   #stateChip .led {
@@ -705,7 +546,7 @@
     flex:none;
   }
   #stateChip[data-state="LISTENING"], #stateChip[data-state="USER_SPEAKING"] {
-    color:var(--hear-ink); background:var(--hear-soft); border-color:var(--accent-line);
+    color:var(--hear-ink); background:var(--hear-soft); border-color:var(--hear-ink);
   }
   #stateChip[data-state="PROCESSING"] {
     color:var(--think-ink); background:var(--think-soft); border-color:var(--think-ink);
@@ -714,8 +555,8 @@
     color:var(--talk-ink); background:var(--talk-soft); border-color:var(--talk-ink);
   }
   @media (prefers-reduced-motion: no-preference) {
-    /* each state's light behaves differently, so it is legible out of the
-       corner of an eye: listening breathes, working blinks, speaking pulses */
+    /* each state's light behaves differently, legible out of the corner of
+       an eye: listening breathes, working blinks, speaking pulses */
     #stateChip[data-state="LISTENING"] .led { animation:breathe 2.4s ease-in-out infinite; }
     #stateChip[data-state="USER_SPEAKING"] .led { animation:breathe 1s ease-in-out infinite; }
     #stateChip[data-state="PROCESSING"] .led { animation:tick 1.1s steps(1) infinite; }
@@ -731,26 +572,26 @@
     padding:.9rem .9rem 1rem; scrollbar-width:thin;
   }
   .msg { max-width:94%; display:flex; flex-direction:column; gap:.2rem; }
-  .msg .who { font-size:.68rem; font-weight:700; color:var(--dim); padding:0 .3rem; }
+  .msg .who { font-size:.68rem; font-weight:700; color:var(--c-dim); padding:0 .3rem; }
   .msg .bubble {
     border-radius:var(--r-bubble); padding:.6rem .85rem;
     font-size:.88rem; line-height:1.62;
     white-space:pre-wrap; word-break:keep-all; overflow-wrap:anywhere;
   }
-  /* the tutor speaks in white, the student in the sea's own aqua */
+  /* the tutor speaks in white, the student in the family's deep teal */
   .msg.tutor { align-self:flex-start; }
   .msg.tutor .bubble {
-    background:var(--panel-solid); border:1px solid var(--line); color:var(--text);
-    border-top-left-radius:5px; box-shadow:0 1px 2px rgb(var(--sink) / .05);
+    background:var(--c-solid); border:1px solid rgba(30,96,145,.13); color:var(--c-text);
+    border-top-left-radius:5px; box-shadow:0 1px 2px rgba(20,60,78,.06);
   }
   .msg.you { align-self:flex-end; align-items:flex-end; }
   .msg.you .bubble {
-    background:linear-gradient(158deg, var(--aqua-fill-lit), var(--aqua-fill));
-    border:1px solid var(--aqua-fill); color:#fff;
-    border-top-right-radius:5px; box-shadow:0 2px 8px rgb(var(--sink) / .18);
+    background:linear-gradient(158deg, var(--c-fill), var(--c-fill-lit));
+    border:1px solid var(--c-fill-lit); color:#fff;
+    border-top-right-radius:5px; box-shadow:0 2px 8px rgba(20,60,78,.20);
   }
-  /* the line being revealed carries a caret, so a pause mid-sentence reads as
-     "still coming" rather than as the end of the answer */
+  /* the line being revealed carries a caret, so a pause mid-sentence reads
+     as "still coming" rather than as the end of the answer */
   .msg.typing .bubble::after {
     content:""; display:inline-block; vertical-align:-2px;
     width:.5em; height:1.05em; margin-left:.06em; border-radius:1px;
@@ -760,198 +601,216 @@
     .msg.typing .bubble::after { animation:caret .9s steps(1) infinite; }
     @keyframes caret { 0%,49% { opacity:.55; } 50%,100% { opacity:0; } }
   }
-  /* Machine talk (hint level, action) is smaller and quieter than speech.
-     Quieter by size and weight only: an opacity on top of --dim composited it
-     to 4.2:1, undoing the token that was picked to pass on this surface. */
+  /* machine talk (hint level, action): smaller and quieter than speech */
   .msg .note {
-    font-size:.68rem; font-weight:600; color:var(--dim); padding:0 .35rem;
+    font-size:.68rem; font-weight:600; color:var(--c-dim); padding:0 .35rem;
     letter-spacing:.01em;
   }
   .sys {
     align-self:center; max-width:94%; text-align:center;
-    font-size:.74rem; font-weight:600; color:var(--err);
-    background:var(--err-soft); border-radius:var(--r-bubble); padding:.35rem .7rem;
-  }
-
-  /* The tutor is thinking. This is the FIRST thing on screen after the
-     student stops talking, and it is why it exists in the markup from the
-     start: showing it is one hidden→visible flip, with nothing to build,
-     nothing to fetch and nothing to measure. */
-  #thinking { align-self:flex-start; }
-  #thinking[hidden] { display:none; }
-  #thinking .bubble {
-    display:flex; align-items:center; gap:.5rem;
-    background:var(--think-soft); border:1px solid var(--think-ink);
-    color:var(--think-ink); font-size:.79rem; font-weight:700;
-  }
-  .dots { display:inline-flex; gap:.22rem; }
-  .dots i { width:.3rem; height:.3rem; border-radius:50%; background:currentColor; opacity:.4; }
-  @media (prefers-reduced-motion: no-preference) {
-    .dots i { animation:blink 1.2s ease-in-out infinite; }
-    .dots i:nth-child(2) { animation-delay:.2s; }
-    .dots i:nth-child(3) { animation-delay:.4s; }
-    @keyframes blink { 40% { opacity:1; } }
+    font-size:.74rem; font-weight:600; color:var(--c-err);
+    background:var(--c-err-soft); border-radius:var(--r-bubble); padding:.35rem .7rem;
   }
 
   /* ---- the voice controls, at the foot of the words they make ---- */
   .chatfoot {
     flex:none; display:flex; align-items:center; gap:.75rem;
-    padding:.8rem 1rem .9rem; border-top:1px solid var(--line);
-    background:var(--panel-solid);
+    padding:.8rem 1rem .9rem; border-top:1px solid var(--c-line);
+    background:rgba(255,255,255,.66);
   }
   #orb {
     flex:none; position:relative;
     display:inline-flex; align-items:center; gap:.5rem;
-    border-radius:var(--r-chip); border:1px solid var(--aqua-fill);
-    background:linear-gradient(158deg, var(--aqua-fill-lit), var(--aqua-fill)); color:#fff;
+    border-radius:var(--r-chip); border:1px solid var(--c-fill-lit);
+    background:linear-gradient(158deg, var(--c-fill), var(--c-fill-lit)); color:#fff;
     padding:.5rem 1.05rem .5rem .85rem; font:800 .84rem var(--font); cursor:pointer;
-    box-shadow:0 2px 8px rgb(var(--sink) / .20);
+    box-shadow:0 2px 8px rgba(20,60,78,.22);
     transition:filter .18s, box-shadow .18s, transform .1s;
   }
   #orb .dot {
     width:.5rem; height:.5rem; border-radius:50%; background:#fff; opacity:.85;
     transition:background .25s, box-shadow .25s, opacity .25s;
   }
-  #orb:hover { filter:brightness(1.06); box-shadow:var(--shadow-lift); }
-  #orb:active { transform:translateY(1px); box-shadow:0 1px 4px rgb(var(--sink) / .22); }
+  #orb:hover { filter:brightness(1.07); }
+  #orb:active { transform:translateY(1px); }
   #orb:focus-visible { outline:2px solid var(--accent-deep); outline-offset:3px; }
   /* once it is running the button stops being a button and becomes the light */
   #orb:disabled {
-    cursor:default; background:var(--panel-tint); color:var(--text-mid);
-    border-color:var(--line); box-shadow:none; filter:none;
+    cursor:default; background:#eef7f2; color:var(--c-mid);
+    border-color:var(--c-line); box-shadow:none; filter:none;
   }
-  #orb:disabled .dot { background:var(--dim); opacity:1; }
-  /* The dot only ever shows on the disabled fill, so these are the same three
-     inks the chip uses — one hue per state, on both sides of the panel. */
+  #orb:disabled .dot { background:var(--c-dim); opacity:1; }
   #orb[data-state="LISTENING"] .dot      { background:var(--hear-ink); }
   #orb[data-state="USER_SPEAKING"] .dot  { background:var(--hear-ink); box-shadow:0 0 0 4px var(--hear-soft); }
   #orb[data-state="PROCESSING"] .dot     { background:var(--think-ink); }
   #orb[data-state="AGENT_SPEAKING"] .dot { background:var(--talk-ink); box-shadow:0 0 0 4px var(--talk-soft); }
-  #orb[data-state="LISTENING"], #orb[data-state="USER_SPEAKING"] { border-color:var(--accent-line); }
+  #orb[data-state="LISTENING"], #orb[data-state="USER_SPEAKING"] { border-color:var(--hear-ink); }
   #orb[data-state="PROCESSING"] { border-color:var(--think-ink); }
   #orb[data-state="AGENT_SPEAKING"] { border-color:var(--talk-ink); }
-  /* and the ring, which says the same thing at arm's length: the mic is open
-     and breathing, or the tutor has the floor */
   @media (prefers-reduced-motion: no-preference) {
     #orb[data-state="LISTENING"] .dot     { animation:breathe 2.4s ease-in-out infinite; }
     #orb[data-state="USER_SPEAKING"] .dot { animation:breathe 1s ease-in-out infinite; }
     #orb[data-state="AGENT_SPEAKING"] .dot { animation:beat .62s ease-in-out infinite; }
   }
-  /* keep-all keeps Korean from breaking mid-word; anywhere is its companion
-     for the strings this carries that have no spaces at all, like the browser's
-     own getUserMedia error text */
   #status {
-    min-width:0; font-size:.72rem; line-height:1.45; color:var(--dim);
+    min-width:0; font-size:.72rem; line-height:1.45; color:var(--c-dim);
     word-break:keep-all; overflow-wrap:anywhere;
   }
 
   /* ===================================================================
-     THE TUTOR. One element, on a layer over the whole page, that flies
-     between two sockets: the conversation's header, where it lives, and
-     the board, where it writes.
+     THE PUFFERFISH. One inline SVG on a layer over the whole page, flown
+     between two sockets. The element stack is a division of labour, so
+     no animation ever fights another for the same transform:
 
-     transform-origin is the CHARACTER's centre inside its frame, not the
-     frame's — the clip is cropped to the squid's own length in every
-     orientation, so the standing pose sits at 35% across it. With the
-     origin there, translate places the character and scale/rotate happen
-     about it, and one number does not have to be corrected by another.
+       #tutor   position + heading   (inline transform / WAAPI flight)
+       .drift   ambient motion       (idle bob, the reading ∞, breathing)
+       .pose    impulses             (WAAPI: launch squash, the aha hop)
+       .size    inflation            (class transition: the puff)
+       svg      the animal           (fins, eyes, mouth on their own clocks)
+
+     The art faces LEFT (toward the board). Flying right it is flipped,
+     not rotated: a fish returns facing where it is going.
      =================================================================== */
-  #squidLayer {
+  #pfLayer {
     position:fixed; inset:0; z-index:6; pointer-events:none; overflow:hidden;
   }
   #tutor {
     position:absolute; left:0; top:0;
-    width:var(--sq); height:calc(var(--sq) * 242 / 240);
-    transform-origin:35.2% 51.4%;
+    width:var(--pf); height:calc(var(--pf) * .88);
     transform:translate3d(-999px, -999px, 0);
     will-change:transform;
   }
   @media (prefers-reduced-motion: no-preference) {
-    #tutor { transition:transform var(--fly, .62s) cubic-bezier(.34, .8, .3, 1); }
+    #tutor { transition:transform var(--fly, 0ms) cubic-bezier(.34, .8, .3, 1); }
   }
-  #tutor img { position:absolute; inset:0; width:100%; height:100%; }
-  #tutor .clip { opacity:0; }
-  /* only while it is working; an image that never stops moving stops meaning
-     "working", and the still is the same frame under the same crop so the
-     swap never moves the character */
-  #tutor.busy .still { opacity:0; }
-  #tutor.busy .clip { opacity:1; }
-  /* Except while it is crossing the board. The loop is a squid tumbling on the
-     spot; rotating a tumbling squid along a flight path is two motions arguing,
-     and it was most of why the pass read as a sprite being dragged. Flying, it
-     holds ONE pose and the pose is aimed along the path. */
-  #tutor.flying .clip { opacity:0; }
-  #tutor.flying .still { opacity:1; }
-  /* Waiting: it floats, the way anything neutrally buoyant does. On the INNER
-     element, because the outer one is carrying the flight — and during a pass
-     this same element carries the PULSE.
-     transform-origin matches #tutor's, so both turn about the character rather
-     than about a corner of empty water. Because #tutor already holds the
-     rotation, this element's own y-axis IS the direction of travel: scaleY < 1
-     is literally "contracted along travel" and needs no trigonometry. */
-  #tutor .float {
-    position:absolute; inset:0; transform-origin:35.2% 51.4%;
+  #tutor .drift, #tutor .pose, #tutor .size {
+    position:absolute; inset:0; transform-origin:50% 52%;
   }
+  #tutor svg { position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
+  #tutor .flip { transform-origin:100px 92px; transform-box:view-box; transition:transform .14s ease; }
+  #tutor.faceR .flip { transform:scaleX(-1); }
+
+  /* ambient: at home it bobs the way anything neutrally buoyant does;
+     reading, it drifts a slow ∞ around its spot and leans a little */
   @media (prefers-reduced-motion: no-preference) {
-    #tutor .float { animation:bob 5.4s ease-in-out infinite; }
+    #tutor .drift { animation:bob 3.2s ease-in-out infinite; }
     @keyframes bob {
-      0%, 100% { transform:translateY(0) rotate(0deg); }
-      50%      { transform:translateY(-7px) rotate(-2.5deg); }
+      0%,100% { transform:translate(0,0) rotate(0deg) scale(1); }
+      28%     { transform:translate(1.6px,-4px) rotate(1.6deg) scale(1.018); }
+      58%     { transform:translate(-2px,3px) rotate(-1.8deg) scale(1); }
+      82%     { transform:translate(1px,-1.5px) rotate(.6deg) scale(1.01); }
     }
-    /* the clip is already swimming, so the float would be swimming twice —
-       and neither belongs under a flight that is carrying its own motion */
-    #tutor.busy .float, #tutor.flying .float { animation:none; }
+    #tutor.pondering .drift { animation:wander 8.5s ease-in-out infinite; }
+    @keyframes wander {
+      0%    { transform:translate(0,0) rotate(0deg); }
+      12.5% { transform:translate(-8px,-5px) rotate(-2deg); }
+      25%   { transform:translate(-13px,0) rotate(-3deg); }
+      37.5% { transform:translate(-8px,5.5px) rotate(-1deg); }
+      50%   { transform:translate(0,0) rotate(0deg); }
+      62.5% { transform:translate(8px,-5.5px) rotate(2.4deg); }
+      75%   { transform:translate(13px,0) rotate(3deg); }
+      87.5% { transform:translate(8px,5px) rotate(1deg); }
+      100%  { transform:translate(0,0) rotate(0deg); }
+    }
+    /* a flight carries its own motion; nothing ambient underneath it — and
+       the aha's first beat is a DEAD stop, which is what sells it */
+    #tutor.swimming .drift, #tutor.stunned .drift { animation:none; }
   }
 
-  /* the maths it is chewing on, drifting round it. Placed on the character's
-     centre, not the frame's, and sized in em of the frame so they grow with
-     it when it comes forward to think. */
-  #tutor .halo {
-    position:absolute; left:35.2%; top:51.4%; width:0; height:0;
-    font:800 calc(var(--sq) * .17) var(--math); color:var(--accent-deep);
-    opacity:0; transition:opacity .3s;
+  /* inflation: the puff is a class, so arriving and leaving both spring */
+  #tutor .size { transition:transform .26s cubic-bezier(.34,1.5,.5,1); }
+  #tutor.puffed .size { transform:scale(1.32); }
+
+  /* the animal itself */
+  .pf-spikes {
+    transform-box:fill-box; transform-origin:50% 50%;
+    transform:scale(.55); opacity:0;
+    transition:transform .24s cubic-bezier(.34,1.6,.5,1), opacity .16s;
   }
-  #tutor .halo i {
-    position:absolute; display:block; font-style:normal;
-    transform:translate(-50%, -50%);
+  #tutor.puffed .pf-spikes { transform:scale(1); opacity:1; }
+  /* puffed, the oval rounds toward a ball under the spikes */
+  .pf-body { transform-box:fill-box; transform-origin:50% 50%; transition:transform .24s; }
+  #tutor.puffed .pf-body { transform:scale(.96,1.1); }
+
+  .pf-fin {
+    transform-box:fill-box;
+    animation:finwave 1.15s ease-in-out infinite;
   }
-  /* Shown only where they can drift. Without the animation all six sit on the
-     same point, which is not a quieter version of the effect but a pile of
-     glyphs on the character's face. */
-  #tutor.flying .halo { opacity:0; }
+  .pf-fin.tail { transform-origin:0% 50%; }
+  .pf-fin.dorsal { transform-origin:30% 100%; animation-delay:-.4s; }
+  .pf-fin.pect { transform-origin:50% 0%; animation-delay:-.2s; }
+  @keyframes finwave {
+    0%,100% { transform:rotate(-9deg); }
+    50%     { transform:rotate(11deg); }
+  }
+  #tutor.pondering .pf-fin { animation-duration:.85s; }
+  #tutor.swimming .pf-fin { animation-duration:.22s; }
+  @media (prefers-reduced-motion: reduce) { .pf-fin { animation:none; } }
+
+  /* eyes: the pupil group carries the GAZE, the iris group the WIDENING */
+  .pf-pupil { transform:translate(-1.5px,.5px); transition:transform .35s ease; }
+  .pf-iris { transform-box:fill-box; transform-origin:50% 50%; transition:transform .14s ease; }
+  #tutor.stunned .pf-iris, #tutor.puffed .pf-iris { transform:scale(1.18); }
+  #tutor.stunned .pf-pupil, #tutor.puffed .pf-pupil { transform:translate(0,-1.5px); }
+  /* reading: title → first equation → the work below → a glance up (the
+     thinking face) → back to the equation. The board is to its LEFT. */
   @media (prefers-reduced-motion: no-preference) {
-    #tutor.busy:not(.flying) .halo { opacity:1; }
-    #tutor.busy .halo i { animation:mutter 5.2s ease-in-out infinite both; }
-    /* six of them, each on its own arc and its own clock, so they never line
-       up into a ring */
-    #tutor .halo i:nth-child(1) { --ax:-1.15; --ay:-.55; animation-delay:0s; }
-    #tutor .halo i:nth-child(2) { --ax: 1.05; --ay:-.85; animation-delay:-.9s; }
-    #tutor .halo i:nth-child(3) { --ax:-.85;  --ay: .75; animation-delay:-1.8s; }
-    #tutor .halo i:nth-child(4) { --ax: 1.25; --ay: .35; animation-delay:-2.6s; }
-    #tutor .halo i:nth-child(5) { --ax:-.35;  --ay:-1.2; animation-delay:-3.4s; }
-    #tutor .halo i:nth-child(6) { --ax: .55;  --ay: 1.1; animation-delay:-4.2s; }
-    @keyframes mutter {
-      0%   { opacity:0;
-             transform:translate(calc(-50% + var(--ax) * var(--sq) * .30),
-                                 calc(-50% + var(--ay) * var(--sq) * .30)) scale(.5); }
-      22%  { opacity:.9; }
-      68%  { opacity:.55; }
-      100% { opacity:0;
-             transform:translate(calc(-50% + var(--ax) * var(--sq) * .62),
-                                 calc(-50% + var(--ay) * var(--sq) * .62 - var(--sq) * .3))
-                       scale(1.05); }
+    #tutor.pondering .pf-pupil { animation:scan 7.5s ease-in-out infinite; }
+    @keyframes scan {
+      0%,11%   { transform:translate(-4px,-3px); }
+      17%,29%  { transform:translate(-5px,0); }
+      35%,47%  { transform:translate(-4px,3.5px); }
+      53%,59%  { transform:translate(-1px,-4.5px); }
+      66%,79%  { transform:translate(-5px,.5px); }
+      88%,100% { transform:translate(-4px,-3px); }
     }
+  }
+  .pf-mouth-o { opacity:0; }
+  #tutor.stunned .pf-mouth-o, #tutor.puffed .pf-mouth-o { opacity:1; }
+  #tutor.stunned .pf-mouth-smile, #tutor.puffed .pf-mouth-smile { opacity:0; }
+
+  /* what it says without speaking: a startled !, and the faint maths that
+     rises off a fish that is reading. Placed on the character's centre. */
+  #pfMarks {
+    position:absolute; left:50%; top:52%; width:0; height:0;
+  }
+  #pfMarks span {
+    position:absolute; display:block; transform:translate(-50%,-50%);
+    will-change:transform, opacity;
+  }
+  #pfMarks .bang {
+    font:800 calc(var(--pf) * .34)/1 var(--font); color:#ff8a4d;
+    text-shadow:0 1px 6px rgba(4,30,52,.35);
+    animation:bangpop .9s cubic-bezier(.2,.8,.3,1) both;
+  }
+  @keyframes bangpop {
+    0%   { opacity:0; transform:translate(-50%,-50%)
+           translate(var(--x), var(--y)) scale(.4); }
+    22%  { opacity:1; transform:translate(-50%,-50%)
+           translate(var(--x), var(--y)) scale(1.25); }
+    45%  { transform:translate(-50%,-50%) translate(var(--x), var(--y)) scale(1); }
+    100% { opacity:0; transform:translate(-50%,-50%)
+           translate(var(--x), calc(var(--y) - 10px)) scale(1); }
+  }
+  #pfMarks .mus {
+    font:700 calc(var(--pf) * .26)/1 var(--math); color:#a9e6f8;
+    animation:muse 2.3s ease-out both;
+  }
+  /* faint by contract: 0 → .35 → 0, drifting up as it thins away */
+  @keyframes muse {
+    0%   { opacity:0; transform:translate(-50%,-50%)
+           translate(var(--x), var(--y)) scale(.7); }
+    30%  { opacity:.35; }
+    100% { opacity:0; transform:translate(-50%,-50%)
+           translate(var(--x), calc(var(--y) - 28px)) scale(1.05); }
   }
 
   /* ===================================================================
-     RESPONSIVE. Under 1000px the conversation moves below the board,
-     because a 300px column beside a board is not a column any more. The
+     RESPONSIVE. Under 1000px the conversation moves below the board; the
      page scrolls rather than dividing one screen three ways.
      =================================================================== */
   @media (max-width: 1000px) {
     header { max-width:calc(1440px + 2rem); padding:.7rem 1rem .35rem; }
-    /* the reef is pinned to the viewport, so on a page that scrolls it only
-       shows at the end of the scroll: leave it that much room */
     main { flex:none; padding:.35rem 1rem 1.15rem; }
     .grid { grid-template-columns:minmax(0,1fr); gap:.9rem; }
     #board { min-height:24rem; }
@@ -959,7 +818,7 @@
     .msg { max-width:88%; }
   }
   @media (max-width: 620px) {
-    :root { --sq:62px; }
+    :root { --pf:60px; }
     header { flex-wrap:wrap; gap:.5rem .7rem; max-width:calc(1440px + 1.4rem); padding-inline:.7rem; }
     .brand { margin-right:auto; }
     .brand .sub { display:none; }
@@ -975,8 +834,7 @@
 </style>
 </head>
 <body>
-  <!-- one fish, drawn once and used five times; a <use> resolves against the
-       document, so it does not matter which <svg> holds the original -->
+  <!-- one distant fish, drawn once and used five times -->
   <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
     <defs>
       <path id="fishBody" d="M6 4.5c4-4 11-4 16 0-5 4-12 4-16 0zM5 4.5L0 .5v8z"/>
@@ -984,194 +842,75 @@
   </svg>
 
   <!-- ==================================================================
-       THE SCENE, in three planes: a blurred seabed far off, light,
-       caustics, bubbles and a few distant fish in the middle, and the
-       reef in focus at the front. All of it is drawn here, in this file:
-       no external images, nothing hotlinked, nothing whose licence anyone
-       has to take on trust.
+       THE SCENE: sunlight, caustics, motes, bubbles, a far shoal, and
+       the reef silhouette asleep at the bottom. All of it is drawn in
+       this file: no external images, nothing hotlinked.
        ================================================================== -->
   <div class="scene" aria-hidden="true">
-    <div class="far"></div>
-    <div class="mid"></div>
+    <div class="glow"></div>
+    <div class="rays"></div>
     <div class="caustic"></div>
+    <div class="motes"></div>
     <div class="bubbles"></div>
 
-    <!-- far enough off to be shapes rather than animals, and slow enough
-         that nothing in the corner of the eye asks to be looked at -->
     <div class="shoal">
-      <svg class="fish" viewBox="0 0 23 9" style="--y:15%; --k:1;   --sec:68s; --lag:0s"><use href="#fishBody"/></svg>
-      <svg class="fish" viewBox="0 0 23 9" style="--y:21%; --k:.7;  --sec:68s; --lag:-4s"><use href="#fishBody"/></svg>
-      <svg class="fish" viewBox="0 0 23 9" style="--y:11%; --k:.6;  --sec:68s; --lag:-7s"><use href="#fishBody"/></svg>
-      <svg class="fish" viewBox="0 0 23 9" style="--y:58%; --k:1.3; --sec:96s; --lag:-34s"><use href="#fishBody"/></svg>
-      <svg class="fish" viewBox="0 0 23 9" style="--y:66%; --k:.9;  --sec:96s; --lag:-40s"><use href="#fishBody"/></svg>
+      <svg class="fish" viewBox="0 0 23 9" style="--y:15%; --k:1;   --sec:74s; --lag:0s"><use href="#fishBody"/></svg>
+      <svg class="fish" viewBox="0 0 23 9" style="--y:21%; --k:.7;  --sec:74s; --lag:-5s"><use href="#fishBody"/></svg>
+      <svg class="fish" viewBox="0 0 23 9" style="--y:11%; --k:.6;  --sec:74s; --lag:-8s"><use href="#fishBody"/></svg>
+      <svg class="fish" viewBox="0 0 23 9" style="--y:56%; --k:1.2; --sec:102s; --lag:-36s"><use href="#fishBody"/></svg>
+      <svg class="fish" viewBox="0 0 23 9" style="--y:64%; --k:.9;  --sec:102s; --lag:-44s"><use href="#fishBody"/></svg>
     </div>
 
-  <!-- The reef: two stands of tube coral, a branching one, seaweed, and the
-       sand they all stand on. It keeps its own proportions (a branching coral
-       squashed to fit a strip becomes a worm) and its floor is drawn in, so
-       nothing is cut off by the bottom of the window. -->
-  <svg id="reef" viewBox="0 0 1440 260" aria-hidden="true" focusable="false">
-    <defs>
-      <!-- Every one of these is userSpaceOnUse, and it has to be: a coral stem
-           is a straight vertical stroke, whose bounding box is zero wide, and
-           an objectBoundingBox gradient on a zero-width box is simply not
-           painted. The trunks vanished and left the branches floating. The
-           coordinates below are the reef's own, before each cluster's scale. -->
-      <!-- the anemone's fingers: pink tips, grey-lavender where they crowd -->
-      <linearGradient id="anem" gradientUnits="userSpaceOnUse" x1="0" y1="85" x2="0" y2="250">
-        <stop offset="0" stop-color="#f6c3d2"/><stop offset="42%" stop-color="#dbb4cd"/>
-        <stop offset="100%" stop-color="#a3a2c6"/>
-      </linearGradient>
-      <linearGradient id="anemBack" gradientUnits="userSpaceOnUse" x1="0" y1="85" x2="0" y2="250">
-        <stop offset="0" stop-color="#e2b6c8"/><stop offset="100%" stop-color="#9695bb"/>
-      </linearGradient>
-      <!-- the tulip cones: cream lit from above, lavender in the shade -->
-      <linearGradient id="tulip" gradientUnits="userSpaceOnUse" x1="600" y1="110" x2="700" y2="245">
-        <stop offset="0" stop-color="#fdedd6"/><stop offset="46%" stop-color="#f2d3cd"/>
-        <stop offset="100%" stop-color="#bdb0d8"/>
-      </linearGradient>
-      <linearGradient id="tulipBack" gradientUnits="userSpaceOnUse" x1="600" y1="110" x2="700" y2="245">
-        <stop offset="0" stop-color="#f6e2ce"/><stop offset="100%" stop-color="#ada2cc"/>
-      </linearGradient>
-      <!-- the staghorns: ivory with the faintest green in the branches -->
-      <linearGradient id="horn" gradientUnits="userSpaceOnUse" x1="0" y1="95" x2="0" y2="255">
-        <stop offset="0" stop-color="#fdf7e6"/><stop offset="52%" stop-color="#f6efd2"/>
-        <stop offset="100%" stop-color="#e7dcc0"/>
-      </linearGradient>
-      <linearGradient id="hornCool" gradientUnits="userSpaceOnUse" x1="0" y1="95" x2="0" y2="255">
-        <stop offset="0" stop-color="#f7f6e4"/><stop offset="55%" stop-color="#e9f0d6"/>
-        <stop offset="100%" stop-color="#d9e2c4"/>
-      </linearGradient>
-      <radialGradient id="sand" cx="42%" cy="100%" r="72%">
-        <stop offset="0" stop-color="#ffffff" stop-opacity=".5"/>
-        <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
-      </radialGradient>
-      <!-- the seabed the reef stands on, so nothing looks sliced off -->
-      <linearGradient id="floor" gradientUnits="userSpaceOnUse" x1="0" y1="196" x2="0" y2="260">
-        <stop offset="0" stop-color="#cdeaf5"/><stop offset="100%" stop-color="#a7dcee"/>
-      </linearGradient>
-      <linearGradient id="weed" gradientUnits="userSpaceOnUse" x1="0" y1="120" x2="0" y2="250">
-        <stop offset="0" stop-color="#cfeee2"/><stop offset="100%" stop-color="#8fc9c4"/>
-      </linearGradient>
-    </defs>
-
-    <ellipse cx="560" cy="262" rx="760" ry="120" fill="url(#sand)"/>
-    <!-- the floor: one soft rise the whole width, drawn BEFORE the reef so
-         the corals sit on it rather than in front of a hard edge -->
-    <path d="M0 260V232c150-16 268 10 408 6 132-4 226-24 356-22 128 2 214 20 342 16
-             130-4 218-18 334-12v40z" fill="url(#floor)"/>
-    <path d="M0 260V240c150-14 268 8 408 4 132-4 226-20 356-18 128 2 214 16 342 12
-             130-4 218-14 334-10v32z" fill="#ffffff" opacity=".34"/>
-
-    <!-- the long shadows the light throws to the right, on the floor -->
-    <g fill="#7ea7d2" opacity=".2">
-      <ellipse cx="300" cy="243" rx="180" ry="12" transform="rotate(-3 300 243)"/>
-      <ellipse cx="720" cy="240" rx="150" ry="11" transform="rotate(-3 720 240)"/>
-      <ellipse cx="520" cy="252" rx="230" ry="13" transform="rotate(-2 520 252)"/>
-      <ellipse cx="1230" cy="246" rx="185" ry="11" transform="rotate(-3 1230 246)"/>
-    </g>
-
-    <!-- Each cluster is scaled about its own base, so it shrinks to scenery
-         size without a branch ever being squashed out of shape. -->
-    <!-- BACK LEFT: the anemone, a crowd of round-tipped fingers in an arc -->
-    <g transform="translate(170 242) scale(.58) translate(-170 -242)"
-       fill="none" stroke-linecap="round" stroke-width="15">
-      <g stroke="url(#anemBack)" opacity=".75">
-        <path d="M62 238V126"/>  <path d="M92 238V108"/>  <path d="M122 238V96"/>
-        <path d="M152 238V90"/>  <path d="M182 238V92"/>  <path d="M212 238V102"/>
-        <path d="M242 238V118"/> <path d="M272 238V140"/>
+    <!-- the reef, only as far as a silhouette: a rise of seabed, kelp
+         bending one way, a branching coral, a stand of tube corals. It is
+         a shape at the bottom of the eye, never a picture to look at. -->
+    <svg id="reefSil" viewBox="0 0 1440 200" preserveAspectRatio="xMidYMax slice"
+         aria-hidden="true" focusable="false">
+      <path d="M0 200V158c130-14 250 6 400 2 150-4 260-22 400-18 140 4 240 18 360 14
+               120-4 200-14 280-10v54z" fill="#0b3f66" opacity=".5"/>
+      <path d="M0 200V174c150-10 280 6 430 2 150-4 270-16 410-12 140 4 250 14 370 10
+               90-3 160-8 230-6v32z" fill="#083254" opacity=".8"/>
+      <!-- kelp, bending the way one current bends it -->
+      <g fill="none" stroke="#0b3f66" stroke-linecap="round" opacity=".75">
+        <g stroke-width="11">
+          <path d="M150 196c-14-30 12-52 0-84s10-46 2-66"/>
+          <path d="M180 196c10-28-10-48 2-78s-6-42 4-60"/>
+          <path d="M212 198c-8-24 8-40 0-66s6-34 2-48"/>
+        </g>
+        <g stroke-width="9" opacity=".85">
+          <path d="M1180 196c-12-26 10-44 0-72s8-40 2-56"/>
+          <path d="M1212 196c8-24-8-42 2-66s-4-36 4-52"/>
+          <path d="M1246 198c-8-20 8-34 0-56s6-28 2-40"/>
+        </g>
       </g>
-      <g stroke="url(#anem)">
-        <path d="M76 242V136"/>  <path d="M106 242V116"/> <path d="M136 242V102"/>
-        <path d="M166 242V96"/>  <path d="M196 242V100"/> <path d="M226 242V112"/>
-        <path d="M256 242V130"/> <path d="M286 242V154"/>
+      <!-- one branching coral -->
+      <g fill="none" stroke="#0b3f66" stroke-linecap="round" stroke-linejoin="round"
+         stroke-width="16" opacity=".7">
+        <path d="M470 198v-64"/>
+        <path d="M470 152l-26-36"/><path d="M470 146l24-40"/>
+        <path d="M444 118l-4-24"/><path d="M494 110l14-22"/>
       </g>
-    </g>
-
-    <!-- BACK CENTRE: the tulips, wide at the lip and narrowing to the floor -->
-    <g transform="translate(730 240) scale(.58) translate(-730 -240)">
-      <g fill="url(#tulipBack)" opacity=".85">
-        <path d="M596 236l8-96a24 24 0 0 1 48 0l8 96z"/>
-        <path d="M676 236l7-112a25 25 0 0 1 50 0l7 112z"/>
-        <path d="M756 236l8-92a23 23 0 0 1 46 0l8 92z"/>
+      <!-- a stand of tube corals -->
+      <g fill="#0b3f66" opacity=".65">
+        <path d="M880 198l6-58a16 16 0 0 1 32 0l6 58z"/>
+        <path d="M930 198l5-74a17 17 0 0 1 34 0l5 74z"/>
+        <path d="M984 198l6-52a15 15 0 0 1 30 0l6 52z"/>
       </g>
-      <g fill="url(#tulip)">
-        <path d="M632 240l9-84a26 26 0 0 1 52 0l9 84z"/>
-        <path d="M716 240l8-104a27 27 0 0 1 54 0l8 104z"/>
-        <path d="M800 240l9-78a25 25 0 0 1 50 0l9 78z"/>
-      </g>
-    </g>
-
-    <!-- FRONT: the staghorns, branching into round-tipped fingers -->
-    <g fill="none" stroke-linecap="round" stroke-linejoin="round"
-       transform="translate(560 252) scale(.58) translate(-560 -252)">
-      <g stroke="url(#hornCool)" stroke-width="26" opacity=".92">
-        <path d="M340 250v-64"/>
-        <path d="M340 200l-26-38"/> <path d="M340 196l24-42"/>
-        <path d="M436 250v-86"/>
-        <path d="M436 186l-30-44"/> <path d="M436 178l28-46"/> <path d="M406 160l-6-30"/>
-      </g>
-      <g stroke="url(#horn)" stroke-width="30">
-        <path d="M386 252v-96"/>
-        <path d="M386 176l-32-48"/> <path d="M386 168l30-50"/> <path d="M354 132l-4-34"/>
-        <path d="M500 252v-72"/>
-        <path d="M500 196l-28-40"/> <path d="M500 190l26-44"/>
-        <path d="M556 252v-54"/>   <path d="M556 210l-22-32"/>
-      </g>
-      <g stroke="url(#horn)" stroke-width="24" opacity=".95">
-        <path d="M900 250v-58"/>  <path d="M900 206l-22-34"/> <path d="M900 200l20-36"/>
-        <path d="M962 250v-78"/>  <path d="M962 190l-26-40"/> <path d="M962 184l24-40"/>
-        <path d="M1016 250v-46"/> <path d="M1016 214l-18-28"/>
-      </g>
-    </g>
-
-    <!-- RIGHT, further off: one small anemone and a pair of staghorns -->
-    <g opacity=".8" transform="translate(1260 245) scale(.52) translate(-1260 -245)">
-      <g fill="none" stroke="url(#anemBack)" stroke-linecap="round" stroke-width="13">
-        <path d="M1186 240V152"/> <path d="M1212 240V136"/> <path d="M1238 240V128"/>
-        <path d="M1264 240V134"/> <path d="M1290 240V148"/>
-      </g>
-      <g fill="url(#tulipBack)">
-        <path d="M1114 238l7-78a21 21 0 0 1 42 0l7 78z"/>
-      </g>
-      <g fill="none" stroke="url(#horn)" stroke-linecap="round" stroke-linejoin="round"
-         stroke-width="22">
-        <path d="M1340 250v-62"/> <path d="M1340 202l-20-32"/> <path d="M1340 196l18-34"/>
-        <path d="M1400 250v-44"/>
-      </g>
-    </g>
-
-    <!-- seaweed, bending the way a current bends it: behind the corals on the
-         left, in front of nothing on the right -->
-    <g fill="none" stroke="url(#weed)" stroke-linecap="round" opacity=".9">
-      <g stroke-width="9">
-        <path d="M330 252c-14-26 12-44 0-70s10-40 2-58"/>
-        <path d="M352 252c10-24-10-42 2-66s-6-36 4-52"/>
-      </g>
-      <g stroke-width="7" opacity=".8">
-        <path d="M1074 252c-12-22 10-38 0-60s8-34 2-48"/>
-        <path d="M1092 252c8-20-8-36 2-56s-4-30 4-44"/>
-        <path d="M600 254c-10-18 8-32 0-50s6-28 2-40"/>
-      </g>
-    </g>
-  </svg>
+    </svg>
   </div>
 
   <header>
     <div class="brand">
-      <span class="name">오징어 튜터</span>
+      <span class="name">복어 튜터</span>
       <span class="sub">Visual Socratic Tutor</span>
     </div>
-    <!-- both are written by script, so both announce themselves; the turn
-         state is deliberately NOT a live region, it changes every few
-         seconds and would talk over everything else -->
     <div id="conn" role="status">연결 대기</div>
     <button id="hangup" type="button" hidden>연결 종료</button>
   </header>
 
   <main>
     <div class="grid">
-      <section id="board" class="panel">
+      <section id="board">
         <div id="boardHead">
           <div id="drop" tabindex="0" role="button" hidden>
             <img id="thumb" alt="문제 사진 미리보기">
@@ -1196,56 +935,26 @@
               문제를 보여 주면 여기에 하나씩 짚어 가며 적을게요.
             </div>
           </div>
-
-          <!-- The ink the tutor trails as it jets across to write; the viewBox
-               is rewritten to the area's pixel size before each pass. Twelve
-               blobs is enough for the trail to read as continuous at the speed
-               it moves, and few enough to leave the compositor alone. -->
-          <svg id="boardInk" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
-            <defs>
-              <!-- stop-color comes from the stylesheet: see #inkFade stop -->
-              <radialGradient id="inkPuff">
-                <stop offset="0" stop-opacity=".55"/>
-                <stop offset="45%" stop-opacity=".30"/>
-                <stop offset="100%" stop-opacity="0"/>
-              </radialGradient>
-              <!-- along the stroke, launch to head: userSpaceOnUse because the
-                   two ends are written as pixel coordinates each pass -->
-              <linearGradient id="inkFade" gradientUnits="userSpaceOnUse">
-                <stop offset="0" stop-opacity=".26"/>
-                <stop offset="55%" stop-opacity=".72"/>
-                <stop offset="100%" stop-opacity="1"/>
-              </linearGradient>
-            </defs>
-            <path id="inkA" class="ink" d=""/>
-            <path id="inkB" class="ink" d=""/>
-            <path id="inkC" class="ink" d=""/>
-            <path id="inkTrail" class="ink" d=""/>
-            <g id="inkPuffs"></g>
-          </svg>
-          <div id="squidBoard"></div>
+          <!-- where the fish hovers to read: the board's right margin, off
+               the text — the one place it can watch without covering -->
+          <div id="boardPerch"></div>
         </div>
       </section>
 
-      <section id="chatPanel" class="panel">
+      <section id="chatPanel">
         <div class="chathead">
-          <!-- the socket the tutor sits in; the character itself is on the
+          <!-- the nest the fish sits in; the character itself is on the
                layer at the end of the document -->
-          <div id="squidHome"></div>
+          <div id="pufferHome"></div>
           <span class="who">
-            <b>오징어 튜터</b>
-            <span id="stateLabel" class="meta" aria-live="polite">대기 중</span>
+            <b>복어 튜터</b>
+            <span id="stageLine" aria-hidden="true"><span
+              id="stageWord">대기 중</span><span id="stageDots"></span></span>
+            <span id="stateLabel" class="visually-hidden" aria-live="polite">대기 중</span>
           </span>
           <span id="stateChip" aria-hidden="true"><i class="led"></i><span>대기</span></span>
         </div>
-        <div id="chat">
-          <div id="thinking" class="msg tutor" hidden>
-            <div class="bubble">
-              <span id="stageText">문제를 살펴보고 있어요…</span>
-              <span class="dots"><i></i><i></i><i></i></span>
-            </div>
-          </div>
-        </div>
+        <div id="chat"></div>
         <div class="chatfoot">
           <button id="orb" type="button" aria-label="대화 시작">
             <i class="dot"></i><span>대화 시작</span>
@@ -1256,16 +965,118 @@
     </div>
   </main>
 
-  <!-- The tutor, over the whole page so it can travel between the panels.
-       aria-hidden: it is a picture of a state that #stateLabel already
-       announces in words, and a screen reader does not need it twice. -->
-  <div id="squidLayer" aria-hidden="true">
+  <!-- ==================================================================
+       THE TUTOR: a small pufferfish, drawn here so it costs no fetch, can
+       be recolored by the sheet, and can actually LOOK at things. Soft-
+       toy shading (a lit radial body, a belly, freckles), cream with the
+       orange in its fins and cheeks. Facing LEFT. The spikes live BEHIND
+       the body and swing out only when it puffs.
+       aria-hidden: it is a picture of a state #stateLabel already says.
+       ================================================================== -->
+  <div id="pfLayer" aria-hidden="true">
     <div id="tutor">
-      <div class="float">
-        <img class="still" src="squid.webp" alt="" decoding="async">
-        <img class="clip" src="squid-thinking.webp" alt="" decoding="async">
-      </div>
-      <div class="halo"><i>∑</i><i>√</i><i>x</i><i>?</i><i>π</i><i>·</i></div>
+      <div class="drift"><div class="pose"><div class="size">
+        <svg viewBox="0 0 200 176" focusable="false">
+          <defs>
+            <radialGradient id="pfBody" cx="40%" cy="32%" r="78%">
+              <stop offset="0" stop-color="#fffdf2"/>
+              <stop offset=".45" stop-color="#fbeccb"/>
+              <stop offset=".78" stop-color="#eed7a6"/>
+              <stop offset="1" stop-color="#ddbf85"/>
+            </radialGradient>
+            <radialGradient id="pfBelly" cx="50%" cy="62%" r="60%">
+              <stop offset="0" stop-color="#fffdf6" stop-opacity=".95"/>
+              <stop offset="1" stop-color="#fffdf6" stop-opacity="0"/>
+            </radialGradient>
+            <linearGradient id="pfSpike" x1="0" y1="20" x2="0" y2="52"
+                            gradientUnits="userSpaceOnUse">
+              <stop offset="0" stop-color="#f4dda8"/>
+              <stop offset="1" stop-color="#dcbd83"/>
+            </linearGradient>
+            <linearGradient id="pfFin" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#ffc07e"/>
+              <stop offset="1" stop-color="#ff9d54"/>
+            </linearGradient>
+            <radialGradient id="pfIris" cx="38%" cy="34%" r="80%">
+              <stop offset="0" stop-color="#33465c"/>
+              <stop offset=".55" stop-color="#1c2b3c"/>
+              <stop offset="1" stop-color="#101a26"/>
+            </radialGradient>
+          </defs>
+          <g class="flip">
+            <!-- the spikes, one cone rotated round the body's centre -->
+            <g class="pf-spikes" fill="url(#pfSpike)">
+              <path d="M94 52 L100 20 L106 52 Z"/>
+              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(30 100 92)"/>
+              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(60 100 92)"/>
+              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(90 100 92)"/>
+              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(120 100 92)"/>
+              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(150 100 92)"/>
+              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(180 100 92)"/>
+              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(210 100 92)"/>
+              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(240 100 92)"/>
+              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(270 100 92)"/>
+              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(300 100 92)"/>
+              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(330 100 92)"/>
+            </g>
+
+            <!-- fins first where they tuck behind the body -->
+            <g class="pf-fin tail" fill="url(#pfFin)" opacity=".95">
+              <path d="M150 82 Q176 66 181 88 Q176 108 150 100 Q156 91 150 82 Z"/>
+            </g>
+            <g class="pf-fin dorsal" fill="url(#pfFin)" opacity=".92">
+              <path d="M96 49 Q101 27 117 33 Q109 44 105 51 Z"/>
+            </g>
+
+            <!-- the body: one soft ball of cream, lit from upper left -->
+            <g class="pf-body">
+              <ellipse cx="100" cy="92" rx="58" ry="46" fill="url(#pfBody)"/>
+              <ellipse cx="95" cy="112" rx="45" ry="25" fill="url(#pfBelly)"/>
+              <!-- freckles along its back -->
+              <g fill="#c9a163" opacity=".5">
+                <circle cx="82" cy="59" r="2.8"/>
+                <circle cx="101" cy="54" r="2.2"/>
+                <circle cx="119" cy="61" r="2.8"/>
+                <circle cx="92" cy="70" r="1.8"/>
+                <circle cx="111" cy="72" r="2.1"/>
+                <circle cx="130" cy="76" r="1.9"/>
+              </g>
+            </g>
+
+            <!-- the near pectoral fin, over the belly -->
+            <g class="pf-fin pect" fill="url(#pfFin)" opacity=".9">
+              <path d="M97 104 Q88 122 104 125 Q107 113 103 104 Z"/>
+            </g>
+
+            <!-- the face: two big dark eyes that can look, a small mouth
+                 that can gasp, a blush of the orange -->
+            <g class="pf-face">
+              <g class="pf-eye">
+                <circle cx="64" cy="80" r="17.5" fill="#fff8e8" opacity=".92"/>
+                <g class="pf-pupil"><g class="pf-iris">
+                  <circle cx="64" cy="80" r="14" fill="url(#pfIris)"/>
+                  <circle cx="59" cy="75" r="4.6" fill="#fff" opacity=".95"/>
+                  <circle cx="69" cy="85" r="1.9" fill="#fff" opacity=".45"/>
+                </g></g>
+              </g>
+              <g class="pf-eye">
+                <circle cx="106" cy="76" r="19" fill="#fff8e8" opacity=".92"/>
+                <g class="pf-pupil"><g class="pf-iris">
+                  <circle cx="106" cy="76" r="15.2" fill="url(#pfIris)"/>
+                  <circle cx="100.5" cy="70.5" r="5" fill="#fff" opacity=".95"/>
+                  <circle cx="112" cy="82" r="2.1" fill="#fff" opacity=".45"/>
+                </g></g>
+              </g>
+              <path class="pf-mouth-smile" d="M50 103 Q57 109 64 103"
+                    fill="none" stroke="#8a5f33" stroke-width="2.6" stroke-linecap="round"/>
+              <ellipse class="pf-mouth-o" cx="57" cy="105" rx="4.6" ry="5.6" fill="#5d3f26"/>
+              <ellipse cx="46" cy="93" rx="6" ry="4" fill="#ff9d5c" opacity=".28"/>
+              <ellipse cx="121" cy="92" rx="5" ry="3.4" fill="#ff9d5c" opacity=".16"/>
+            </g>
+          </g>
+        </svg>
+      </div></div></div>
+      <div id="pfMarks"></div>
     </div>
   </div>
 
@@ -1329,7 +1140,7 @@ const sendEvent = (event, data = {}) => {
 // vocabulary (x² · √ log₃ f'(1) 1/5 — mathspeak.displayable). These two
 // functions take that vocabulary the last mile: find the math runs inside a
 // Korean sentence, translate the run to TeX, hand it to KaTeX. No KaTeX (CDN
-// down, offline) → the unicode text stands as-is, which is yesterday's page.
+// down, offline) → the unicode text stands as-is.
 const SUBS = { "₀":"0","₁":"1","₂":"2","₃":"3","₄":"4","₅":"5","₆":"6","₇":"7",
                "₈":"8","₉":"9","ₐ":"a","ₑ":"e","ₕ":"h","ₖ":"k","ₗ":"l","ₘ":"m",
                "ₙ":"n","ₒ":"o","ₚ":"p","ₛ":"s","ₜ":"t","ₓ":"x",
@@ -1394,15 +1205,11 @@ function mathify(text) {
 }
 
 // --- 1. capture: mic → worklet → 512-sample int16 frames → server ----------
-// Held so that 연결 종료 can actually let go of them: a page that closes the
-// socket but leaves the microphone open is still recording, and the browser
-// says so with a tab indicator the student cannot turn off.
 let micStream = null, audioCtx = null;
 
 // A failed start must be retryable. This listener used to be {once:true}, so a
-// dismissed microphone prompt consumed it: the button stayed lit, said 대화
-// 시작, and did nothing for the rest of the page's life. The guard below is
-// what stops a double click opening two microphones instead.
+// dismissed microphone prompt consumed it. The guard below is what stops a
+// double click opening two microphones instead.
 let starting = false;
 
 async function start() {
@@ -1543,7 +1350,7 @@ function onEvent(msg) {
       break;
     case "barge_in":    stopSpeaking(); break;
     case "transcript":  addTurn("you", d.text || "(인식 실패)"); break;
-    case "tutor_says":  addTurn("tutor", d.text); break;
+    case "tutor_says":  onTutorSays(d); break;
     case "board":       for (const line of d.lines || []) boardWrite(line); break;
     case "figure":      boardDraw(d); break;
     case "stage":       setStage(d.text); break;
@@ -1563,76 +1370,336 @@ function onBinary(buffer) {
 // ===========================================================================
 // THE TUTOR AS A CHARACTER
 //
-// One element on a fixed layer with two sockets to land in. Everything below
-// is placement: nothing here talks to the socket, and the pipeline cannot be
-// held up by an animation.
+// One element on a fixed layer with two homes: the conversation's header and
+// the board's margin. Everything below is placement and theatre; the pipeline
+// is never once made to wait for an animation — the single exception is the
+// deliberate HOLD on the turn's final line, and that is bounded by a timer.
 // ===========================================================================
 const tutor = $("tutor");
-const float = tutor.querySelector(".float");
+const pose = tutor.querySelector(".pose");
 
-// Where the character sits inside its own frame when it is standing still,
-// measured off the asset (tools that cut it print this). It is also the
-// element's transform-origin, so scale and rotate happen about the squid
-// rather than about a corner of empty water.
-const SQ_CX = 0.352, SQ_CY = 0.514;
+// where the character's visual centre sits inside its own frame
+const PF_CX = 0.5, PF_CY = 0.52;
 
-/** Put the character's centre on an element's centre, at a size and a lean. */
-function land(anchor, { scale = 1, tilt = 0, ms = 620 } = {}) {
-  if (!anchor) return;
-  const r = anchor.getBoundingClientRect();
-  // the box's own untransformed size: offsetWidth is immune to the transform
+// A fish's dart, normalised: distance covered by fraction of time. Fast off
+// the mark, a long glide, and a soft stop — sampled into keyframe offsets so
+// the browser interpolates a path position, not an easing someone guessed.
+const SPEED = [0, .09, .22, .38, .53, .66, .77, .855, .915, .955, .98, .993, 1];
+
+const pf = {
+  state: "home",     // home | alert | toBoard | board | returning
+  target: null,      // the element it is at (or flying to)
+  dest: null,        // that element's centre, measured at launch
+  flight: null, pulse: null,
+  finishFlight: null,
+  timers: [], museTimer: null,
+  pos: { x: -999, y: -999 },
+};
+
+const wait = (ms, fn) => pf.timers.push(setTimeout(fn, ms));
+function clearPfTimers() {
+  pf.timers.forEach(clearTimeout);
+  pf.timers = [];
+}
+
+const centerOf = (el) => {
+  const r = el.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+};
+
+/** Put the character's centre on a point, now or on the CSS transition. */
+function placeAt(cx, cy, deg = 0, ms = 0) {
   const w = tutor.offsetWidth, h = tutor.offsetHeight;
-  const x = r.left + r.width / 2 - w * SQ_CX;
-  const y = r.top + r.height / 2 - h * SQ_CY;
   tutor.style.setProperty("--fly", (STILL.matches ? 0 : ms) + "ms");
   tutor.style.transform =
-    `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0) scale(${scale}) rotate(${tilt}deg)`;
+    `translate3d(${(cx - w * PF_CX).toFixed(1)}px, ${(cy - h * PF_CY).toFixed(1)}px, 0) ` +
+    `rotate(${deg.toFixed(1)}deg)`;
+  pf.pos = { x: cx, y: cy };
 }
 
-// Where it is meant to be when nothing is happening, so a resize, a scroll or
-// the end of a trip all have one answer to go back to.
-let perch = { anchor: null, scale: 1, tilt: 0 };
-function goHome(ms = 620) {
-  perch = { anchor: $("squidHome"), scale: 1, tilt: 0 };
-  land(perch.anchor, { scale: 1, tilt: 0, ms });
+/** Stop a flight where it is. The transform is HANDED OVER before the
+ *  animation is dropped: a filled animation is layered over the inline style,
+ *  so cancelling one without writing the current matrix first snaps the
+ *  character back to wherever the inline style last said. */
+function haltFlight() {
+  if (!pf.flight) return;
+  const t = getComputedStyle(tutor).transform;
+  tutor.style.transform = t === "none" ? "" : t;
+  // pf.pos must follow the hand-over, or the NEXT flight launches from where
+  // this one started and the character teleports. The matrix is translate3d
+  // then rotate, so its translation terms are the translate3d values.
+  if (t && t !== "none") {
+    const m = new DOMMatrixReadOnly(t);
+    pf.pos = { x: m.e + tutor.offsetWidth * PF_CX, y: m.f + tutor.offsetHeight * PF_CY };
+  }
+  pf.flight.cancel(); pf.flight = null;
+  if (pf.pulse) { pf.pulse.cancel(); pf.pulse = null; }
+  pose.style.transform = "";
+  pf.finishFlight = null;
+  tutor.classList.remove("swimming");
 }
-// The waypoints of a sweep are points, not elements — they are where the
-// board WAS. If the window changes size mid-flight there is nothing live to
-// measure, so the trip is abandoned and the character goes home.
+
+/** Swim to an element's centre on a shallow arc, aimed along the way.
+ *
+ *  The path is a quadratic lifted a little above both ends ("약간 위로,
+ *  그다음 가로질러"), with one gentle S laid over it — a small push
+ *  perpendicular to the path, two half-waves, which is a swimming line and
+ *  not a slide. The heading is the path's tangent clamped to a lean (a fish
+ *  banks, it does not somersault), and it levels out to land.
+ */
+function swim(toEl, { ms = 680, faceRight = false, done = null } = {}) {
+  haltFlight();
+  const to = centerOf(toEl);
+  pf.target = toEl;
+  pf.dest = to;
+  const from = { ...pf.pos };
+  const dist = Math.hypot(to.x - from.x, to.y - from.y);
+  if (STILL.matches || dist < 10) {
+    placeAt(to.x, to.y, 0, 0);
+    if (done) done();
+    return;
+  }
+  const lift = Math.min(140, Math.max(50, dist * .22));
+  const c = { x: (from.x + to.x) / 2, y: Math.min(from.y, to.y) - lift };
+  const wig = dist > 240 ? 6 : 3;
+  tutor.classList.add("swimming");
+  tutor.classList.toggle("faceR", faceRight);
+  tutor.style.setProperty("--fly", "0ms");     // the flight owns the transform now
+  const w = tutor.offsetWidth, h = tutor.offsetHeight;
+
+  const frames = SPEED.map((s, i) => {
+    const u = 1 - s;
+    let x = u * u * from.x + 2 * u * s * c.x + s * s * to.x;
+    let y = u * u * from.y + 2 * u * s * c.y + s * s * to.y;
+    const tx = 2 * u * (c.x - from.x) + 2 * s * (to.x - c.x);
+    const ty = 2 * u * (c.y - from.y) + 2 * s * (to.y - c.y);
+    const m = Math.hypot(tx, ty) || 1;
+    const sway = Math.sin(s * Math.PI * 2) * wig;
+    x += (-ty / m) * sway;
+    y += (tx / m) * sway;
+    let deg = Math.atan2(ty, tx) * 180 / Math.PI;
+    if (!faceRight) deg -= 180;                // the art already points left
+    deg = ((deg + 540) % 360) - 180;
+    deg = Math.max(-24, Math.min(24, deg));
+    if (i === SPEED.length - 2) deg *= .5;     // level out…
+    if (i === SPEED.length - 1) deg = 0;       // …and land flat
+    return {
+      offset: i / (SPEED.length - 1), easing: "linear",
+      transform: `translate3d(${(x - w * PF_CX).toFixed(1)}px, ` +
+                 `${(y - h * PF_CY).toFixed(1)}px, 0) rotate(${deg.toFixed(1)}deg)`,
+    };
+  });
+
+  pf.flight = tutor.animate(frames, { duration: ms, fill: "forwards" });
+  // the launch, on its own clock: coiled, then stretched along travel
+  pf.pulse = pose.animate([
+    { offset: 0,   transform: "scale(1,1)" },
+    { offset: .10, transform: "scale(.88,1.08)", easing: "cubic-bezier(.5,0,.8,.4)" },
+    { offset: .30, transform: "scale(1.16,.9)",  easing: "cubic-bezier(.2,.8,.35,1)" },
+    { offset: .62, transform: "scale(1.05,.97)" },
+    { offset: 1,   transform: "scale(1,1)" },
+  ], { duration: ms, fill: "forwards" });
+
+  const finish = () => {
+    pf.finishFlight = null;
+    // hand the destination over BEFORE the animations are dropped
+    tutor.style.transform = frames[frames.length - 1].transform;
+    pose.style.transform = "";
+    if (pf.flight) { pf.flight.cancel(); pf.flight = null; }
+    if (pf.pulse) { pf.pulse.cancel(); pf.pulse = null; }
+    tutor.classList.remove("swimming");
+    // land on where the target IS, which after a mid-flight resize is not
+    // where the frames were pointed
+    const now = centerOf(toEl);
+    placeAt(now.x, now.y, 0, 0);
+    if (done) done();
+  };
+  pf.finishFlight = finish;
+  pf.flight.onfinish = finish;
+}
+
+// --- the choreography -------------------------------------------------------
+
+/** "어? 질문했구나!" — the student stopped talking: puff up, then go read. */
+function alertThenGo() {
+  // no theatre under reduced motion — and none in a hidden tab, where the
+  // animations that would carry it home are frozen until the tab returns
+  if (STILL.matches || document.hidden) return;
+  if (pf.state === "board" || pf.state === "toBoard") return;   // already reading
+  if (pf.state !== "home") {                  // caught mid-return: snap first
+    settleHome(true);
+  }
+  clearPfTimers();
+  pf.state = "alert";
+  tutor.classList.add("puffed");
+  spawnBangs();
+  wait(500, () => {
+    tutor.classList.remove("puffed");
+    wait(180, () => {
+      // the turn may already be over (an instant answer): stay put then
+      if (turnState !== "PROCESSING" && turnState !== "AGENT_SPEAKING") {
+        pf.state = "home";
+        return;
+      }
+      pf.state = "toBoard";
+      tutor.classList.remove("faceR");        // the board is to the LEFT
+      swim($("boardPerch"), { ms: 740, done: () => {
+        pf.state = "board";
+        tutor.classList.add("pondering");
+        startMuse();
+      }});
+    });
+  });
+}
+
+/** The turn's last word is ready: freeze — eyes — hop — one proud puff —
+ *  and dart home. `release` fires when it lands (or straight away when
+ *  there is no trip to make); the held line and audio wait on it. */
+function answerReady(release) {
+  stopMuse();
+  if (STILL.matches || document.hidden ||
+      pf.state === "home" || pf.state === "returning") {
+    if (document.hidden) settleHome(true);
+    release();
+    return;
+  }
+  clearPfTimers();
+  if (pf.state === "alert") {                 // never left: just deflate and talk
+    tutor.classList.remove("puffed", "stunned");
+    pf.state = "home";
+    release();
+    return;
+  }
+  tutor.classList.remove("pondering");
+  if (pf.state === "toBoard") haltFlight();   // caught mid-flight: aha where it is
+  pf.state = "returning";
+  tutor.classList.add("stunned");             // 0–150ms: dead stop, eyes wide
+  pose.animate([
+    { transform: "translateY(0)" },
+    { transform: "translateY(-7px)", offset: .45 },
+    { transform: "translateY(0)" },
+  ], { duration: 200, easing: "cubic-bezier(.3,.7,.4,1)" });
+  wait(150, () => {
+    tutor.classList.add("puffed");            // "아!"
+    wait(360, () => {
+      tutor.classList.remove("puffed", "stunned");
+      wait(140, () => {
+        swim($("pufferHome"), { ms: 620, faceRight: true, done: () => {
+          tutor.classList.remove("faceR");
+          pf.state = "home";
+          release();
+        }});
+      });
+    });
+  });
+}
+
+/** Back to the nest — the quiet way, for turn ends and interruptions. */
+function settleHome(instant = false) {
+  clearPfTimers();
+  stopMuse();
+  tutor.classList.remove("pondering", "puffed", "stunned");
+  haltFlight();
+  if (pf.state === "home") { tutor.classList.remove("faceR"); return; }
+  if (instant || STILL.matches) {
+    tutor.classList.remove("faceR");
+    pf.state = "home";
+    landHome(0);
+    return;
+  }
+  pf.state = "returning";
+  swim($("pufferHome"), { ms: 460, faceRight: true, done: () => {
+    tutor.classList.remove("faceR");
+    pf.state = "home";
+  }});
+}
+
+function landHome(ms = 0) {
+  pf.target = $("pufferHome");
+  const c = centerOf(pf.target);
+  placeAt(c.x, c.y, 0, ms);
+}
+
+// --- what it says without speaking -----------------------------------------
+function spawnMark(cls, text, x, y, life) {
+  const marks = $("pfMarks");
+  const el = document.createElement("span");
+  el.className = cls;
+  el.textContent = text;
+  el.style.setProperty("--x", x + "px");
+  el.style.setProperty("--y", y + "px");
+  marks.appendChild(el);
+  const gone = () => el.remove();
+  el.addEventListener("animationend", gone);
+  setTimeout(gone, life + 400);               // backstop: a paused tab still cleans up
+}
+
+function spawnBangs() {
+  if (STILL.matches) return;
+  [[-34, -46, 0], [10, -60, 80], [40, -38, 160]].forEach(([x, y, delay]) =>
+    setTimeout(() => spawnMark("bang", "!", x, y, 900), delay));
+}
+
+const MUSE_GLYPHS = ["?", "x", "√", "π", "+"];
+function startMuse() {
+  stopMuse();
+  const drop = () => {
+    if (pf.state !== "board" || document.hidden) return;
+    const marks = $("pfMarks");
+    if (marks.querySelectorAll(".mus").length >= 3) return;   // 2–4 alive, never a cloud
+    const n = 1 + (Math.random() < .35 ? 1 : 0);
+    for (let i = 0; i < n; i++) {
+      const g = MUSE_GLYPHS[(Math.random() * MUSE_GLYPHS.length) | 0];
+      const x = -58 + Math.random() * 110;
+      const y = -66 + Math.random() * 34;
+      spawnMark("mus", g, x, y, 2300);
+    }
+  };
+  drop();
+  pf.museTimer = setInterval(drop, 1700);
+}
+function stopMuse() {
+  if (pf.museTimer) { clearInterval(pf.museTimer); pf.museTimer = null; }
+}
+
+// --- keeping the fish where it belongs --------------------------------------
+// It is placed against live geometry, so anything that moves the geometry has
+// to place it again. The ResizeObserver fires every time a chat line is
+// appended, so noise is told from a real move by whether the DESTINATION has
+// actually moved.
 function reperch() {
-  // A flight is checked FIRST, but only against the rect it was actually
-  // built from. Its path, the ink under it and every line's reveal delay came
-  // out of one measurement of the writing area, so if that area has moved
-  // there is nothing left to correct the trip to and it is abandoned. If it
-  // has NOT moved this is just noise — the ResizeObserver fires every time a
-  // line is appended, and treating that as a resize destroyed the pass on its
-  // own first line.
-  if (flight) {
-    const now = document.querySelector(".writing").getBoundingClientRect();
-    const moved = ["left", "top", "width", "height"]
-      .some((k) => Math.abs(now[k] - passRect[k]) > 1);
-    if (!moved) return;
-    clearInk();
-    goHome(0);
+  const el = pf.target && pf.target.isConnected ? pf.target : $("pufferHome");
+  const now = centerOf(el);
+  if (pf.flight) {
+    if (pf.dest && Math.hypot(now.x - pf.dest.x, now.y - pf.dest.y) <= 1) return;
+    // the world moved mid-flight: arrive at once, and let the flight's own
+    // continuation run so the choreography is never left half-told
+    const finish = pf.finishFlight;
+    if (finish) finish();
     return;
   }
-  if (perch.anchor && perch.anchor.isConnected) {
-    land(perch.anchor, { ...perch, ms: 0 });
-    return;
-  }
-  clearInk();
-  goHome(0);
+  if (Math.hypot(now.x - pf.pos.x, now.y - pf.pos.y) > 1) placeAt(now.x, now.y, 0, 0);
 }
 
-// --- the state light --------------------------------------------------------
+// --- the state light and the status line ------------------------------------
 const STATE_WORDS = {
   LISTENING: ["듣는 중", "듣는 중"],
   USER_SPEAKING: ["말하는 중", "학생이 말하는 중"],
   PROCESSING: ["생각 중", "튜터가 생각하는 중"],
   AGENT_SPEAKING: ["말하는 중", "튜터가 말하는 중"],
 };
+// what the header says for each state; PROCESSING is written by the server's
+// own stage events instead, which know what the pipeline is actually doing
+const HEADER_WORDS = {
+  "": ["대기 중", false],
+  LISTENING: ["듣고 있어요", true],
+  USER_SPEAKING: ["열심히 듣고 있어요", true],
+  AGENT_SPEAKING: ["설명하고 있어요", true],
+};
 
 function setState(s) {
+  const prev = turnState;
+  if (s === prev) return;
   turnState = s;
   const [short, spoken] = STATE_WORDS[s] || ["대기", "대기 중"];
   // Everything below is a class or a text swap on nodes that already exist:
@@ -1641,52 +1708,36 @@ function setState(s) {
   const chip = $("stateChip");
   chip.dataset.state = s || "";
   chip.lastElementChild.textContent = short;
-  // The state is announced ONCE, by the live region in the conversation's
-  // header. It used to be written over the button's aria-label as well, which
-  // renamed a control after it had stopped being one and left a screen reader
-  // saying "듣는 중" for a button that reads 마이크 켜짐.
   $("stateLabel").textContent = spoken;
-  // a data attribute, not a class: the state light is one dot inside the
-  // button, and the button keeps its own classes
   const orb = $("orb");
   if (orb.disabled) orb.dataset.state = s;
 
-  const working = s === "PROCESSING";
-  tutor.classList.toggle("busy", working);
-  const thinking = $("thinking");
-  thinking.hidden = !working;
-  if (working) {
-    $("chat").appendChild(thinking);     // always after the newest message
-    scrollChat();
-  }
   if (s === "PROCESSING") {
-    // the FIRST feedback of the turn types out like the rest
-    setStage("문제를 살펴보고 있어요…");
+    // the first thing on screen after the student stops talking
+    setStage("문제를 살펴보고 있어요");
+    alertThenGo();
+  } else {
+    const [word, busy] = HEADER_WORDS[s] || HEADER_WORDS[""];
+    setStage(word, busy);
   }
-  if (s === "LISTENING" || !s) {
-    wroteThisTurn = false;
-    clearInk();
-    goHome();
+  if (s === "LISTENING" || s === "USER_SPEAKING" || !s) {
+    flushHeld();                       // an answer must never be trapped mid-hold
+    settleHome();
   }
 }
 
-// What the pipeline is doing right now (server `stage` events) — the screen
-// carries the progress so the voice does not have to narrate it.
-//
-// TYPED, not swapped. A line that appears whole and then sits still is a
-// label; a line still being written is somebody doing something right now,
-// which is the entire message these carry. Fast — a line lands in ~½s — and
-// under reduced motion it appears whole. The element is not a live region
-// (the state chip's label is), so the partial text is never announced.
-let stageTimer = null;
-function setStage(text) {
+// The status line: the WORD is typed (a line still being written is somebody
+// doing something right now), the DOTS breathe on their own clock — one at a
+// time up to three, then one at a time back down.
+let stageTimer = null, dotTimer = null, dotN = 1, dotDir = 1;
+function setStage(text, busy = true) {
   if (!text) return;
-  const el = $("stageText");
+  const el = $("stageWord");
   clearInterval(stageTimer);
   el.textContent = text;
   if (!STILL.matches && text.length > 1) {
     let shown = 0;
-    const step = Math.max(1, Math.ceil(text.length / (500 / 24)));
+    const step = Math.max(1, Math.ceil(text.length / (420 / 24)));
     el.textContent = "";
     stageTimer = setInterval(() => {
       shown = Math.min(text.length, shown + step);
@@ -1694,332 +1745,29 @@ function setStage(text) {
       if (shown >= text.length) clearInterval(stageTimer);
     }, 24);
   }
-  if (!$("thinking").hidden) scrollChat();
+  setDots(busy);
 }
-
-// --- the trip to the board --------------------------------------------------
-// The tutor goes over when there is something to write, JETS across the
-// writing area letting the ink go behind it, the lines are uncovered in its
-// wake, and it comes back to the conversation — where, a moment later, it
-// starts talking. One trip per turn: a squid that shuttles for every line of a
-// four-line answer is a squid nobody can read past.
-//
-// A squid does not swim, it pulses: it fills its mantle, squeezes, and the
-// water leaving pushes it the other way — mantle first, arms streaming behind,
-// the jet coming out from under the arms. The first version of this had the
-// character sliding along a path at a constant speed with its tentacles
-// pointing at the floor the whole way, which is why it read as a sprite being
-// dragged rather than as an animal moving.
-//
-// So two things carry it. The character is AIMED: its rotation is the tangent
-// of the path it is on, plus the 90° that turns the drawn upright pose into a
-// swimming one. And its SPEED is the reference clip's own, measured off it
-// frame by frame — the leading edge of the drawn squid, every 40 ms, through
-// one jet — so the build, the peak at about 40% of the stroke and the long
-// glide are not an easing anyone chose by eye.
-let wroteThisTurn = false;
-let inkTimers = [];
-let flight = null;                     // where the character is, and its heading
-let passRect = { left: 0, top: 0, width: 0, height: 0 };  // what it was built from
-let pulse = null;                      // what shape it is in, on its own clock
-
-// The reference's own jet, normalised: distance covered by the fraction of the
-// stroke elapsed, sampled at 40 ms. Fed to the keyframes as offsets, so the
-// browser interpolates a path position and the character accelerates exactly
-// as the reference does. Peak speed lands at sample 9 of 23.
-const JET = [
-  0, .006, .030, .061, .097, .145, .200, .267, .339, .424, .503, .576,
-  .648, .715, .776, .830, .873, .915, .945, .970, .982, .994, 1,
-];
-
-// RIGHT to left, and that is not a compositional preference — it is the only
-// way the approach is a movement at all. The tutor lives in the chat header on
-// the right; launching from the left meant crossing the whole window to get
-// there, measured at 1035 px in 220 ms, whose peak frame moved the character
-// 216 px — nearly three times its own length in one frame, with seven frames
-// over a full body length. That is a teleport with an easing curve on it, and
-// it is also two crossings of the text for one gesture. Launching near the
-// right of the writing area makes the approach about 300 px and leaves exactly
-// one crossing.
-//
-// It descends past the LAST line, or every line below where the stroke levels
-// out is reached at the same moment and the stagger collapses.
-const PASS = {                         // the stroke, in fractions of the area
-  from: { x: .90, y: .10 }, ctrl: { x: .50, y: .30 }, to: { x: .10, y: .84 },
-};
-// Short. This plays on the way to an answer the student is waiting for, and
-// the first line is readable a third of a second in.
-const BEATS = { reach: 220, coil: 90, jet: 620, settle: 170 };
-const PUFFS = 12;
-// How far ahead on the stroke the character looks. A squid aims while it is
-// still coasting and contracts once it is pointed; rotating and translating on
-// the same clock means it turns hardest exactly when it is moving fastest,
-// which is what a cursor does and not what an animal does.
-const LOOK = .12;
-// Nothing the tutor wrote waits longer than this to start being readable.
-const LAY_LATEST = 620;
-// the least a line waits behind the one above it, so a cramped board still
-// reads as one thing being written after another
-const LAY_STEP = 130;
-
-/** A point on the stroke, and the direction it is heading there. */
-function onPass(s, w, h) {
-  const { from: a, ctrl: b, to: c } = PASS;
-  const u = 1 - s;
-  return {
-    x: (u * u * a.x + 2 * u * s * b.x + s * s * c.x) * w,
-    y: (u * u * a.y + 2 * u * s * b.y + s * s * c.y) * h,
-    // the derivative of the same quadratic: the tangent, in pixels
-    dx: (2 * u * (b.x - a.x) + 2 * s * (c.x - b.x)) * w,
-    dy: (2 * u * (b.y - a.y) + 2 * s * (c.y - b.y)) * h,
-  };
-}
-
-/** The rotation that points the drawn squid along a heading.
- *
- *  The art is upright — mantle at the top, arms hanging down — so it already
- *  "points" at -90°. Adding 90° to the heading turns that into mantle-first.
- */
-const aim = (dx, dy) => Math.atan2(dy, dx) * 180 / Math.PI + 90;
-
-/** The same angle, expressed nearest to where the character already is.
- *
- *  Without this a heading of 190° followed by one of -170° is a 360° spin
- *  rather than the 20° it really is, and coming home from a leftward pass
- *  turns the tutor round the long way. */
-const near = (deg, to) => deg + 360 * Math.round((to - deg) / 360);
-
-function clearInk() {
-  inkTimers.forEach(clearTimeout);
-  inkTimers = [];
-  if (flight) { flight.cancel(); flight = null; }
-  if (pulse) { pulse.cancel(); pulse = null; }
-  tutor.classList.remove("flying");
-  $("boardInk").classList.remove("wet");
-  $("inkPuffs").textContent = "";
-  // Whatever was mid-wipe is now simply shown. Dropping the timers above took
-  // the backstop with them, and a step left under a half-finished mask is the
-  // one outcome this whole mechanism is not allowed to have.
-  for (const el of document.querySelectorAll(".laying:not(.dry)"))
-    el.classList.add("dry");
-}
-
-/** When the ink passes a height in the writing area, in ms from the pass start.
- *
- *  The stroke descends monotonically, so the sample whose y first reaches this
- *  height is the moment — and because the samples ARE the reference's speed,
- *  the answer is in real time and not in path length.  */
-function inkReaches(yFraction) {
-  for (let i = 1; i < JET.length; i++) {
-    if (onPass(JET[i], 1, 1).y >= yFraction) {
-      return BEATS.reach + BEATS.coil + BEATS.jet * (i / (JET.length - 1));
-    }
-  }
-  return BEATS.reach + BEATS.coil + BEATS.jet;
-}
-
-/** Go over to the writing area and jet across it once. */
-function inkPass() {
-  const area = document.querySelector(".writing");
-  const r = area.getBoundingClientRect();
-  if (!r.width) return;
-  clearInk();
-  // remembered so a later resize can tell a real one from ResizeObserver noise
-  passRect = { left: r.left, top: r.top, width: r.width, height: r.height };
-
-  if (STILL.matches) {                   // no flight, no ink: just be there
-    perch = { anchor: $("squidBoard"), scale: 1.05, tilt: 0 };
-    land(perch.anchor, { ...perch, ms: 0 });
+function setDots(on) {
+  const el = $("stageDots");
+  if (!on) {
+    if (dotTimer) { clearInterval(dotTimer); dotTimer = null; }
+    el.textContent = "";
     return;
   }
-
-  const ink = $("boardInk");
-  const trail = $("inkTrail");
-  const strokes = [...ink.querySelectorAll(".ink")];
-  // one unit, one pixel — see the note on #boardInk
-  ink.setAttribute("viewBox", `0 0 ${r.width.toFixed(0)} ${r.height.toFixed(0)}`);
-
-  const start = onPass(0, r.width, r.height);
-  const end = onPass(1, r.width, r.height);
-  const d = `M${start.x.toFixed(1)} ${start.y.toFixed(1)} ` +
-            `Q${(PASS.ctrl.x * r.width).toFixed(1)} ${(PASS.ctrl.y * r.height).toFixed(1)} ` +
-            `${end.x.toFixed(1)} ${end.y.toFixed(1)}`;
-  strokes.forEach((s) => s.setAttribute("d", d));
-  // the gradient runs launch → head, so the oldest ink is the thinnest
-  const fade = $("inkFade");
-  fade.setAttribute("x1", start.x.toFixed(1)); fade.setAttribute("y1", start.y.toFixed(1));
-  fade.setAttribute("x2", end.x.toFixed(1));   fade.setAttribute("y2", end.y.toFixed(1));
-
-  // --- the character's own flight ------------------------------------------
-  // One animation, four beats, driven by keyframes whose offsets carry the
-  // measured speed. The transform is written whole each time because scale and
-  // rotation change together with position and a transition on three separate
-  // properties would let them arrive at different moments.
-  const home = $("squidHome").getBoundingClientRect();
-  const box = { w: tutor.offsetWidth, h: tutor.offsetHeight };
-  // Position and heading only. The SHAPE lives on .float, on its own clock:
-  // welding them together is what makes a character turn hardest exactly when
-  // it is moving fastest, which is a cursor's behaviour and not an animal's.
-  const put = (x, y, deg) =>
-    `translate3d(${(x - box.w * SQ_CX).toFixed(1)}px, ` +
-    `${(y - box.h * SQ_CY).toFixed(1)}px, 0) rotate(${deg.toFixed(1)}deg)`;
-  const at = (s) => {
-    const p = onPass(s, r.width, r.height);
-    return { ...p, vx: r.left + p.x, vy: r.top + p.y };
-  };
-
-  const total = BEATS.reach + BEATS.coil + BEATS.jet + BEATS.settle;
-  const f0 = at(0), f1 = at(1);
-  const head0 = aim(f0.dx, f0.dy);
-  // UNIT vectors. The curve's derivative is in pixels-per-unit-of-s and runs
-  // to several hundred, so offsetting by a fraction of it made the recoil
-  // scale with the width of the board: 11% of the tangent was a 75 px pull
-  // back, which the first frame of the thrust then snapped across in one go.
-  // The recoil belongs to the ANIMAL, so it is measured in its own body.
-  const unit = (v) => { const m = Math.hypot(v.dx, v.dy) || 1;
-                        return { x: v.dx / m, y: v.dy / m }; };
-  const u0 = unit(f0), u1 = unit(f1);
-  const BODY = box.h * .9;             // the character's own length, near enough
-  let last = 0;                        // the previous heading, for unwrapping
-  const heading = (s) => {
-    // aimed where it is GOING, not where it is: LOOK ahead on the stroke
-    const p = onPass(Math.min(1, s + LOOK), r.width, r.height);
-    return (last = near(aim(p.dx, p.dy), last));
-  };
-  const frames = [];
-  // where it is coming from, already turning to face the way it will go
-  frames.push({ offset: 0, easing: "cubic-bezier(.32,.04,.28,1)",
-                transform: put(home.left + home.width / 2,
-                               home.top + home.height / 2, 0) });
-  // arrives just short of the start, ALREADY aimed — the turn belongs to the
-  // coast, so that the thrust itself is pure acceleration with no turn in it
-  frames.push({ offset: BEATS.reach / total, easing: "cubic-bezier(.55,0,.85,.4)",
-                transform: put(f0.vx - u0.x * BODY * .12, f0.vy - u0.y * BODY * .12,
-                               (last = near(head0, 0))) });
-  // the intake: it opens, takes water in, and the inflow pushes it BACKWARD
-  // along its own heading. The one slow beat in the pass, and the reason the
-  // next 620 ms reads as an impulse instead of a slide.
-  frames.push({ offset: (BEATS.reach + BEATS.coil) / total, easing: "linear",
-                transform: put(f0.vx - u0.x * BODY * .34, f0.vy - u0.y * BODY * .34,
-                               last - 5) });
-  // the jet: sampled along the stroke at the reference's own speed
-  JET.forEach((s, i) => {
-    const u = i / (JET.length - 1);
-    const p = at(s);
-    frames.push({
-      offset: (BEATS.reach + BEATS.coil + BEATS.jet * u) / total,
-      easing: "linear",
-      transform: put(p.vx, p.vy, heading(s)),
-    });
-  });
-  // follow-through: it drifts a little past the end and starts to right itself
-  const settled = put(f1.vx + u1.x * BODY * .18, f1.vy + u1.y * BODY * .18,
-                      near(0, last) * .4);
-  frames.push({ offset: 1, easing: "cubic-bezier(.2,.6,.3,1)", transform: settled });
-
-  // The PULSE, on its own clock. A squid does not change size, it changes
-  // shape: full and short across the intake, thin and long down the thrust.
-  // Because #tutor holds the rotation, y here is along travel — see .float.
-  const T = (ms) => ms / total;
-  const poseHome = "scale(1, 1)";
-  const pose = [
-    { offset: 0, transform: poseHome, easing: "cubic-bezier(.35,.05,.6,1)" },
-    { offset: T(BEATS.reach), transform: "scale(1.02, 1.06)", easing: "cubic-bezier(.55,0,.85,.4)" },
-    // squash peaks BEFORE the stroke starts: anticipation
-    { offset: T(BEATS.reach + BEATS.coil * .9), transform: "scale(1.22, .80)",
-      easing: "cubic-bezier(.1,.9,.25,1)" },
-    // and the stretch peaks a beat AFTER it: follow-through
-    { offset: T(BEATS.reach + BEATS.coil + 70), transform: "scale(.83, 1.32)",
-      easing: "cubic-bezier(.2,.7,.35,1)" },
-    { offset: T(BEATS.reach + BEATS.coil + BEATS.jet), transform: "scale(.97, 1.06)",
-      easing: "ease-out" },
-    { offset: 1, transform: poseHome },
-  ];
-
-  tutor.classList.add("flying");
-  tutor.style.setProperty("--fly", "0ms");   // the flight owns the transform now
-  flight = tutor.animate(frames, { duration: total, fill: "forwards" });
-  pulse = float.animate(pose, { duration: total, fill: "forwards" });
-
-  // --- the ink -------------------------------------------------------------
-  ink.classList.add("wet");
-  const puffs = $("inkPuffs");
-  for (let i = 0; i < PUFFS; i++) {
-    const s = (i + .5) / PUFFS;
-    const p = onPass(s, r.width, r.height);
-    const len = Math.hypot(p.dx, p.dy) || 1;
-    // It leaves from UNDER THE ARMS, which trail behind the mantle: back along
-    // the heading, and a little below. Measured off the box's LONG axis, since
-    // that is the one the character's own length lies on — so it follows the
-    // phone breakpoint down to --sq:62 without a second number.
-    const back = box.h * .44;
-    const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    c.setAttribute("class", "puff");
-    c.setAttribute("r", (7 + (i % 3) * 2.5).toFixed(1));
-    c.setAttribute("cx", (p.x - p.dx / len * back).toFixed(1));
-    c.setAttribute("cy", (p.y - p.dy / len * back + 3).toFixed(1));
-    puffs.appendChild(c);
-    // born as the arms pass, then it blooms, drifts back and thins away
-    c.animate([
-      { offset: 0, opacity: 0, transform: "scale(.35)" },
-      { offset: .18, opacity: .85, transform: "scale(1)" },
-      // it drifts back against the direction of travel and SINKS, which is
-      // both what ink does and what puts it over the line about to be written
-      { offset: 1, opacity: 0,
-        transform: `translate(${(-p.dx / len * 9).toFixed(1)}px, ` +
-                   `${(-p.dy / len * 9 + 17).toFixed(1)}px) scale(2.6)` },
-    ], {
-      duration: 950,
-      delay: BEATS.reach + BEATS.coil + BEATS.jet * jetTimeFor(s),
-      easing: "cubic-bezier(.15,.7,.4,1)", fill: "both",
-    });
+  if (STILL.matches) {                  // still, not gone
+    if (dotTimer) { clearInterval(dotTimer); dotTimer = null; }
+    el.textContent = "...";
+    return;
   }
-
-  // The trail, drawn exactly as fast as the squid moves. Each layer's head
-  // lags a little further behind the one above it, so the wide diffuse edge
-  // trails the sharp one instead of arriving with it — which is what makes
-  // four hard strokes read as one soft plume.
-  const len = trail.getTotalLength();
-  strokes.forEach((path, i) => {
-    const lag = [74, 58, 46, 0][i];
-    path.style.transition = "none";
-    path.style.strokeDasharray = len;
-    path.style.strokeDashoffset = len;
-    path.animate(
-      JET.map((s, k) => ({
-        offset: k / (JET.length - 1),
-        strokeDashoffset: Math.min(len, Math.max(0, len * (1 - s) + lag)).toFixed(1),
-        easing: "linear",
-      })),
-      { duration: BEATS.jet, delay: BEATS.reach + BEATS.coil, fill: "forwards" });
-  });
-
-  // and back to the conversation, which is where it is about to start talking
-  inkTimers.push(setTimeout(() => {
-    ink.classList.remove("wet");
-    // The transform has to be HANDED OVER before the animation is dropped. A
-    // filled animation is not the element's style, it is layered on top of it,
-    // so cancelling one reverts to whatever the inline style still says — the
-    // chat header, from before the pass — and the tutor teleports home instead
-    // of swimming back.
-    tutor.style.transform = settled;
-    float.style.transform = poseHome;
-    if (flight) { flight.cancel(); flight = null; }
-    if (pulse) { pulse.cancel(); pulse = null; }
-    tutor.classList.remove("flying");
-    goHome(620);
-  }, total + 180));
-}
-
-/** The fraction of the jet's DURATION at which the stroke reaches s. */
-function jetTimeFor(s) {
-  for (let i = 1; i < JET.length; i++) {
-    if (JET[i] >= s) {
-      const span = JET[i] - JET[i - 1] || 1;
-      return (i - 1 + (s - JET[i - 1]) / span) / (JET.length - 1);
-    }
-  }
-  return 1;
+  if (dotTimer) return;                 // already breathing
+  dotN = 1; dotDir = 1;
+  el.textContent = ".";
+  dotTimer = setInterval(() => {
+    dotN += dotDir;
+    if (dotN >= 3) dotDir = -1;
+    if (dotN <= 1) dotDir = 1;
+    el.textContent = ".".repeat(dotN);
+  }, 380);
 }
 
 // --- the problem card and the board ----------------------------------------
@@ -2046,10 +1794,7 @@ function showProblem(d) {
 
 // --- the solved-problems archive -------------------------------------------
 // The PANEL is on hold, so nothing is drawn. What is kept is the transcript it
-// will be built from: the conversation since the last problem event, cleared
-// when the server says that problem is DONE (a `solved` event from the finish
-// path, not from a mere "맞아요"). Two lines, and the archive can come back
-// without the lesson having lost anything in the meantime.
+// will be built from: the conversation since the last problem event.
 let currentDialogue = [];              // {kind, text} since the last problem event
 let problemTitle = "";
 
@@ -2072,9 +1817,6 @@ function boardClear() {
   lines.appendChild(empty);
 }
 
-/** A function sketched on the board. The markup is built by the server (sympy
-    samples the curve there), so this only has to place it — and the same leak
-    guard that screens the spoken hint has already seen it. */
 /** ONE grid per problem, replaced in place. The server re-declares the whole
     scene each turn — a curve that has served its purpose is simply absent
     from the next one — so the picture must CHANGE rather than a second
@@ -2085,14 +1827,10 @@ function boardDraw(d) {
   const id = `fig:${d.id || d.of || "scene"}`;
   // The view revision is part of the key. Keying on the zoom VALUE dropped
   // every revisited window — widen then narrow back, and the render at the
-  // old zoom collided with the first time it was seen and was thrown away,
-  // which is why the buttons felt like they sometimes did not work.
+  // old zoom collided with the first time it was seen and was thrown away.
   const key = `${id}|${d.of}|${d.note || ""}|${d.v || 0}`;
   if (boardSeen.has(key)) return;      // the same scene twice is not a change
   boardSeen.add(key);
-  // a view adjustment is the student's act, not the tutor writing: the
-  // character stays where it is
-  if (!d.user) goWrite();
 
   let box = document.querySelector(`[data-figure="${CSS.escape(id)}"]`);
   const fresh = !box;
@@ -2137,14 +1875,12 @@ function boardDraw(d) {
       body.appendChild(label);
     }
     box.classList.remove("fading");
-    // Show the picture from ITS top, not the board's bottom. The sketch now
+    // Show the picture from ITS top, not the board's bottom. The sketch
     // fills the board, so scrolling to the foot as a written line does would
-    // put the legend (which says which curve is l) above the visible edge.
+    // put the legend (which says which curve is which) above the visible edge.
     const lines = $("boardLines");
     lines.scrollTop +=
       box.getBoundingClientRect().top - lines.getBoundingClientRect().top - 6;
-    // a sketch is something the tutor drew too, so the ink lays it down as
-    // well — otherwise a figure appears with no relation to the pass at all
     if (fresh) lay(box);
   };
   if (fresh) return paint();
@@ -2214,91 +1950,67 @@ function figureControls(box, body) {
   box.addEventListener("pointercancel", () => { drag = null; body.style.transform = ""; });
 }
 
-/** The tutor has something for the board: send it over, once per turn. */
-function goWrite() {
-  if (wroteThisTurn) return;
-  wroteThisTurn = true;
-  passStartedAt = performance.now();
-  layFloor = 0;                        // a new pass starts the cascade again
-  inkPass();
-}
-let passStartedAt = 0;
-let layFloor = 0;                      // the last line's moment, for the floor
+/** Uncover a line left to right, a beat after the one above it.
+ *
+ *  The fish reads; the board writes itself in its wake. Lines that arrive
+ *  together (one turn's board event) cascade LAY_STEP apart, and nothing the
+ *  tutor wrote waits longer than LAY_LATEST to start being readable. A line
+ *  that arrives on its own — a figure drawn seconds into the answer — starts
+ *  its own burst. Nothing about the TEXT waits on any of this: it is in the
+ *  document either way, and the mask's own resting position is fully visible.
+ */
+const LAY_STEP = 130;
+const LAY_LATEST = 620;
+let layTimers = [];
+let burstAt = 0, layFloor = 0;
 
-/** Uncover a line in the ink's wake, at the moment the ink actually gets there.
- *
- *  Not a fixed stagger. The stroke crosses the writing area diagonally, so it
- *  arrives at the top line before the bottom one by an amount that depends on
- *  where the lines happen to sit — which is what "먹물이 지나간 자리에" means. The
- *  geometry is read once, here, off the element that was just laid out.
- *
- *  Nothing about the TEXT waits on this: it is already in the document, and a
- *  line whose moment has passed is simply shown. */
 function lay(line) {
-  if (STILL.matches) return;             // no wipe: .boardline is plain and visible
-  const area = document.querySelector(".writing");
-  if (!area) return;
-  const box = area.getBoundingClientRect();
-  const here = line.getBoundingClientRect();
-  if (!box.height || !here.height) return;
-  // the middle of the line, as a fraction of the area the stroke crosses
-  const mid = (here.top + here.height / 2 - box.top) / box.height;
-  // LEAD it. The ink is underneath now, so the writing can start coming
-  // through as the cloud arrives rather than after it has gone by, and being
-  // early is the right way to be wrong when a student is waiting to read.
-  // Where the ink gets to this line — and never sooner than a beat after the
-  // line above it. On a tall board the geometry does all the work; on a short
-  // one every line sits within a few percent of the same height, the geometry
-  // returns nearly the same moment for all of them, and the cascade collapses
-  // into everything appearing at once. The floor keeps it a sequence exactly
-  // where there is no room for one.
-  const geometric = inkReaches(Math.max(0, Math.min(1, mid))) - 150;
-  const elapsed = performance.now() - passStartedAt;
-  layFloor = Math.max(layFloor + LAY_STEP, elapsed);
-  const when = Math.max(geometric, layFloor);
-  layFloor = when;
-  // Bounded at both ends. Zero below, because a line whose moment has already
-  // passed is simply shown; and a ceiling above, because the delay is derived
-  // from geometry and geometry can put a line anywhere — nothing the tutor has
-  // written may sit invisible for most of a second waiting for a squid.
-  const wait = Math.min(LAY_LATEST, Math.max(0,
-    when - (performance.now() - passStartedAt)));
+  if (STILL.matches) return;             // no wipe: the line is plain and visible
+  const now = performance.now();
+  if (now - burstAt > 900) { burstAt = now; layFloor = -90; }  // first waits 40ms
+  layFloor = Math.min(LAY_LATEST, layFloor + LAY_STEP);
+  const delay = Math.max(0, layFloor);
   line.classList.add("laying");
-  // Quicker than the stroke that is uncovering it, so the writing never lags
-  // visibly behind the thing supposedly making it. Restarted in place first:
-  // an animation declared by a class that was added during a forced layout has
-  // been seen adopting the document's start time rather than its own, which
-  // finishes the wipe before the line is ever painted.
+  // Restarted in place first: an animation declared by a class that was added
+  // during a forced layout has been seen adopting the document's start time
+  // rather than its own, which finishes the wipe before the line is painted.
   line.style.animation = "none";
   void line.getBoundingClientRect();
   line.style.animation = "";
   line.style.setProperty("--lay", ".46s");
-  line.style.animationDelay = `0s, ${wait.toFixed(0)}ms`;
+  line.style.animationDelay = `0s, ${delay.toFixed(0)}ms`;
   // And the mask comes off when it has done its work, so a lesson's worth of
   // steps is not left on a lesson's worth of composited layers. The timer is
-  // the backstop, because a backgrounded tab pauses the animation and onfinish
-  // would then never come at all.
+  // the backstop, because a backgrounded tab pauses the animation and
+  // animationend would then never come.
   // By NAME: `.laying` declares two animations and the other, `inked 0s`,
-  // finishes inside the frame it starts in — a bare animationend listener took
-  // the mask off before the wipe had begun and every line simply appeared.
+  // finishes inside the frame it starts in — a bare animationend listener
+  // took the mask off before the wipe had begun.
   const done = () => line.classList.add("dry");
   line.addEventListener("animationend", (e) => {
     if (e.animationName === "laydown") done();
   });
-  inkTimers.push(setTimeout(done, wait + 1200));
+  layTimers.push(setTimeout(done, delay + 1200));
+}
+
+/** Whatever is mid-wipe is simply shown. For the moments no wipe may be
+ *  trusted to finish: a backgrounded tab, a motion-preference flip, a stop. */
+function dryBoard() {
+  layTimers.forEach(clearTimeout);
+  layTimers = [];
+  for (const el of document.querySelectorAll(".laying:not(.dry)"))
+    el.classList.add("dry");
 }
 
 /** The board shows ONLY what the tutor deliberately wrote (the `board`
-    event) — the whiteboard move behind the spoken hint, typeset. Sentence
-    transcription used to land here too and read as a strange half-solution;
-    sentences live in the chat now, full stop. */
+    event) — the whiteboard move behind the spoken hint, typeset. Sentences
+    live in the chat, full stop. */
 function boardWrite(item) {
   // {expr, note} from the server; a bare string still works
   const expr = ((typeof item === "string" ? item : item && item.expr) || "").trim();
   const note = ((typeof item === "string" ? "" : item && item.note) || "").trim();
   if (!expr || boardSeen.has(expr)) return;
   boardSeen.add(expr);
-  goWrite();                             // the tutor goes and writes it
   const lines = $("boardLines");
   const empty = document.getElementById("boardEmpty");
   if (empty) empty.remove();
@@ -2315,9 +2027,6 @@ function boardWrite(item) {
     line.appendChild(label);
   }
   lines.appendChild(line);
-  // scroll FIRST. lay() keys the reveal to where the line is on screen, and
-  // scrolling to the foot of the board moves it — measuring before the scroll
-  // keyed every reveal to a position the next statement invalidated.
   lines.scrollTop = lines.scrollHeight;
   lay(line);
 }
@@ -2354,15 +2063,20 @@ async function unlockAudio() {
 // followed by the hint, and a barge-in has to be able to throw away the part
 // that has not started playing as well as the part that has.
 //
-// STREAMED SPEECH: one utterance now arrives as MANY small TTS frames (the
-// server ships MP3 chunks while xAI is still rendering the tail), grouped by
+// STREAMED SPEECH: one utterance arrives as MANY small TTS frames (the server
+// ships MP3 chunks while xAI is still rendering the tail), grouped by
 // utterance_id and ordered by seq, the final one flagged last. Playback
-// starts on the FIRST chunk via MediaSource — that is the whole point: the
-// voice begins ~1.3s after synthesis starts instead of after the ~2.5s file.
-// Where MediaSource cannot take mp3, chunks are collected and played whole,
-// which is exactly the old behaviour.
+// starts on the FIRST chunk via MediaSource. Where MediaSource cannot take
+// mp3, chunks are collected and played whole.
+//
+// `audioHold` is the choreography's ONE finger on this queue: while the fish
+// is carrying the final answer home, nothing starts playing. It is set only
+// alongside a heldSay, and every path that clears one clears the other —
+// bounded by the hold timer, so audio can be delayed at most ~1.9 s and
+// never lost.
 let audioQueue = [];                     // Blobs (fallback) and stream objects
 let playingUrl = null;
+let audioHold = false;
 const ttsStreams = new Map();            // utterance_id → in-flight stream
 const MSE_OK = window.MediaSource && MediaSource.isTypeSupported("audio/mpeg");
 
@@ -2406,6 +2120,7 @@ function feedStream(st) {
 }
 
 function playNext() {
+  if (audioHold) return;                 // the fish is carrying this one home
   const item = audioQueue.shift();
   if (!item) { playingUrl = null; return; }
 
@@ -2429,8 +2144,12 @@ function playNext() {
     if (playingUrl !== url) return;      // already dropped by a barge-in
     URL.revokeObjectURL(url);
     playingUrl = null;
-    if (audioQueue.length) { playNext(); return; }
-    sendEvent("playback_done");          // the server reopens the mic after its tail guard
+    if (audioQueue.length && !audioHold) { playNext(); return; }
+    // The utterance that just ended is acknowledged even under a hold: the
+    // server's _say is sequential, so what it is waiting for is THIS line.
+    // A held queue is started by flushHeld when the fish lands.
+    if (!audioQueue.length)
+      sendEvent("playback_done");        // the server reopens the mic after its tail guard
   };
   player.onended = done;
   player.onerror = done;                 // never leave the server waiting
@@ -2441,10 +2160,46 @@ function playNext() {
   });
 }
 
+// --- the held final line ----------------------------------------------------
+// The turn's last word comes home in the fish's mouth: the text and its audio
+// wait for the landing, so the answer is spoken from the conversation and not
+// from halfway across the page. Bounded hard — a flight that never lands
+// (a hidden tab, a resize storm) costs at most HELD_MS, never the answer.
+const HELD_MS = 1900;
+let heldSay = null, heldTimer = null;
+
+function onTutorSays(d) {
+  const away = pf.state === "board" || pf.state === "toBoard" || pf.state === "alert";
+  if (d.final && !STILL.matches && away && !heldSay) {
+    heldSay = d;
+    audioHold = true;
+    heldTimer = setTimeout(flushHeld, HELD_MS);
+    answerReady(flushHeld);
+    return;
+  }
+  addTurn("tutor", d.text);
+}
+
+function flushHeld() {
+  if (heldTimer) { clearTimeout(heldTimer); heldTimer = null; }
+  const held = heldSay;
+  heldSay = null;
+  if (held) addTurn("tutor", held.text);
+  if (audioHold) {
+    audioHold = false;
+    if (!playingUrl) playNext();
+  }
+}
+
 /** The student cut in. Stop mid-word and drop everything not yet played.
     `announce` is false when the page itself is stopping (연결 종료), because
     "끼어들기" is a report about the student and they did not do it. */
 function stopSpeaking(announce = true) {
+  // whatever was being carried home is shown, silently — the words were said
+  // to be coming, and a barge-in must not disappear them from the record
+  if (heldTimer) { clearTimeout(heldTimer); heldTimer = null; }
+  audioHold = false;
+  if (heldSay) { addTurn("tutor", heldSay.text); heldSay = null; }
   const player = $("player");
   const dropped = audioQueue.length + ttsStreams.size;
   audioQueue = [];
@@ -2458,7 +2213,8 @@ function stopSpeaking(announce = true) {
   player.removeAttribute("src");
   player.load();
   reveal.finish();                       // a line nobody is hearing is not still arriving
-  clearInk();
+  dryBoard();
+  settleHome();
   // Deliberately no playback_done: the server already knows, it told us to stop.
   if (announce)
     addTurn("err", dropped ? `끼어들기: 재생을 멈추고 대기 중이던 ${dropped}개를 지웠어요` : "끼어들기: 재생을 멈췄어요");
@@ -2534,9 +2290,9 @@ function scrollChat() {
 // The tutor's line is REVEALED, not posted. The server sends the whole
 // sentence in one tutor_says (it has to: the same text is being spoken, and
 // the TTS wants it whole), so this is the page's own doing — reading speed
-// out of a string that is already here. It is worth it because the
-// alternative is a bubble that appears fully formed after a silence, which
-// reads as a stall even when the audio started at the same instant.
+// out of a string that is already here. The alternative is a bubble that
+// appears fully formed after a silence, which reads as a stall even when the
+// audio started at the same instant.
 //
 // Prose is typed; a formula appears whole, because half a typeset equation is
 // worse than no equation. Nothing here can lose a message: the text is in the
@@ -2614,12 +2370,8 @@ function addTurn(kind, text) {
     div.querySelector(".who").textContent = kind === "you" ? "나" : "튜터";
     currentDialogue.push({ kind, text });  // this problem's transcript-so-far
   }
-  // the thinking bubble stays glued to the end while it is visible
-  const thinking = $("thinking");
-  chat.insertBefore(div, thinking.hidden ? null : thinking);
+  chat.appendChild(div);
   if (kind === "tutor") {
-    // the answer has begun: the "…" has done its job
-    thinking.hidden = true;
     reveal.start(div, div.querySelector(".bubble"), mathify(text).frag);
   } else if (kind === "you") {
     div.querySelector(".bubble").append(mathify(text).frag);
@@ -2628,7 +2380,7 @@ function addTurn(kind, text) {
 }
 
 function note(text) {
-  const turns = $("chat").querySelectorAll(".msg:not(#thinking)");
+  const turns = $("chat").querySelectorAll(".msg");
   const last = turns[turns.length - 1];
   if (!last) return;
   const meta = document.createElement("div");
@@ -2645,10 +2397,10 @@ $("orb").addEventListener("click", start);
 $("hangup").addEventListener("click", hangUp);
 
 // --- 6. the water ----------------------------------------------------------
-// Eight bubbles, sized and paced apart so they never read as a row, and kept
-// away from the middle where the board sits. Built here rather than in markup
-// because the only thing that varies is numbers, and the CSS keyframe is
-// already gated on prefers-reduced-motion.
+// Bubbles: few, bright, paced apart so they never read as a row. Motes: many,
+// faint, on much longer clocks — the dust that makes water look like water.
+// Built here because the only thing that varies is numbers, and the keyframes
+// are already gated on prefers-reduced-motion.
 for (const [size, left, seconds, delay] of
      [[13, 5, 24, 0], [7, 12, 30, 7], [18, 21, 26, 13], [9, 30, 33, 4],
       [11, 70, 28, 18], [16, 81, 23, 9], [7, 88, 31, 2], [12, 95, 27, 15]]) {
@@ -2658,20 +2410,30 @@ for (const [size, left, seconds, delay] of
     `animation-duration:${seconds}s;animation-delay:-${delay}s`;
   document.querySelector(".bubbles").appendChild(bubble);
 }
+for (const [size, left, seconds, delay] of
+     [[3, 8, 52, 3], [2, 16, 61, 21], [3.5, 26, 47, 9], [2, 38, 66, 31],
+      [2.5, 47, 55, 14], [3, 58, 49, 26], [2, 66, 63, 5], [3.5, 76, 51, 18],
+      [2, 84, 58, 38], [3, 92, 46, 11], [2.5, 55, 68, 44], [2, 33, 57, 50]]) {
+  const mote = document.createElement("i");
+  mote.style.cssText =
+    `width:${size}px;height:${size}px;left:${left}%;` +
+    `animation-duration:${seconds}s;animation-delay:-${delay}s`;
+  document.querySelector(".motes").appendChild(mote);
+}
 
-// --- 7. keeping the tutor where it belongs ---------------------------------
-// It is placed against live geometry, so anything that moves the geometry has
-// to place it again — without a transition, or the character would swim to
-// catch up with a window that has already stopped moving.
-goHome(0);
-// Two ways the pass can be left half-finished, and both end with something
-// unreadable if nothing catches them: a backgrounded tab pauses CSS
-// animations while the mask that is hiding a line stays exactly where it is,
-// and toggling the OS motion preference mid-flight leaves the character
-// somewhere no rule owns. Both land the same way — stop, show everything, go
-// home.
-addEventListener("visibilitychange", () => { if (document.hidden) clearInk(); });
-STILL.addEventListener("change", () => { clearInk(); goHome(0); });
+// --- 7. keeping the fish where it belongs ----------------------------------
+landHome(0);
+// A backgrounded tab pauses CSS animations while the mask hiding a line stays
+// exactly where it is, and a motion-preference flip mid-flight leaves the
+// character somewhere no rule owns. Both land the same way — show everything,
+// go home, release anything held.
+addEventListener("visibilitychange", () => {
+  if (!document.hidden) return;
+  dryBoard();
+  flushHeld();
+  settleHome(true);
+});
+STILL.addEventListener("change", () => { dryBoard(); flushHeld(); settleHome(true); });
 addEventListener("resize", reperch);
 new ResizeObserver(reperch).observe($("chatPanel"));
 // the panels are inside a scrolling page under 1000px

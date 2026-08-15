@@ -230,8 +230,14 @@ class BrowserSession(Session):
 
         return queue, stop, asyncio.create_task(asyncio.to_thread(pump))
 
-    async def _say(self, text: str) -> bool:
-        """Returns whether the student heard any of this line — see _speak."""
+    async def _say(self, text: str, final: bool = False) -> bool:
+        """Returns whether the student heard any of this line — see _speak.
+
+        `final` rides along on the tutor_says event: it is the browser's cue
+        that this line ends the turn, so the mascot swims home before it plays.
+        Fillers and mid-turn reactions arrive without it and are spoken from
+        wherever the character already is.
+        """
         # a hint_request can arrive before any audio (button-driven client)
         taker = await self._ensure_taker()
         if self._interrupted:
@@ -248,7 +254,9 @@ class BrowserSession(Session):
             stop.set()
             await pump_task
             return False
-        await self.ws.send(make_event("tutor_says", {"text": mathspeak.displayable(text)}))
+        await self.ws.send(make_event(
+            "tutor_says", {"text": mathspeak.displayable(text), "final": final}
+        ))
 
         if first is None:  # echo mode / no TTS configured: text only, keep talking
             await pump_task
