@@ -992,101 +992,95 @@
     <div id="tutor">
       <div class="drift"><div class="pose"><div class="size">
         <svg viewBox="0 0 200 176" focusable="false">
-          <defs>
-            <radialGradient id="pfBody" cx="40%" cy="32%" r="78%">
-              <stop offset="0" stop-color="#fffdf2"/>
-              <stop offset=".45" stop-color="#fbeccb"/>
-              <stop offset=".78" stop-color="#eed7a6"/>
-              <stop offset="1" stop-color="#ddbf85"/>
-            </radialGradient>
-            <radialGradient id="pfBelly" cx="50%" cy="62%" r="60%">
-              <stop offset="0" stop-color="#fffdf6" stop-opacity=".95"/>
-              <stop offset="1" stop-color="#fffdf6" stop-opacity="0"/>
-            </radialGradient>
-            <linearGradient id="pfSpike" x1="0" y1="20" x2="0" y2="52"
-                            gradientUnits="userSpaceOnUse">
-              <stop offset="0" stop-color="#f4dda8"/>
-              <stop offset="1" stop-color="#dcbd83"/>
-            </linearGradient>
-            <linearGradient id="pfFin" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stop-color="#ffc07e"/>
-              <stop offset="1" stop-color="#ff9d54"/>
-            </linearGradient>
-            <radialGradient id="pfIris" cx="38%" cy="34%" r="80%">
-              <stop offset="0" stop-color="#33465c"/>
-              <stop offset=".55" stop-color="#1c2b3c"/>
-              <stop offset="1" stop-color="#101a26"/>
-            </radialGradient>
-          </defs>
-          <g class="flip">
+          <!-- Flat cartoon cel after the reference sheet: bold warm outlines,
+               orange body, a darker saddle with speckles, big white eyes.
+               Same classed skeleton as before — the CSS and the choreography
+               animate CLASSES, so only the drawing changed hands. -->
+          <g class="flip" stroke-linejoin="round" stroke-linecap="round">
             <!-- the spikes, one cone rotated round the body's centre -->
-            <g class="pf-spikes" fill="url(#pfSpike)">
-              <path d="M94 52 L100 20 L106 52 Z"/>
-              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(30 100 92)"/>
-              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(60 100 92)"/>
-              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(90 100 92)"/>
-              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(120 100 92)"/>
-              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(150 100 92)"/>
-              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(180 100 92)"/>
-              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(210 100 92)"/>
-              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(240 100 92)"/>
-              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(270 100 92)"/>
-              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(300 100 92)"/>
-              <path d="M94 52 L100 20 L106 52 Z" transform="rotate(330 100 92)"/>
+            <g class="pf-spikes" fill="#f58a4b" stroke="#241610" stroke-width="3.5">
+              <path d="M91 54 L100 24 L109 54 Z"/>
+              <path d="M91 54 L100 24 L109 54 Z" transform="rotate(30 100 92)"/>
+              <path d="M91 54 L100 24 L109 54 Z" transform="rotate(60 100 92)"/>
+              <path d="M91 54 L100 24 L109 54 Z" transform="rotate(90 100 92)"/>
+              <path d="M91 54 L100 24 L109 54 Z" transform="rotate(120 100 92)"/>
+              <path d="M91 54 L100 24 L109 54 Z" transform="rotate(150 100 92)"/>
+              <path d="M91 54 L100 24 L109 54 Z" transform="rotate(180 100 92)"/>
+              <path d="M91 54 L100 24 L109 54 Z" transform="rotate(210 100 92)"/>
+              <path d="M91 54 L100 24 L109 54 Z" transform="rotate(240 100 92)"/>
+              <path d="M91 54 L100 24 L109 54 Z" transform="rotate(270 100 92)"/>
+              <path d="M91 54 L100 24 L109 54 Z" transform="rotate(300 100 92)"/>
+              <path d="M91 54 L100 24 L109 54 Z" transform="rotate(330 100 92)"/>
             </g>
 
             <!-- fins first where they tuck behind the body -->
-            <g class="pf-fin tail" fill="url(#pfFin)" opacity=".95">
-              <path d="M150 82 Q176 66 181 88 Q176 108 150 100 Q156 91 150 82 Z"/>
+            <g class="pf-fin tail" fill="#f58a4b" stroke="#241610" stroke-width="3.5">
+              <path d="M148 78 L188 62 L172 92 L188 116 L150 102 Q158 90 148 78 Z"/>
+              <path d="M160 82 L174 74 M162 98 L176 106" fill="none"
+                    stroke="#d9601f" stroke-width="2.5"/>
             </g>
-            <g class="pf-fin dorsal" fill="url(#pfFin)" opacity=".92">
-              <path d="M96 49 Q101 27 117 33 Q109 44 105 51 Z"/>
+            <g class="pf-fin dorsal" fill="#f58a4b" stroke="#241610" stroke-width="3.5">
+              <path d="M94 50 L106 24 L120 44 Z"/>
             </g>
 
-            <!-- the body: one soft ball of cream, lit from upper left -->
+            <!-- the body: one flat orange oval under a darker saddle -->
             <g class="pf-body">
-              <ellipse cx="100" cy="92" rx="58" ry="46" fill="url(#pfBody)"/>
-              <ellipse cx="95" cy="112" rx="45" ry="25" fill="url(#pfBelly)"/>
-              <!-- freckles along its back -->
-              <g fill="#c9a163" opacity=".5">
-                <circle cx="82" cy="59" r="2.8"/>
-                <circle cx="101" cy="54" r="2.2"/>
-                <circle cx="119" cy="61" r="2.8"/>
-                <circle cx="92" cy="70" r="1.8"/>
-                <circle cx="111" cy="72" r="2.1"/>
-                <circle cx="130" cy="76" r="1.9"/>
+              <ellipse cx="100" cy="92" rx="58" ry="46"
+                       fill="#f9945a" stroke="#241610" stroke-width="4.5"/>
+              <ellipse cx="94" cy="112" rx="42" ry="22" fill="#fbaf7e"/>
+              <path d="M52 76 Q66 48 100 48 Q134 48 148 72 Q130 60 114 64
+                       Q100 52 84 62 Q68 62 52 76 Z" fill="#ee7433"/>
+              <!-- the speckles the saddle wears -->
+              <g fill="#7a3512">
+                <circle cx="78" cy="58" r="2.5"/>
+                <circle cx="95" cy="54" r="2"/>
+                <circle cx="112" cy="58" r="2.6"/>
+                <circle cx="88" cy="66" r="1.8"/>
+                <circle cx="104" cy="64" r="2"/>
+                <circle cx="124" cy="68" r="2.2"/>
               </g>
             </g>
 
             <!-- the near pectoral fin, over the belly -->
-            <g class="pf-fin pect" fill="url(#pfFin)" opacity=".9">
-              <path d="M97 104 Q88 122 104 125 Q107 113 103 104 Z"/>
+            <g class="pf-fin pect" fill="#f58a4b" stroke="#241610" stroke-width="3.5">
+              <path d="M90 116 L100 140 L112 118 Z"/>
             </g>
 
-            <!-- the face: two big dark eyes that can look, a small mouth
-                 that can gasp, a blush of the orange -->
+            <!-- the face: two big white eyes that can look, a smile that
+                 can gasp open -->
             <g class="pf-face">
               <g class="pf-eye">
-                <circle cx="64" cy="80" r="17.5" fill="#fff8e8" opacity=".92"/>
+                <circle cx="62" cy="81" r="19" fill="#fff" stroke="#241610" stroke-width="4"/>
                 <g class="pf-pupil"><g class="pf-iris">
-                  <circle cx="64" cy="80" r="14" fill="url(#pfIris)"/>
-                  <circle cx="59" cy="75" r="4.6" fill="#fff" opacity=".95"/>
-                  <circle cx="69" cy="85" r="1.9" fill="#fff" opacity=".45"/>
+                  <ellipse cx="62" cy="82" rx="9" ry="11.5" fill="#1b0f0a"/>
+                  <circle cx="58" cy="76" r="2.6" fill="#fff"/>
                 </g></g>
               </g>
               <g class="pf-eye">
-                <circle cx="106" cy="76" r="19" fill="#fff8e8" opacity=".92"/>
+                <circle cx="107" cy="74" r="15" fill="#fff" stroke="#241610" stroke-width="4"/>
                 <g class="pf-pupil"><g class="pf-iris">
-                  <circle cx="106" cy="76" r="15.2" fill="url(#pfIris)"/>
-                  <circle cx="100.5" cy="70.5" r="5" fill="#fff" opacity=".95"/>
-                  <circle cx="112" cy="82" r="2.1" fill="#fff" opacity=".45"/>
+                  <ellipse cx="107" cy="75" rx="7.5" ry="9.5" fill="#1b0f0a"/>
+                  <circle cx="104" cy="70" r="2.2" fill="#fff"/>
                 </g></g>
               </g>
-              <path class="pf-mouth-smile" d="M50 103 Q57 109 64 103"
-                    fill="none" stroke="#8a5f33" stroke-width="2.6" stroke-linecap="round"/>
-              <ellipse class="pf-mouth-o" cx="57" cy="105" rx="4.6" ry="5.6" fill="#5d3f26"/>
-              <ellipse cx="46" cy="93" rx="6" ry="4" fill="#ff9d5c" opacity=".28"/>
-              <ellipse cx="121" cy="92" rx="5" ry="3.4" fill="#ff9d5c" opacity=".16"/>
+              <path class="pf-mouth-smile" d="M42 100 Q60 114 80 102"
+                    fill="none" stroke="#241610" stroke-width="4"/>
+              <g class="pf-mouth-o">
+                <path d="M46 100 Q60 113 76 101 Q66 122 46 100 Z"
+                      fill="#3a1610" stroke="#241610" stroke-width="3"/>
+                <ellipse cx="59" cy="110" rx="7" ry="3.6" fill="#f2839b"/>
+              </g>
+            </g>
+
+            <!-- the quill-marks the puffed ball wears on its face: same
+                 class as the spikes, so they swing out on the same puff -->
+            <g class="pf-spikes" fill="none" stroke="#a34a16" stroke-width="3">
+              <path d="M64 76 l7 7 7 -7"/>
+              <path d="M88 62 l7 7 7 -7"/>
+              <path d="M118 84 l7 7 7 -7"/>
+              <path d="M72 106 l7 7 7 -7"/>
+              <path d="M102 112 l7 7 7 -7"/>
+              <path d="M128 98 l7 7 7 -7"/>
             </g>
           </g>
         </svg>
