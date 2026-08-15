@@ -1495,6 +1495,25 @@ class Session:
         shorter, longer = sorted((a, b), key=len)
         return len(shorter) >= 20 and longer.startswith(shorter)
 
+    def _verified_steps(self, ctx: ProblemContext) -> list[str]:
+        """Reference expressions for the steps the student has COMPLETED.
+
+        The diagnosis already says how far they are (last_correct_step), and
+        every step at or below it is theirs — written on the page, or said
+        aloud and sympy-checked on the way in. The drawing hand gets this
+        list because a photograph cannot show a spoken derivation: without
+        it, a tangent the student earned out loud never reached the board.
+        Nothing past the frontier leaves this method.
+        """
+        state = self.store.get_state()
+        if ctx.reference is None or state is None:
+            return []
+        return [
+            s.expression
+            for s in ctx.reference.steps
+            if s.idx <= state.last_correct_step and s.expression
+        ]
+
     def _clearly_different_problem(self, rec: Recognition) -> bool:
         """POSITIVE evidence that this is another problem: equations that
         parse on both sides, compare pair by pair, and disagree. Anything
@@ -1715,10 +1734,18 @@ class Session:
         ctx = self.ctx
         if self.deps.illustrator is None or ctx is None:
             return
-        if not ctx.scene and not illustrator.wants_a_picture(hint):
-            # Nothing drawn yet and the sentence never mentions a shape. Once
-            # a grid IS open it is kept current every turn, because what
-            # changes it is often the student's answer, not the tutor's words.
+        verified = self._verified_steps(ctx)
+        if (
+            not ctx.scene
+            and not illustrator.wants_a_picture(hint)
+            and not any(illustrator.drawable(v) for v in verified)
+        ):
+            # Nothing drawn yet, the sentence never mentions a shape, and the
+            # student has not earned a curve worth showing. Once a grid IS
+            # open it is kept current every turn, because what changes it is
+            # often the student's answer, not the tutor's words — and a newly
+            # verified LINE opens one even mid-algebra, because "l을 구했는데
+            # l이 안 그려져 있다" is a board failing at its one job.
             return
         spec = await asyncio.to_thread(
             self.deps.illustrator.draw,
@@ -1732,6 +1759,7 @@ class Session:
             scene=list(ctx.scene),
             span=ctx.span,
             student_said=student_said,
+            verified=verified,
         )
         if spec is None or not spec.curves:
             return

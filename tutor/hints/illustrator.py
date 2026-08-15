@@ -20,8 +20,11 @@ model's, because only it can read the question.
 
 It is fed the same diet as the phrasing model — problem, work, diagnosis, and
 what is already drawn and written — and deliberately NOT the reference
-solution. The leak guard still screens the result, but a model that never saw
-the answer cannot draw it by accident.
+solution, with one carve-out: the VERIFIED PREFIX, the steps the orchestrator
+has already graded as done. A tangent the student derived out loud is theirs
+now, and a drawing hand that only believes the photograph refuses to draw the
+very line the lesson just earned. The leak guard still screens the result,
+and everything past the student's frontier stays unseen.
 """
 
 from __future__ import annotations
@@ -47,6 +50,17 @@ _VISUAL = re.compile(
 
 def wants_a_picture(hint: str) -> bool:
     return bool(_VISUAL.search(hint or ""))
+
+
+# A verified step whose expression IS a curve — y = …, f(x) = …, f'(x) = … —
+# is a reason to open a scene even when the current sentence is pure algebra:
+# the student just earned a line the board can show. Sequence and scalar
+# steps (a_1*r³ = 2, g'(1) = -4) are not.
+_CURVE_LIKE = re.compile(r"\by\s*=|[A-Za-z]['′]?\s*\(\s*x\s*\)\s*=")
+
+
+def drawable(expression: str) -> bool:
+    return bool(_CURVE_LIKE.search(expression or ""))
 
 
 class Curve(BaseModel):
@@ -98,11 +112,14 @@ problem's own functions, and a line THEY have just found correctly. Never a
 function that only exists in the solution they have not reached.
 
 "Established" means WRITTEN — in their work or on the tutor's board, quoted
-to you above. You are able to derive the finished result yourself; doing so
-and drawing it is the worst failure this job has. A tangent line the student
-is still deriving, drawn finished on the board, IS the answer, and "its
-equation is complete" is a judgement you are never allowed to make from your
-own working — only from theirs.
+to you above — or VERIFIED: lines listed under 튜터가 검증한 식 are steps the
+student has already completed and the tutor has machine-checked, including
+answers said out loud that no photograph of the page can show. Those are
+theirs now; draw the ones the scene needs. You are able to derive a finished
+result yourself; doing so and drawing it is the worst failure this job has.
+A tangent line the student is still deriving, drawn finished on the board,
+IS the answer, and "its equation is complete" is a judgement you are never
+allowed to make from your own working — only from theirs or the verified list.
 
 LABEL each curve with the name the problem uses (l, m, f, g) when it has one.
 
@@ -144,6 +161,7 @@ class Illustrator:
         scene: list[Curve] | None = None,
         span: tuple[float, float] | None = None,
         student_said: str | None = None,
+        verified: list[str] | None = None,
     ) -> FigureSpec | None:
         parts = [f"튜터가 방금 말한 힌트: {hint}"]
         if student_said:
@@ -152,6 +170,14 @@ class Illustrator:
         parts += [f"문제: {problem_text}", f"문제의 식: {equations}"]
         if student_work:
             parts.append(f"학생이 쓴 풀이: {' / '.join(student_work)}")
+        if verified:
+            # the orchestrator's word, not the model's guess: these steps are
+            # DONE — graded from the page or from a spoken, sympy-checked
+            # claim. This is what lets l be drawn after it was derived aloud.
+            parts.append(
+                "튜터가 검증한 식 (학생이 이미 끝낸 단계 — established로 취급): "
+                + " / ".join(verified)
+            )
         if board:
             parts.append(f"칠판에 적힌 식: {' / '.join(board)}")
         if scene:

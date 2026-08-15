@@ -352,3 +352,68 @@ class TestTheStudentsWindow:
         await self.poke(session, "figure_pan", {"dx": "no", "dy": None})
         await self.poke(session, "figure_reset")     # nothing to reset
         assert len(session.ws.events) == before
+
+
+TANGENT_REF = ReferenceSolution(
+    steps=[
+        SolutionStep(idx=1, description="접선 l의 기울기 구하기", expression="f'(1) = -2"),
+        SolutionStep(idx=2, description="l의 방정식 쓰기", expression="l: y = -2*x - 4"),
+        SolutionStep(idx=3, description="교점 구하기", expression="-2*x - 4 = -4*x + 10, x = 7"),
+    ],
+    final_answer=Answer(kind="SCALAR", value="49"),
+    concepts=["differentiation"], verified=True, origin="db",
+)
+
+
+class DrawRecorder:
+    def __init__(self):
+        self.kw = None
+
+    def draw(self, **kw):
+        self.kw = kw
+        return None
+
+
+class TestAVerifiedLineReachesTheBoard:
+    """A tangent derived OUT LOUD is the student's now, and no photograph of
+    the page can show it: the orchestrator passes the verified prefix of the
+    reference to the drawing hand, and a newly earned CURVE opens the scene
+    even when the sentence being spoken is pure algebra."""
+
+    def with_recorder(self, db, last_correct_step):
+        from tutor.state.models import StudentState
+        session, llm, _ = build(db, [{"curves": [], "why": "t"}])
+        session.deps.illustrator = DrawRecorder()
+        session.ctx.reference = TANGENT_REF
+        session.store.set_state(StudentState(
+            current_step="t", last_correct_step=last_correct_step, status="CORRECT",
+        ))
+        return session, session.deps.illustrator
+
+    async def test_an_earned_curve_opens_the_scene_mid_algebra(self, db):
+        session, recorder = self.with_recorder(db, last_correct_step=2)
+
+        await session._illustrate(
+            Decision(Action.WAIT, 0, 3, None, "confirmed"),
+            "이제 g'(x)를 구해 볼까요?", (), "p1",       # no shape word in it
+        )
+
+        assert recorder.kw is not None                  # the hand was called
+        assert recorder.kw["verified"] == ["f'(1) = -2", "l: y = -2*x - 4"]
+
+    async def test_nothing_past_the_frontier_is_handed_over(self, db):
+        session, recorder = self.with_recorder(db, last_correct_step=2)
+        await session._illustrate(
+            Decision(Action.WAIT, 0, 3, None, "confirmed"), "그래프를 볼까요?", (), "p1",
+        )
+        assert "x = 7" not in " ".join(recorder.kw["verified"])
+
+    async def test_scalar_steps_do_not_open_a_scene(self, db):
+        # f'(1) = -2 is a number, not a curve: an algebraic sentence with no
+        # drawable step keeps the call off the wire, exactly as before
+        session, recorder = self.with_recorder(db, last_correct_step=1)
+        await session._illustrate(
+            Decision(Action.WAIT, 0, 2, None, "confirmed"),
+            "이제 l의 방정식을 어떻게 쓰면 좋을까요?", (), "p1",
+        )
+        assert recorder.kw is None
