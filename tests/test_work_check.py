@@ -791,3 +791,29 @@ async def test_problem_13_g_prime_confirmation_continues_to_g_prime_at_one(db):
     assert llm.calls.count("evaluate") == 0
     latest = session.store.get_history(problem_hash="p13")[-1]
     assert latest.step == 4
+
+
+async def test_a_forward_question_is_on_the_record(db):
+    """The confirm line asks a real question, so it leaves a pending one.
+
+    Live: "맞아요! ... 이제 g의 1을 계산해 볼까요?" left no record, the reply
+    "그럼 마이너스 4 맞나?" found no pending question, fell through to the
+    intent LLM, came back NONE — and the tutor sat silent on the very answer
+    it had invited."""
+    session, llm, speaker, ws = build(
+        db, "풀이 맞아?",
+        llm_responses={"recognize": [seen(["a = 2", "b = a + 1"])]},
+    )
+    session.ctx.reference = REF3          # next step "c 구하기" is noun-form
+    ask_l1(session)
+
+    await session._handle_utterance(PCM, 16000)
+
+    pending = session.store.pending_hint("p1")
+    assert pending is not None
+    assert pending.step == 3              # the step the line pointed at
+    assert pending.hint_text.startswith("맞아요!")
+    # and the reply to it is decided by rule, never by a guessing model
+    from tutor.speech.intent import rule_intent
+    assert rule_intent("그럼 마이너스 4 맞나?", has_problem=True,
+                       has_pending=True) == "ANSWER"

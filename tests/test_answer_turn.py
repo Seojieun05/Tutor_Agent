@@ -815,7 +815,13 @@ class TestConfirmedWorkPointsForward:
 
     def line(self, step, reference):
         from tutor.server.session import Session
-        return Session._confirmed_line(self.state(step), reference)
+        text, _asked = Session._confirmed_line(self.state(step), reference)
+        return text
+
+    def asked(self, step, reference):
+        from tutor.server.session import Session
+        _text, asked = Session._confirmed_line(self.state(step), reference)
+        return asked
 
     def test_mid_problem_names_the_next_step(self):
         from tutor.knowledge.models import Answer, ReferenceSolution, SolutionStep
@@ -830,6 +836,10 @@ class TestConfirmedWorkPointsForward:
         assert self.line(1, ref) == \
             "맞아요! 여기까지 잘했어요. 이제 점 (1, -6)을 지나는 l의 방정식을 어떻게 쓰면 좋을까요?"
         assert "차례" not in self.line(1, ref)
+        # the forward question is a real question, so it reports the step it
+        # asked about — the caller records it, and the reply lands on a
+        # pending question instead of on silence
+        assert self.asked(1, ref) == 2
 
     def test_a_finished_problem_gets_the_congratulation(self):
         from tutor.knowledge.models import Answer, ReferenceSolution, SolutionStep
