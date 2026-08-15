@@ -897,3 +897,101 @@ class TestADiagnosedMistakeOutranksBoilerplate:
         text = gen.generate(decision, match, None, rec, history=[])
         assert str(text) != self.CONCEPT_LINE
         assert "phrase" in llm.calls
+
+
+class TestAPrewrittenLineServesFirst:
+    """A hint written at warm time for THIS problem's THIS step outranks the
+    conjugated label and the concept template — model quality at template
+    price — but never a diagnosed misconception, never a TEMPLATE-tier
+    cousin (different numbers), and never twice."""
+
+    LINE = "접선의 기울기가 이 곡선 어디에 숨어 있는지 살펴볼까요?"
+
+    def ready(self, db, tier=Tier.EXACT):
+        from tutor.knowledge.models import Problem
+        problem = Problem(
+            id="pw-1", problem_type="derivative_applications",
+            problem_text="접선 문제", equations=[],
+            answer=Answer(kind="SCALAR", value="1"),
+            concepts=["differentiation"], verified=True,
+        )
+        db.save_prewritten_hint("pw-1", 1, 1, self.LINE)
+        llm = EchoLLMClient()
+        gen = HintGenerator(llm, db)
+        rec = Recognition(problem_text="접선 문제", equations=[],
+                          concepts=["differentiation"], confidence=0.95)
+        match = MatchResult(tier=tier, concepts=["differentiation"], problem=problem)
+        return gen, llm, rec, match
+
+    def decision(self, misconception=None):
+        return Decision(Action.SOCRATIC_QUESTION, 1, 1, misconception, "t")
+
+    def test_the_written_line_is_served_without_a_model(self, db):
+        gen, llm, rec, match = self.ready(db)
+        text = gen.generate(self.decision(), match, None, rec, history=[])
+        assert str(text) == self.LINE
+        assert llm.calls == []
+
+    def test_a_template_tier_cousin_never_reads_it(self, db):
+        # same shape, different numbers: the prewritten words may name values
+        gen, llm, rec, match = self.ready(db, tier=Tier.TEMPLATE)
+        text = gen.generate(self.decision(), match, None, rec, history=[])
+        assert str(text) != self.LINE
+
+    def test_a_diagnosed_misconception_still_goes_to_the_model(self, db):
+        gen, llm, rec, match = self.ready(db)
+        text = gen.generate(
+            self.decision("2x의 미분을 2x로 계산"), match, None, rec, history=[]
+        )
+        assert str(text) != self.LINE
+        assert "phrase" in llm.calls
+
+    def test_a_line_already_said_falls_through(self, db):
+        from tutor.store.session_store import HintRecord
+        gen, llm, rec, match = self.ready(db)
+        said = [HintRecord(id=1, problem_hash="h", step=1, level=1,
+                           action="SOCRATIC_QUESTION", hint_text=self.LINE,
+                           effective=None)]
+        text = gen.generate(self.decision(), match, None, rec, history=said)
+        assert str(text) != self.LINE
+
+
+class TestPrewriteScreensItsOwnPen:
+    """prewrite() = the live phrasing path with the clock removed: same
+    screens, one retry, and None rather than a line that fails them."""
+
+    def gear(self, db, phrases):
+        from tutor.knowledge.models import Problem
+        problem = Problem(
+            id="pw-2", problem_type="derivative_applications",
+            problem_text="접선 문제", equations=[],
+            answer=Answer(kind="SCALAR", value="1"),
+            concepts=["differentiation"], verified=True,
+        )
+        reference = ReferenceSolution(
+            steps=[SolutionStep(idx=1, description="기울기 구하기",
+                                expression="f'(1) = -2")],
+            final_answer=Answer(kind="SCALAR", value="1"),
+            concepts=["differentiation"], verified=True, origin="db",
+        )
+        llm = EchoLLMClient({"phrase": phrases})
+        gen = HintGenerator(llm, db)
+        rec = Recognition(problem_text="접선 문제", equations=[], confidence=0.95)
+        return gen, problem, reference, rec
+
+    def test_a_clean_line_is_returned(self, db):
+        gen, problem, reference, rec = self.gear(
+            db, [{"hint": "기울기라는 말이 문제 어디에 숨어 있을까요?"}]
+        )
+        line = gen.prewrite(problem=problem, reference=reference, rec=rec,
+                            step_idx=1, level=1)
+        assert line == "기울기라는 말이 문제 어디에 숨어 있을까요?"
+
+    def test_an_announcing_l1_is_retried_then_dropped(self, db):
+        gen, problem, reference, rec = self.gear(
+            db, [{"hint": "기울기 구하기 차례예요."},
+                 {"hint": "다음 단계는 기울기 구하기예요."}]
+        )
+        line = gen.prewrite(problem=problem, reference=reference, rec=rec,
+                            step_idx=1, level=1)
+        assert line is None

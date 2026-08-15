@@ -17,7 +17,7 @@ from pydantic import BaseModel, field_validator
 from tutor.hints.guard import leaks_answer
 from tutor.knowledge import mathnorm
 from tutor.knowledge.db import KnowledgeDB
-from tutor.knowledge.models import MatchResult, ReferenceSolution
+from tutor.knowledge.models import MatchResult, Problem, ReferenceSolution, Tier
 from tutor.llm.client import LLMClient
 from tutor.policy.engine import Action, Decision
 from tutor.store.session_store import HintRecord
@@ -698,6 +698,34 @@ class HintGenerator:
             ):
                 return continuation
 
+        # 0) A line written for THIS problem's THIS step ahead of time —
+        # phrased at warm time by the same model and prompt the live path
+        # uses, screened by the same guards then and re-screened now, and
+        # readable by a human before any lesson. Model quality at template
+        # price. Only an EXACT match may serve it (a TEMPLATE-tier cousin
+        # carries different numbers), a diagnosed misconception still takes
+        # its turn to the live model, and a line already said this problem
+        # falls through to the ladder below like everything else.
+        if (
+            not partial
+            and not decision.misconception
+            and match.tier is Tier.EXACT
+            and match.problem is not None
+        ):
+            written = self.db.prewritten_hint(
+                match.problem.id, decision.target_step, decision.level
+            )
+            if (
+                written
+                and written not in given
+                and not (decision.level == 1 and announces_step(written))
+                and not mentions_future_step(written, reference, decision.target_step)
+                and (reference is None or not leaks_answer(
+                    written, reference, decision.target_step, visible_to_student(rec)
+                ))
+            ):
+                return written
+
         # A verified noun-form step can produce the weakest, most natural L1
         # without another model call.  This keeps problem 13 stable: step 3 is
         # invited as "g(x)가 두 식의 곱인데 어떻게 미분할까요?", not announced
@@ -856,6 +884,54 @@ class HintGenerator:
             log.info("a board line would leak the answer; the board stays empty")
             board = ()
         return _with_board(text, board)
+
+    def prewrite(
+        self,
+        *,
+        problem: Problem,
+        reference: ReferenceSolution,
+        rec: Recognition,
+        step_idx: int,
+        level: int,
+    ) -> str | None:
+        """Write one L1/L2 line for a KNOWN problem's KNOWN step, off the clock.
+
+        The live phrasing path with the clock removed: same prompt, same
+        model, same screens, retried once when a screen trips — but run at
+        warm time, so the lesson pays nothing and a human can read every
+        line before a student hears one. Returns None rather than a line
+        that fails its screens; the runtime ladder covers the gap.
+        """
+        decision = Decision(
+            Action.SOCRATIC_QUESTION if level == 1 else Action.CONCEPT_HINT,
+            level, step_idx, None, "prewrite",
+        )
+        match = MatchResult(
+            tier=Tier.EXACT, concepts=list(problem.concepts),
+            problem=problem, reference=reference,
+        )
+        slots = self._slots(decision, match, reference)
+        seen = visible_to_student(rec)
+
+        def screened(text: str) -> str | None:
+            text = strip_leading_acknowledgement(" ".join(text.split()))
+            if (
+                not text
+                or (level == 1 and announces_step(text))
+                or mentions_future_step(text, reference, step_idx)
+                or leaks_answer(text, reference, step_idx, seen)
+            ):
+                return None
+            return text
+
+        text, _board = self._phrase(decision, match, slots, [], rec, reference)
+        line = screened(text)
+        if line is None:
+            text, _board = self._phrase(
+                decision, match, slots, [], rec, reference, stronger=True
+            )
+            line = screened(text)
+        return line
 
     def write_preflight(self, concept_name: str) -> str:
         """The category line for a concept the DB has never described.

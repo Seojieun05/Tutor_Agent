@@ -49,6 +49,15 @@ CREATE TABLE IF NOT EXISTS hint_templates (
 CREATE TABLE IF NOT EXISTS concept_preflight (
     concept_id TEXT PRIMARY KEY, line TEXT NOT NULL
 );
+-- A hint written AHEAD OF TIME for one problem's one step at one level —
+-- phrased at warm time by the same model and prompt the live path uses,
+-- screened by the same guards, and readable by a human before any lesson.
+-- The runtime serves it verbatim: model quality at template price.
+CREATE TABLE IF NOT EXISTS prewritten_hints (
+    problem_id TEXT NOT NULL, step INTEGER NOT NULL, level INTEGER NOT NULL,
+    hint_text TEXT NOT NULL,
+    PRIMARY KEY (problem_id, step, level)
+);
 """
 
 
@@ -174,6 +183,31 @@ class KnowledgeDB:
         self._conn.execute(
             "INSERT OR REPLACE INTO concept_preflight VALUES (?, ?)",
             (concept_id, line.strip()),
+        )
+        self._conn.commit()
+
+    def prewritten_hint(self, problem_id: str, step: int, level: int) -> str | None:
+        """The line written for exactly this problem, step and level — if any."""
+        row = self._conn.execute(
+            "SELECT hint_text FROM prewritten_hints "
+            "WHERE problem_id = ? AND step = ? AND level = ?",
+            (problem_id, step, level),
+        ).fetchone()
+        return row[0] if row else None
+
+    def save_prewritten_hint(
+        self, problem_id: str, step: int, level: int, text: str
+    ) -> None:
+        self._conn.execute(
+            "INSERT OR REPLACE INTO prewritten_hints VALUES (?, ?, ?, ?)",
+            (problem_id, step, level, text.strip()),
+        )
+        self._conn.commit()
+
+    def clear_prewritten_hints(self, problem_id: str) -> None:
+        """Steps changed → every line written against them is stale."""
+        self._conn.execute(
+            "DELETE FROM prewritten_hints WHERE problem_id = ?", (problem_id,)
         )
         self._conn.commit()
 

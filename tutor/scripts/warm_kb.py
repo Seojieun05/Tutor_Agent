@@ -232,6 +232,9 @@ def presolve(db, llm, key: str, entries: dict) -> bool:
         # ONE solution, or verified_solution picks whichever row it meets first
         db._conn.execute("DELETE FROM solutions WHERE problem_id = ?", (pid,))
         db.insert_solution(pid, reference, verified=True)
+        # hints written against the OLD steps are stale the moment the steps
+        # change; --hints refills the gap on its next run
+        db.clear_prewritten_hints(pid)
         say(f"  stored {pid}: {len(equations)} equation(s)")
     say(f"  {key} is verified KB now — the solver will not run for it again")
     return True
@@ -262,6 +265,77 @@ def seed_hint_templates(db, entries: dict) -> int:
         n += 1
     if n:
         say(f"seeded {n} hint template(s)")
+    return n
+
+
+def prewrite_hints(db, gen, entries: dict, workers: int = 6) -> int:
+    """L1/L2 for every step of every stored presolve problem, ahead of time.
+
+    The live phrasing path with the clock removed (HintGenerator.prewrite):
+    same LearnLM prompt, same model, same screens — run here so the lesson
+    serves model-written lines at template price, and so every line can be
+    READ before a student hears one (they print below). Idempotent: rows
+    that already exist are kept; editing a problem's steps clears its rows
+    (see presolve) and this refills them.
+    """
+    from tutor.vision.recognizer import Recognition
+
+    jobs = []          # (key, rec, reference, step_idx, level) — one per line
+    targets = {}       # key → every variant pid the line is stored under
+    for key in sorted(k for k in entries if k != "hint_templates"):
+        spec = entries[key]
+        pids = [
+            f"presolved-{key}" if i == 0 else f"presolved-{key}-v{i}"
+            for i in range(len(spec.get("equations", [])))
+        ]
+        problem = next(
+            (p for p in db.all_problems() if p.id == pids[0]), None
+        ) if pids else None
+        reference = db.verified_solution(pids[0]) if pids else None
+        if problem is None or reference is None:
+            say(f"  ? {key}: not stored yet (run --solve first), skipped")
+            continue
+        targets[key] = (problem, pids)
+        rec = Recognition(
+            problem_text=spec["problem_text"], equations=spec["equations"][0],
+            problem_type=spec.get("problem_type", "unknown"),
+            concepts=spec.get("concepts", []),
+        )
+        for step in reference.steps:
+            for level in (1, 2):
+                if db.prewritten_hint(pids[0], step.idx, level):
+                    continue           # already written (and maybe hand-edited)
+                jobs.append((key, rec, reference, step.idx, level))
+
+    if not jobs:
+        say("prewritten hints: nothing to write")
+        return 0
+    say(f"writing {len(jobs)} step hint(s)...")
+
+    def one(job):
+        key, rec, reference, step_idx, level = job
+        problem, _pids = targets[key]
+        try:
+            return job, gen.prewrite(
+                problem=problem, reference=reference, rec=rec,
+                step_idx=step_idx, level=level,
+            )
+        except Exception as e:  # noqa: BLE001 — one bad line is not the run
+            say(f"  ! {key} step{step_idx} L{level}: {e}")
+            return job, None
+
+    n = 0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for (key, _rec, _reference, step_idx, level), line in pool.map(one, jobs):
+            if not line:
+                say(f"  ! {key} step{step_idx} L{level}: screened out, ladder covers it")
+                continue
+            _problem, pids = targets[key]
+            for pid in pids:
+                db.save_prewritten_hint(pid, step_idx, level, line)
+            n += 1
+            say(f"  + {key} step{step_idx} L{level}: {line}")
+    say(f"prewritten hints: {n} written")
     return n
 
 
@@ -322,6 +396,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--concepts", nargs="*", default=None,
                     help="concept ids to write lines for (default: the common "
                          "set; pass with no ids to skip)")
+    ap.add_argument("--hints", action="store_true",
+                    help="pre-write L1/L2 lines for every stored presolve "
+                         "problem step (spends API; idempotent)")
     args = ap.parse_args(argv)
 
     settings = load_settings()
@@ -333,7 +410,7 @@ def main(argv: list[str] | None = None) -> int:
         say("echo mode: no API key loaded, nothing to warm")
         return 1
 
-    if curated_only and args.concepts == []:
+    if curated_only and args.concepts == [] and not args.hints:
         # nothing here needs a model or a voice: skip the whole server build
         db, llm, gen, speaker = KnowledgeDB(settings.db_path), None, None, None
     else:
@@ -352,6 +429,8 @@ def main(argv: list[str] | None = None) -> int:
                 f"presolved-{key}-v{i}"
                 for i in range(1, len(entries[key]["equations"]))
             )
+    if args.hints and gen is not None:
+        prewrite_hints(db, gen, entries)
     extend_semantic_index(db, stored)
     say(f"knowledge DB: {settings.db_path}")
     return 0
