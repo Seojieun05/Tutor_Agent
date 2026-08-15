@@ -817,3 +817,36 @@ async def test_a_forward_question_is_on_the_record(db):
     from tutor.speech.intent import rule_intent
     assert rule_intent("그럼 마이너스 4 맞나?", has_problem=True,
                        has_pending=True) == "ANSWER"
+
+
+async def test_the_confirmation_borrows_the_prewritten_invite(db):
+    """"이제 g'(1)을 계산해 볼까요?" names the chore; the prewritten L1 for the
+    same step connects it to its purpose. When one exists for an EXACT match,
+    the confirmation carries it instead of the conjugated step label."""
+    from tutor.knowledge.models import Problem
+
+    INVITE = "이제 구한 값으로 c를 어떻게 구할 수 있을지 생각해 볼까요?"
+    session, llm, speaker, ws = build(
+        db, "풀이 맞아?",
+        llm_responses={"recognize": [seen(["a = 2", "b = a + 1"])]},
+    )
+    session.ctx.reference = REF3
+    problem = Problem(
+        id="pw-invite", problem_type="unknown", problem_text="p",
+        equations=[], answer=Answer(kind="SCALAR", value="6"),
+        concepts=["linear_equation"], verified=True,
+    )
+    session.ctx.match = MatchResult(
+        tier=Tier.EXACT, problem=problem,
+        concepts=["linear_equation"], reference=REF3,
+    )
+    db.save_prewritten_hint("pw-invite", 3, 1, INVITE)
+    ask_l1(session)
+
+    await session._handle_utterance(PCM, 16000)
+
+    confirmation = speaker.spoken[-1]
+    assert confirmation == f"맞아요! 여기까지 잘했어요. {INVITE}"
+    # and the recorded question carries the same words, so the follow-through
+    # and the given-set both see what was actually said
+    assert session.store.pending_hint("p1").hint_text == confirmation

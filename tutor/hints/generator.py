@@ -738,7 +738,11 @@ class HintGenerator:
             )
             if (
                 written
-                and written not in given
+                # SUBSTRING, not membership: the confirmation quotes this very
+                # line inside "맞아요! 여기까지 잘했어요. …", and hearing it
+                # again bare three seconds later is the repetition the
+                # given-set exists to prevent
+                and not any(written in g for g in given)
                 and not (decision.level == 1 and announces_step(written))
                 and not mentions_future_step(written, reference, decision.target_step)
                 and (reference is None or not leaks_answer(

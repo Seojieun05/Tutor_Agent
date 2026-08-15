@@ -186,6 +186,35 @@ READOUT_CLOSERS: dict[bool, str] = {
 _POLITE_TAILS = ("입니다", "이에요", "이예요", "예요", "에요", "이요", "요")
 
 
+def names_the_final_value(transcript: str, answer) -> bool:
+    """Did the transcript actually SAY the problem's final value?
+
+    The gate that keeps a right PLAN from closing the problem: the last
+    step's L1 asks about the setup, and answering the setup is correct
+    without being finished. Only plain-rational finals are machine-checkable
+    from speech (49, 1/2, 24/7 — STT writes digits); a surd or a power
+    (2**(5/2)) does not survive transcription in any fixed shape, so those
+    finals stay the judge's call — permissive, exactly as today.
+    """
+    from fractions import Fraction
+
+    if getattr(answer, "kind", None) != "SCALAR":
+        return True
+    try:
+        target = Fraction(str(answer.value).strip())
+    except (ValueError, ZeroDivisionError):
+        return True
+    for said in re.findall(
+        r"-?\d+(?:\.\d+)?(?:\s*/\s*\d+(?:\.\d+)?)?", transcript or ""
+    ):
+        try:
+            if Fraction(said.replace(" ", "")) == target:
+                return True
+        except (ValueError, ZeroDivisionError):
+            continue
+    return False
+
+
 def answer_core(transcript: str) -> str | None:
     """The VALUE inside a spoken answer, or None when there is no clean one.
 
@@ -846,6 +875,25 @@ class Session:
         # Orchestrator-owned writes. The policy needs no new rules: resolving
         # the pending hint IS the signal that moves it up, down or nowhere.
         prev = self.store.get_state() or StudentState()
+        if (
+            verdict.verdict == "CORRECT"
+            and pending.step >= len(reference.steps)
+            and not names_the_final_value(transcript, reference.final_answer)
+        ):
+            # The LAST step only closes on the VALUE. Its L1 asks about the
+            # setup ("어떤 부분을 밑변과 높이로 정하면 좋을까요?"), and a
+            # student who answers THAT has answered the question — the judge
+            # rightly says CORRECT — but the problem is not finished until 49
+            # has actually been said. Downgrade to the partial machinery: the
+            # direction is affirmed, the step stays open, the value is asked.
+            log.info(
+                "final step: the plan was right but no value was said — "
+                "PARTIAL, the problem stays open"
+            )
+            verdict = verdict.model_copy(update={
+                "verdict": "PARTIAL",
+                "feedback": "맞아요, 방향은 잘 잡았어요.",
+            })
         if verdict.verdict == "CORRECT":
             reached = self._reached_step(verdict, reference, pending.step, transcript)
             self.store.set_state(
@@ -1324,7 +1372,10 @@ class Session:
             # ladder or enter history; it answers the question they are about
             # to ask without reading an internal step label aloud.
             log.info("work check at step %d: correct so far", current.last_correct_step)
-            line, asked_step = self._confirmed_line(current, reference)
+            line, asked_step = self._confirmed_line(
+                current, reference,
+                invite=self._forward_invite(ctx, current.last_correct_step + 1),
+            )
             await self._speak(line, final=True)
             pending_now = self.store.pending_hint(ctx.hash)
             if asked_step is not None and (
@@ -1456,8 +1507,31 @@ class Session:
         """What the tutor says it saw, before it hints. Never what is wrong."""
         return WORK_CHECK_REACTIONS.get(state.status, WORK_CHECK_DEFAULT)
 
+    def _forward_invite(self, ctx: ProblemContext, next_step: int) -> str | None:
+        """The prewritten L1 for the step a confirmation is about to open.
+
+        "이제 g'(1)을 계산해 볼까요?" names the next chore; the prewritten line
+        for the same step connects it to its purpose — "점 (1, 6)에서 접선 m의
+        기울기를 구하려면 어떤 값을 구해 봐야 할까요?" — because it was written
+        by the model that knows the problem. Served only on an EXACT match and
+        only if nothing this problem has already said contains it.
+        """
+        if ctx.match.tier is not Tier.EXACT or ctx.match.problem is None:
+            return None
+        written = self.deps.hint_gen.db.prewritten_hint(
+            ctx.match.problem.id, next_step, 1
+        )
+        if not written:
+            return None
+        said = {h.hint_text for h in self.store.get_history(problem_hash=ctx.hash)}
+        if written in said or any(written in s for s in said):
+            return None
+        return written
+
     @staticmethod
-    def _confirmed_line(state: StudentState, reference) -> tuple[str, int | None]:
+    def _confirmed_line(
+        state: StudentState, reference, invite: str | None = None
+    ) -> tuple[str, int | None]:
         """The verdict, plus a question that opens the next piece of work.
 
         Only a noun-form step description rides in the sentence (the same rule
@@ -1481,6 +1555,11 @@ class Session:
         )
         if nxt is None:
             return "맞아요! 여기까지면 다 풀었어요. 어떻게 구했는지 한번 정리해 볼까요?", None
+        if invite:
+            # written for exactly this step by the model that knows the
+            # problem: it connects the chore to its purpose, which the
+            # conjugated step label below cannot
+            return f"맞아요! 여기까지 잘했어요. {invite}", nxt.idx
         name = nxt.description.strip().rstrip(" .!?…")
         if not name or SENTENCE_STEP_RE.search(name):
             return WORK_CONFIRMED, None
