@@ -601,6 +601,21 @@
     .msg.typing .bubble::after { animation:caret .9s steps(1) infinite; }
     @keyframes caret { 0%,49% { opacity:.55; } 50%,100% { opacity:0; } }
   }
+  /* The turn is still talking: dots at the bubble's end, lighting one at a
+     time and resetting together. The whole turn is ONE bubble — the filler
+     opens it, every later line appends — and this is its pulse. */
+  .msg .bubble .more i { font-style:normal; opacity:.18; }
+  @media (prefers-reduced-motion: no-preference) {
+    .msg .bubble .more i:nth-child(1) { animation:dot1 1.6s steps(1) infinite; }
+    .msg .bubble .more i:nth-child(2) { animation:dot2 1.6s steps(1) infinite; }
+    .msg .bubble .more i:nth-child(3) { animation:dot3 1.6s steps(1) infinite; }
+    @keyframes dot1 { 0%,12% { opacity:.18; } 13%,100% { opacity:.85; } }
+    @keyframes dot2 { 0%,40% { opacity:.18; } 41%,100% { opacity:.85; } }
+    @keyframes dot3 { 0%,68% { opacity:.18; } 69%,100% { opacity:.85; } }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .msg .bubble .more i { opacity:.6; }
+  }
   /* machine talk (hint level, action): smaller and quieter than speech */
   .msg .note {
     font-size:.68rem; font-weight:600; color:var(--c-dim); padding:0 .35rem;
@@ -1725,6 +1740,7 @@ function setState(s) {
   }
   if (s === "LISTENING" || s === "USER_SPEAKING" || !s) {
     flushHeld();                       // an answer must never be trapped mid-hold
+    closeTutorBubble();                // the turn is over: the dots come off
     settleHome();
   }
 }
@@ -1779,6 +1795,7 @@ function showProblem(d) {
   const eqs = d.equations || [];
   if (!text && !eqs.length) return;
   problemTitle = text;
+  closeTutorBubble();                  // a new problem is a new conversation
   currentDialogue = [];                // a new problem starts a fresh transcript
   const pt = $("problemText");
   pt.textContent = "";
@@ -2180,14 +2197,14 @@ function onTutorSays(d) {
     answerReady(flushHeld);
     return;
   }
-  addTurn("tutor", d.text);
+  addTurn("tutor", d.text, { final: !!d.final });
 }
 
 function flushHeld() {
   if (heldTimer) { clearTimeout(heldTimer); heldTimer = null; }
   const held = heldSay;
   heldSay = null;
-  if (held) addTurn("tutor", held.text);
+  if (held) addTurn("tutor", held.text, { final: true });
   if (audioHold) {
     audioHold = false;
     if (!playingUrl) playNext();
@@ -2202,7 +2219,8 @@ function stopSpeaking(announce = true) {
   // to be coming, and a barge-in must not disappear them from the record
   if (heldTimer) { clearTimeout(heldTimer); heldTimer = null; }
   audioHold = false;
-  if (heldSay) { addTurn("tutor", heldSay.text); heldSay = null; }
+  if (heldSay) { addTurn("tutor", heldSay.text, { final: true }); heldSay = null; }
+  closeTutorBubble();                    // an interrupted turn is over too
   const player = $("player");
   const dropped = audioQueue.length + ttsStreams.size;
   audioQueue = [];
@@ -2364,12 +2382,53 @@ const reveal = {
     }
     this.msg.classList.remove("typing");
     this.parts = null; this.node = null; this.msg = null;
+    // fire-and-clear: the segment's continuation (re-hang the waiting dots,
+    // or close the turn's bubble) runs once, after the words are all in
+    const done = this.onDone;
+    this.onDone = null;
+    if (done) done();
     scrollChat();
   },
 };
 
-function addTurn(kind, text) {
+// ONE tutor bubble per student turn. The filler opens it, every later line of
+// the turn appends into the same bubble, and the blinking dots at its end say
+// "still coming" — so one student question reads as ONE tutor answer instead
+// of a stack of fragments.
+let openTutor = null;                    // {msg, bubble} of the turn's bubble
+
+function dropDots() {
+  for (const el of document.querySelectorAll("#chat .more")) el.remove();
+}
+function holdDots() {
+  if (!openTutor || !openTutor.msg.isConnected) return;
+  dropDots();
+  const more = document.createElement("span");
+  more.className = "more";
+  more.innerHTML = "<i>.</i><i>.</i><i>.</i>";
+  openTutor.bubble.appendChild(more);
+}
+function closeTutorBubble() {
+  dropDots();
+  openTutor = null;
+}
+
+function addTurn(kind, text, opts = {}) {
   const chat = $("chat");
+  if (kind !== "tutor") closeTutorBubble();   // the turn is over either way
+  const after = opts.final ? closeTutorBubble : holdDots;
+  if (kind === "tutor" && openTutor && openTutor.msg.isConnected) {
+    // the turn's next line lands in the SAME bubble
+    currentDialogue.push({ kind, text });
+    const { msg, bubble } = openTutor;
+    reveal.finish();                     // flush whatever is still typing
+    dropDots();
+    bubble.appendChild(document.createTextNode("\n"));
+    reveal.start(msg, bubble, mathify(text).frag);
+    if (STILL.matches) after(); else reveal.onDone = after;
+    scrollChat();
+    return;
+  }
   const div = document.createElement("div");
   if (kind === "err") {
     div.className = "sys";
@@ -2382,7 +2441,9 @@ function addTurn(kind, text) {
   }
   chat.appendChild(div);
   if (kind === "tutor") {
+    openTutor = { msg: div, bubble: div.querySelector(".bubble") };
     reveal.start(div, div.querySelector(".bubble"), mathify(text).frag);
+    if (STILL.matches) after(); else reveal.onDone = after;
   } else if (kind === "you") {
     div.querySelector(".bubble").append(mathify(text).frag);
   }
@@ -2397,11 +2458,26 @@ const tutorStreams = new Map();
 
 function startTutorStream(d) {
   reveal.finish();
-  const div = document.createElement("div");
-  div.className = "msg tutor typing";
-  div.innerHTML = `<div class="who">튜터</div><div class="bubble"></div>`;
-  $("chat").appendChild(div);
-  tutorStreams.set(d.stream_id, { div, bubble: div.querySelector(".bubble"), text: "" });
+  dropDots();
+  let div, bubble;
+  if (openTutor && openTutor.msg.isConnected) {
+    // the live-streamed line continues the turn's ONE bubble
+    ({ msg: div, bubble } = openTutor);
+    bubble.appendChild(document.createTextNode("\n"));
+  } else {
+    div = document.createElement("div");
+    div.className = "msg tutor";
+    div.innerHTML = `<div class="who">튜터</div><div class="bubble"></div>`;
+    $("chat").appendChild(div);
+    bubble = div.querySelector(".bubble");
+    openTutor = { msg: div, bubble };
+  }
+  div.classList.add("typing");
+  // the stream owns a SEGMENT, never the bubble: rewriting the whole bubble
+  // per delta would erase the filler that opened it
+  const seg = document.createElement("span");
+  bubble.appendChild(seg);
+  tutorStreams.set(d.stream_id, { div, seg, text: "" });
   scrollChat();
 }
 
@@ -2409,7 +2485,7 @@ function appendTutorStream(d) {
   const st = tutorStreams.get(d.stream_id);
   if (!st) return;                       // tail of a cancelled/barge-in stream
   st.text += d.text || "";
-  st.bubble.textContent = st.text;
+  st.seg.textContent = st.text;
   scrollChat();
 }
 
@@ -2418,10 +2494,12 @@ function finishTutorStream(d) {
   if (!st) return;
   const text = d.text || st.text;
   st.text = text;
-  st.bubble.replaceChildren(mathify(text).frag);
+  st.seg.replaceChildren(mathify(text).frag);
   st.div.classList.remove("typing");
   currentDialogue.push({ kind: "tutor", text });
   tutorStreams.delete(d.stream_id);
+  // a streamed line is the turn's generated answer: the bubble is complete
+  closeTutorBubble();
   scrollChat();
 }
 
