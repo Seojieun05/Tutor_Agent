@@ -63,6 +63,10 @@ verdict:
                 without calculating the resulting slope → PARTIAL, not CORRECT.
                 Example: target is the tangent-line equation and the student
                 only explains how to find its slope → PARTIAL, not CORRECT.
+                On the FINAL step this matters most: describing what to take
+                as the base and height of a triangle answers the setup
+                question, but until the area's VALUE is said the problem is
+                not finished → PARTIAL, not CORRECT.
 - "INCORRECT" — the answer is wrong, targets the wrong idea, or the student says
                 they do not know / asks for more help ("모르겠어요", "힌트 더 주세요").
 - "UNCLEAR"   — off-topic, unintelligible, or too vague to judge either way.

@@ -586,7 +586,9 @@ class TestProblemCompletion:
         ask_l1(session, step=2)  # REFERENCE has 2 steps: this is the last one
         before = len(session.store.get_history(problem_hash="p1"))
 
-        await session.handle_answer("양변을 3으로 나눠요", session.store.pending_hint("p1"))
+        # the VALUE is said: only that closes a problem (a right method alone
+        # is PARTIAL on the last step — see TestAPlanDoesNotCloseTheProblem)
+        await session.handle_answer("양변을 3으로 나누면 5예요", session.store.pending_hint("p1"))
 
         assert speaker.spoken == [
             "맞아요, 그렇게 하면 돼요! 문제를 끝까지 풀었네요! 또 모르는 문제가 있으면 알려주세요."
@@ -628,7 +630,7 @@ class TestProblemCompletion:
               "misconception": None, "status": "CORRECT"}],
         )
         ask_l1(session, step=2)
-        await session.handle_answer("나누면 돼요", session.store.pending_hint("p1"))
+        await session.handle_answer("나누면 5예요", session.store.pending_hint("p1"))
 
         assert speaker.spoken == ["문제를 끝까지 풀었네요! 또 모르는 문제가 있으면 알려주세요."]
 
@@ -890,3 +892,44 @@ class TestWorkingAloudIsNotParroted:
     def test_speeches_do_not(self, said):
         from tutor.server.session import answer_core
         assert answer_core(said) is None
+
+
+class TestAPlanDoesNotCloseTheProblem:
+    """Live on 수능 13: the last step's L1 asked what to take as the base and
+    height, the student answered THAT, the judge rightly said CORRECT — and
+    the problem closed with 49 never said. The last step only closes on the
+    VALUE; a right plan is PARTIAL and the step stays open."""
+
+    def test_the_value_gate_reads_speech(self):
+        from tutor.knowledge.models import Answer
+        from tutor.server.session import names_the_final_value
+        answer = Answer(kind="SCALAR", value="49")
+        assert not names_the_final_value("y절편 사이를 밑변으로 하면 돼요", answer)
+        assert names_the_final_value("그러면 49예요", answer)
+        assert names_the_final_value("답은 49", answer)
+        # fractions survive both ways STT writes them
+        frac = Answer(kind="SCALAR", value="24/7")
+        assert names_the_final_value("24/7이요", frac)
+        assert not names_the_final_value("일반항을 쓰면 돼요", frac)
+        # a surd cannot be transcribed in a checkable shape: the judge's call
+        surd = Answer(kind="SCALAR", value="3*sqrt(10)/10")
+        assert names_the_final_value("루트로 나와요", surd)
+
+    async def test_a_right_plan_keeps_the_problem_open(self, db):
+        session, llm, speaker = build_session(
+            db,
+            [{"verdict": "CORRECT", "feedback": "맞아요!",
+              "misconception": None, "status": "CORRECT"}],
+        )
+        ask_l1(session, step=2)            # the LAST step of REFERENCE
+
+        await session.handle_answer(
+            "양변을 3으로 나누면 돼요", session.store.pending_hint("p1")
+        )
+
+        assert session.ctx is not None                     # NOT closed
+        assert "solved" not in session.ws.event_names()
+        assert "끝까지 풀었네요" not in " ".join(speaker.spoken)
+        assert speaker.spoken[0].startswith("맞아요, 방향은 잘 잡았어요.")
+        state = session.store.get_state()
+        assert state is not None and state.status == "STUCK"   # the partial path
