@@ -36,6 +36,10 @@ Verdict = Literal["CORRECT", "PARTIAL", "INCORRECT", "UNCLEAR"]
 # A module constant so the TTS cache can pre-render it like the other fixed
 # lines: this is the one reaction that should never keep anyone waiting.
 SURRENDER_FEEDBACK = "괜찮아요, 어려울 수 있어요. 같이 짚어 볼게요."
+# What an utterance that DIED mid-phrase hears. "응, 레이 와이 절편은" is not
+# an answer to grade — the sentence never arrived — and grading the fragment
+# confirmed work the student had not said. The re-asked question follows.
+CUTOFF_FEEDBACK = "앗, 말이 중간에 끊긴 것 같아요."
 Intent = Literal["ANSWER", "QUESTION", "WORK_CHECK"]
 
 _SYSTEM = """You grade a student's SPOKEN answer to a tutor's Socratic question.
@@ -93,7 +97,7 @@ feedback: ONE short spoken Korean sentence reacting to the answer (친근한 반
 word or two WHAT was right — the idea or value they nailed ("맞아요, 기울기를
 정확히 봤어요!") — feedback that names what worked teaches more than a bare
 맞아요; still one clause, still never the next step. For PARTIAL affirm the
-direction without saying the step is finished ("맞아요, 방향은 잘 잡았어요.").
+direction without saying the step is finished ("좋아요, 제대로 접근하고 있어요.").
 For INCORRECT do NOT correct it and do NOT give the next step — just acknowledge
 warmly ("음, 조금 달라요."). For UNCLEAR say you did not catch it.
 This is the ONLY reaction the student hears — what follows it is written
@@ -164,6 +168,9 @@ class AnswerEvaluator:
         target_step: int,
         transcript: str,
     ) -> AnswerVerdict:
+        cut = self._cut_off(transcript)
+        if cut is not None:
+            return cut
         surrendered = self._gave_up(transcript)
         if surrendered is not None:
             return surrendered
@@ -260,10 +267,36 @@ class AnswerEvaluator:
         return verdict.model_copy(
             update={
                 "verdict": "PARTIAL",
-                "feedback": "맞아요, 방향은 잘 잡았어요.",
+                "feedback": "좋아요, 제대로 접근하고 있어요.",
                 "reached_step": None,
                 "reached_claim": "",
             }
+        )
+
+    # The particles a Korean noun phrase hangs on mid-sentence. An utterance
+    # whose LAST word is hangul ending on one of these never arrived at its
+    # predicate — the VAD closed on a pause, not on a sentence — so there is
+    # nothing to grade. Digits and variables are excluded first ("x는 2" ends
+    # on the value, the answer shape), and the AMBIGUOUS particles are left
+    # out on purpose: 이/가/과/로/고 are also how ordinary nouns end (넓이,
+    # 차이, 결과, 그리고), and eating a valid answer costs more than missing
+    # a fragment the UNCLEAR path would shrug at anyway.
+    _DANGLING_JOSA = ("은", "는", "을", "를", "의", "와", "에", "에서", "부터", "까지")
+
+    def _cut_off(self, transcript: str) -> AnswerVerdict | None:
+        text = transcript.strip().rstrip(" ?.!…~,")
+        if not text:
+            return None
+        last = text.split()[-1]
+        if not re.fullmatch(r"[가-힣]{2,}", last):
+            return None                    # a value tail, latin, or too short to call
+        if not last.endswith(self._DANGLING_JOSA):
+            return None
+        log.info("utterance died mid-phrase: %r — re-asking, not grading", text[-24:])
+        return AnswerVerdict(
+            intent="ANSWER",
+            verdict="UNCLEAR",             # same step, same level, re-asked
+            feedback=CUTOFF_FEEDBACK,
         )
 
     # "잘 모르겠는데", "모르겠어요", "힌트 주세요" — surrender, not an attempt.
