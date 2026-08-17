@@ -152,9 +152,44 @@ class TestRetry:
         assert t.transcribe(b"\0\0" * 16000).text == "답은 마이너스 삼입니다"
         assert len(calls) == 1
 
-    def test_an_english_answer_is_not_asked_twice(self, monkeypatch):
-        t, calls = transcriber(monkeypatch, {"text": "the slope is minus three", "language": "en"}, {})
-        assert t.transcribe(b"\0\0" * 16000).text == "the slope is minus three"
+    def test_an_english_sentence_is_asked_again_and_recovered(self, monkeypatch):
+        """Korean speech rewritten as English MEANING — the model translated.
+        The same carrier repairs it: ordinary Korean in the audio makes the
+        decoder transcribe instead."""
+        t, calls = transcriber(
+            monkeypatch,
+            {"text": "The slope is minus two", "language": "en"},
+            {"text": "자, 대답할게요. 기울기는 마이너스 2예요.", "language": "ko",
+             "words": words(("자,", 0.04, 0.18), ("대답할게요.", 0.6, 1.2),
+                            ("기울기는", 1.5, 2.0), ("마이너스", 2.1, 2.5),
+                            ("2예요.", 2.6, 3.0))},
+        )
+        got = t.transcribe(b"\0\0" * 16000)
+        assert got.text == "기울기는 마이너스 2예요."
+        assert got.language == "ko"
+        assert len(calls) == 2
+
+    def test_a_real_english_answer_survives_the_retry(self, monkeypatch):
+        """A bilingual student who truly spoke English: the carrier retry
+        comes back English again, and their first transcript stands. The
+        cost is one extra STT call, paid only on English-sentence shapes."""
+        t, calls = transcriber(
+            monkeypatch,
+            {"text": "the slope is minus three", "language": "en"},
+            {"text": "자, 대답할게요. the slope is minus three", "language": "en",
+             "words": words(("자,", 0.04, 0.18), ("대답할게요.", 0.6, 1.2),
+                            ("the", 1.5, 1.7), ("slope", 1.8, 2.1),
+                            ("is", 2.2, 2.3), ("minus", 2.4, 2.7),
+                            ("three", 2.8, 3.1))},
+        )
+        got = t.transcribe(b"\0\0" * 16000)
+        assert got.text == "the slope is minus three"
+        assert got.language == "en"
+        assert len(calls) == 2
+
+    def test_bare_mathematics_is_not_an_english_sentence(self, monkeypatch):
+        t, calls = transcriber(monkeypatch, {"text": "y = -2x - 4", "language": "en"}, {})
+        assert t.transcribe(b"\0\0" * 16000).text == "y = -2x - 4"
         assert len(calls) == 1
 
     def test_a_retry_that_does_not_help_keeps_the_first_answer(self, monkeypatch):
@@ -190,3 +225,29 @@ class TestRetry:
 def test_the_recovered_transcript_passes_the_quality_gate():
     assert stt.classify_transcript("마이너스 2x 마이너스 3이요.", "ko") == "ok"
     assert stt.classify_transcript(KATAKANA, "ja") == "unclear"
+
+
+class TestEnglishSentenceDetector:
+    """The translation failure has no foreign SCRIPT in it, so wrong_script
+    never sees it: the tell is no hangul plus word-shaped Latin tokens."""
+
+    @pytest.mark.parametrize("text", [
+        "The slope is minus two",
+        "the equation is minus 2x squared",
+        "OK I see the answer now",
+    ])
+    def test_translations_are_caught(self, text):
+        from tutor.speech.stt import english_sentence
+        assert english_sentence(text)
+
+    @pytest.mark.parametrize("text", [
+        "y = -2x - 4",                      # mathematics, not words
+        "기울기는 마이너스 2예요",             # Korean
+        "x는 2요",                           # Korean with a variable
+        "sin 세타는 2분의 1이요",             # Korean with a function name
+        "5",
+        "",
+    ])
+    def test_korean_and_bare_maths_are_not(self, text):
+        from tutor.speech.stt import english_sentence
+        assert not english_sentence(text)

@@ -121,6 +121,25 @@ def wrong_script(text: str) -> bool:
     return bool(text.strip()) and _foreign_ratio(text) > _FOREIGN_RATIO
 
 
+def english_sentence(text: str) -> bool:
+    """Korean audio written as English WORDS — the model translated.
+
+    The kana failure writes the right sounds in the wrong alphabet;
+    this one rewrites the meaning in another language ("The slope is
+    minus 2"), and Latin letters are not foreign to a maths answer, so
+    _foreign_ratio never sees it. The tell is the absence: no hangul at
+    all, plus at least two word-shaped Latin tokens. "y = -2x - 4" has
+    no English words and stays untouched, and a transcript with any
+    Korean in it is Korean with vocabulary, not a translation.
+    """
+    stripped = text.strip()
+    return (
+        bool(stripped)
+        and not any(_is_hangul(ch) for ch in stripped)
+        and _english_words(stripped) >= 2
+    )
+
+
 def classify_transcript(text: str, heard_language: str = "") -> TranscriptQuality:
     """Is this worth running the tutor pipeline on?
 
@@ -247,7 +266,9 @@ class XaiTranscriber:
         if heard and heard != self.settings.tutor_language:
             log.info("STT heard %s, not %s", heard, self.settings.tutor_language)
 
-        if wrong_script(text):
+        if wrong_script(text) or english_sentence(text):
+            # both failures have the same repair: some ordinary Korean in the
+            # audio makes the decoder TRANSCRIBE instead of translating
             again = self._with_carrier(pcm, sample_rate)
             if again is not None:
                 text, heard = again
@@ -271,7 +292,10 @@ class XaiTranscriber:
             return None
         text = _after(data, len(head) / 2 / CARRIER_RATE)
         heard = str(data.get("language", "") or "")
-        if wrong_script(text):
+        if wrong_script(text) or english_sentence(text):
+            # still the wrong alphabet, or still English through a Korean
+            # carrier — the latter is a student who really spoke English,
+            # and their first transcript stands
             log.info("carrier retry still came back %s: %r", heard or "?", text)
             return None
         log.info("carrier retry recovered %s: %r", heard or "?", text)
