@@ -1083,3 +1083,50 @@ class TestSayingTheAnswerEndsIt:
 
         assert session.ctx is not None                 # still teaching
         assert "solved" not in session.ws.event_names()
+
+
+class TestAHalfComputedCompositeIsNotDone:
+    """Live: "f′부터 계산하면 좋을 것 같아. 계산하면 2x-4." wore no plan tail,
+    was graded CORRECT, the target advanced, and the step-2 line then
+    congratulated a slope nobody had computed. A composite step whose final
+    numeric piece (-2) is absent from the transcript is PARTIAL, whatever
+    the judge said — and the partial machinery then asks only for f'(1)."""
+
+    REF = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="f'(x)로 접선 l의 기울기 구하기",
+                         expression="f'(x) = 2*x - 4, f'(1) = -2"),
+            SolutionStep(idx=2, description="점 (1, -6)을 지나는 l의 방정식 쓰기",
+                         expression="l: y = -2*x - 4"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="49"),
+        concepts=["differentiation"], verified=True, origin="db",
+    )
+
+    def judge(self, db):
+        llm = EchoLLMClient({"evaluate": [
+            {"verdict": "CORRECT", "feedback": "맞아요!",
+             "misconception": None, "status": "CORRECT"},
+        ]})
+        return AnswerEvaluator(llm, db)
+
+    def test_the_first_half_alone_is_partial(self, db):
+        v = self.judge(db).evaluate(
+            problem_text="p", reference=self.REF, question="q", target_step=1,
+            transcript="f프라임부터 계산하면 좋을 것 같아. 계산하면 2x-4.",
+        )
+        assert v.verdict == "PARTIAL"
+
+    def test_saying_the_final_piece_completes_it(self, db):
+        v = self.judge(db).evaluate(
+            problem_text="p", reference=self.REF, question="q", target_step=1,
+            transcript="2x-4니까 f프라임 1은 마이너스 2예요",
+        )
+        assert v.verdict == "CORRECT"       # 마이너스 2 reads as -2
+
+    def test_a_symbolic_tail_stays_the_judges_call(self, db):
+        v = self.judge(db).evaluate(
+            problem_text="p", reference=self.REF, question="q", target_step=2,
+            transcript="y는 마이너스 2x 마이너스 4예요",
+        )
+        assert v.verdict == "CORRECT"       # step 2 ends symbolically: no gate

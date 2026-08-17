@@ -223,6 +223,35 @@ class AnswerEvaluator:
     )
 
     @staticmethod
+    def _final_piece_missing(expression: str, transcript: str) -> bool:
+        """The composite step ends on a plain number the transcript never says.
+
+        "f'(x) = 2*x - 4, f'(1) = -2" ends on -2; a transcript that computed
+        only 2x-4 does not contain it. Only numeric tails are judged — a
+        symbolic tail has no fixed spoken shape — and a number that merely
+        appears anywhere counts as said, so this can only ever DOWNGRADE a
+        transcript that truly stopped early.
+        """
+        from fractions import Fraction
+
+        tail = expression.split("=")[-1].strip()
+        try:
+            target = Fraction(tail.replace(" ", ""))
+        except (ValueError, ZeroDivisionError):
+            return False
+        # STT writes the sign as a word: "마이너스 2" must read as -2
+        spoken = re.sub(r"마이너스\s*", "-", transcript or "")
+        for said in re.findall(
+            r"-?\d+(?:\.\d+)?(?:\s*/\s*\d+(?:\.\d+)?)?", spoken
+        ):
+            try:
+                if Fraction(said.replace(" ", "")) == target:
+                    return False
+            except (ValueError, ZeroDivisionError):
+                continue
+        return True
+
+    @staticmethod
     def _normalize_partial_feedback(
         verdict: AnswerVerdict,
         reference: ReferenceSolution,
@@ -261,7 +290,17 @@ class AnswerEvaluator:
         step = next((s for s in reference.steps if s.idx == target_step), None)
         expression = step.expression if step is not None else ""
         composite = "," in expression or expression.count("=") >= 2
-        if not composite or not cls._UNFINISHED_PLAN_RE.search(transcript.strip()):
+        if not composite:
+            return verdict
+        # Two ways to be half-done with a composite step: PLAN the second
+        # half out loud ("대입하면 될 것 같아요"), or simply stop after the
+        # first half's result. Live: "f′부터 계산하면 좋을 것 같아. 계산하면
+        # 2x-4." wore no plan tail, was graded CORRECT, and the step-2 line
+        # then congratulated a slope nobody had computed. When the step's
+        # FINAL piece is a plain number (-2), its absence from the transcript
+        # is checkable — and absent means not done.
+        planned = cls._UNFINISHED_PLAN_RE.search(transcript.strip())
+        if not planned and not cls._final_piece_missing(expression, transcript):
             return verdict
         log.info("correct direction but unfinished composite step; grading PARTIAL")
         return verdict.model_copy(

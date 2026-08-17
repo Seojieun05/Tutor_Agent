@@ -211,6 +211,9 @@ def final_value_claim(transcript: str, answer) -> str:
         target = Fraction(str(answer.value).strip())
     except (ValueError, ZeroDivisionError):
         return "unknown"
+    # STT writes the sign as a word: "마이너스 2" must read as -2
+    transcript = re.sub(r"마이너스\s*", "-", transcript or "")
+
     def parse(number: str) -> Fraction | None:
         try:
             return Fraction(number.replace(" ", ""))
