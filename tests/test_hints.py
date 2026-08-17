@@ -112,7 +112,8 @@ class TestSafeWordEmitter:
         spoken = "".join(out)
         assert blocked
         assert "5" not in spoken and "5" not in text
-        assert "어디인가요" in spoken
+        # the closure CONTINUES the amputated sentence instead of confessing
+        assert "이어서 완성해 볼까요" in spoken
 
     def test_l1_step_announcement_never_reaches_the_live_stream(self):
         out = []
@@ -189,7 +190,8 @@ class TestGenerator:
         )
         assert "5" not in "".join(out)
         assert "5" not in text
-        assert out and "어디인가요" in text
+        # blocked at the door (nothing yet released) → the FRESH opener
+        assert out and "직접" in text
 
     def test_db_template_first_no_llm(self, db):
         llm = EchoLLMClient()
@@ -1050,3 +1052,29 @@ class TestACorrectingTurnIsNeverCanned:
         text = gen.generate(helper.decision(), match, None, rec, history=failed)
         assert str(text) != helper.LINE
         assert "phrase" in llm.calls
+
+
+class TestABlockedStreamTrailsOffOnPurpose:
+    """Live at L2: "기울기가 k이고 한 점을 지나는 직선은 y … 여기서 답은
+    말하지 않을게요. 지금까지 한 풀이에서 가장 확실한 줄은 어디인가요?" — an
+    amputated sentence stitched to a confession that changed the subject.
+    The closure now HANDS THE SENTENCE OVER instead: trailing off into
+    "직접 이어서 완성해 볼까요?" is a cloze prompt, not an apology."""
+
+    def test_a_dangling_sentence_becomes_a_cloze(self):
+        out = []
+        emitter = SafeWordEmitter(out.append, LIN_REF, 1, [])
+        emitter.feed("기울기가 k이고 한 점을 지나는 직선은 y 는 그래서 정답은 5 ")
+        text, blocked = emitter.finish("기울기가 k이고 한 점을 지나는 직선은 y 는 그래서 정답은 5")
+        assert blocked
+        assert text.endswith("이 다음은 직접 이어서 완성해 볼까요?")
+        assert " … " in text                     # the trail-off is audible
+        assert "말하지 않을게요" not in text       # no confession
+
+    def test_a_stream_blocked_at_the_door_opens_fresh(self):
+        out = []
+        emitter = SafeWordEmitter(out.append, LIN_REF, 1, [])
+        text, blocked = emitter.finish("정답은 5")   # nothing ever released
+        assert blocked
+        assert text == SafeWordEmitter.FRESH
+        assert "…" not in text                   # nothing to trail off FROM

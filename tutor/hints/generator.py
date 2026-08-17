@@ -566,7 +566,15 @@ class SafeWordEmitter:
     """
 
     HOLD_WORDS = 4
-    FALLBACK = "여기서 답은 말하지 않을게요. 지금까지 한 풀이에서 가장 확실한 줄은 어디인가요?"
+    # The closure has to CONTINUE the amputated sentence, not change the
+    # subject: words already spoken cannot be unsaid, so a blocked stream
+    # left "기울기가 k이고 한 점을 지나는 직선은 y …" dangling and then
+    # announced it would not say the answer — a machine confessing. Trailing
+    # off and handing the sentence over reads as a tutor doing it on purpose,
+    # and IS the cloze prompt a tutor would use there.
+    CONTINUE = "이 다음은 직접 이어서 완성해 볼까요?"
+    # blocked before anything left: no sentence to hand over, so open one
+    FRESH = "이건 직접 찾아보는 게 좋겠어요. 지금 단계에서 무엇부터 확인하면 좋을까요?"
 
     def __init__(
         self,
@@ -642,8 +650,7 @@ class SafeWordEmitter:
             self.pending.clear()
             self.buffer = ""
             prefix = self.committed.rstrip()
-            joiner = " … " if prefix else ""
-            suffix = joiner + self.FALLBACK
+            suffix = " … " + self.CONTINUE if prefix else self.FRESH
             self.emit(suffix)
             return prefix + suffix, True
 
