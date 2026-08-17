@@ -720,10 +720,23 @@ class HintGenerator:
         # ("둘째 줄을 다시 살펴볼까요?"), which no line written before they
         # existed can do. Live, the prewritten L2 served here and the pointing
         # only ever happened at L3, the one level nothing was prewritten for.
+        #
+        # A SURRENDER is the exception: "잘 모르겠는데" resolves the last hint
+        # as ineffective too, but it leaves no error to point at — there is
+        # no attempt. What that student needs is exactly the well-made concept
+        # explanation, which is what the prewritten shelf holds; the live
+        # model, aimed at a mistake that does not exist, drifted into deriving
+        # the line itself and had to be cut off mid-sentence.
+        from tutor.state.answer import is_surrender
+
         prior_here = [
             h for h in history if h.step == decision.target_step and h.level >= 1
         ]
-        correcting = bool(prior_here) and prior_here[-1].effective is False
+        correcting = (
+            bool(prior_here)
+            and prior_here[-1].effective is False
+            and not is_surrender(student_answer or "")
+        )
 
         # 0) A line written for THIS problem's THIS step ahead of time —
         # phrased at warm time by the same model and prompt the live path

@@ -36,6 +36,24 @@ Verdict = Literal["CORRECT", "PARTIAL", "INCORRECT", "UNCLEAR"]
 # A module constant so the TTS cache can pre-render it like the other fixed
 # lines: this is the one reaction that should never keep anyone waiting.
 SURRENDER_FEEDBACK = "괜찮아요, 어려울 수 있어요. 같이 짚어 볼게요."
+
+# "잘 모르겠는데" — surrender, not an attempt. Module-level because the HINT
+# GENERATOR needs the same judgement: an escalation after a surrender has no
+# student error to point at, which changes which shelf the hint comes from.
+_SURRENDER_WORDS_RE = re.compile(
+    r"모르겠|모르는|힌트|도와|도움|어떻게 하는지|hint|help", re.I
+)
+_ATTEMPT_RE = re.compile(r"\d|[=+*/^√]|(?<![가-힣])[a-zA-Z](?![a-zA-Z])")
+
+
+def is_surrender(text: str) -> bool:
+    """They asked for help without attempting anything gradable."""
+    stripped = (text or "").strip()
+    return bool(
+        stripped
+        and _SURRENDER_WORDS_RE.search(stripped)
+        and not _ATTEMPT_RE.search(stripped)
+    )
 # What an utterance that DIED mid-phrase hears. "응, 레이 와이 절편은" is not
 # an answer to grade — the sentence never arrived — and grading the fragment
 # confirmed work the student had not said. The re-asked question follows.
@@ -346,10 +364,12 @@ class AnswerEvaluator:
     # pair cost 2.8s to reach this same conclusion — and then reacted with
     # "조금 더 생각해 볼까요?", which tells a student who just said they cannot
     # think of anything to think harder, immediately before helping anyway.
-    _SURRENDER_RE = re.compile(r"모르겠|모르는|힌트|도와|도움|어떻게 하는지|hint|help", re.I)
     # an attempt that CONTAINS doubt still gets graded: "5인 것 같은데
-    # 모르겠어요" carries a value, and grading it is kinder than ignoring it
-    _CARRIES_AN_ATTEMPT = re.compile(r"\d|[=+*/^√]|(?<![가-힣])[a-zA-Z](?![a-zA-Z])")
+    # 모르겠어요" carries a value, and grading it is kinder than ignoring it —
+    # both halves of that judgement live in module-level is_surrender now,
+    # shared with the hint generator.
+    _SURRENDER_RE = _SURRENDER_WORDS_RE
+    _CARRIES_AN_ATTEMPT = _ATTEMPT_RE
 
     def _gave_up(self, transcript: str) -> AnswerVerdict | None:
         text = transcript.strip()

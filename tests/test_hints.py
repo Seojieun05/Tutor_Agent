@@ -1078,3 +1078,49 @@ class TestABlockedStreamTrailsOffOnPurpose:
         assert blocked
         assert text == SafeWordEmitter.FRESH
         assert "…" not in text                   # nothing to trail off FROM
+
+
+class TestASurrenderGetsTheWellMadeLine:
+    """"잘 모르겠는데" resolves the last hint as ineffective — but it leaves
+    no error to point at, so the correcting detour does not apply: the
+    prewritten concept line for the step serves, instead of a live model
+    aimed at a mistake that does not exist."""
+
+    L2 = "지나는 한 점의 좌표와 그 점에서의 기울기를 알 때, 접선의 방정식을 만드는 원리를 떠올려 볼까요?"
+
+    def ready(self, db):
+        from tutor.knowledge.models import Problem
+        problem = Problem(
+            id="pw-s", problem_type="derivative_applications",
+            problem_text="접선 문제", equations=[],
+            answer=Answer(kind="SCALAR", value="1"),
+            concepts=["differentiation"], verified=True,
+        )
+        db.save_prewritten_hint("pw-s", 1, 2, self.L2)
+        llm = EchoLLMClient()
+        gen = HintGenerator(llm, db)
+        rec = Recognition(problem_text="접선 문제", equations=[],
+                          concepts=["differentiation"], confidence=0.95)
+        match = MatchResult(tier=Tier.EXACT, concepts=["differentiation"], problem=problem)
+        failed = [__import__("tutor.store.session_store", fromlist=["HintRecord"]).HintRecord(
+            id=1, problem_hash="h", step=1, level=1,
+            action="SOCRATIC_QUESTION", hint_text="첫 질문", effective=False)]
+        return gen, llm, rec, match, failed
+
+    def test_surrender_escalation_serves_the_prewritten_l2(self, db):
+        gen, llm, rec, match, failed = self.ready(db)
+        text = gen.generate(
+            Decision(Action.CONCEPT_HINT, 2, 1, None, "escalate"),
+            match, None, rec, history=failed, student_answer="잘 모르겠는데",
+        )
+        assert str(text) == self.L2
+        assert "phrase" not in llm.calls          # no live model needed
+
+    def test_a_wrong_attempt_still_goes_to_the_model(self, db):
+        gen, llm, rec, match, failed = self.ready(db)
+        text = gen.generate(
+            Decision(Action.CONCEPT_HINT, 2, 1, None, "escalate"),
+            match, None, rec, history=failed, student_answer="기울기는 5 아니에요?",
+        )
+        assert str(text) != self.L2
+        assert "phrase" in llm.calls              # an attempt: point at it
