@@ -8,10 +8,10 @@ the student just said.
 
 It draws a SCENE, not a picture. One grid per problem, redeclared every turn:
 the model is shown what is currently on it and returns what should be on it
-now. That framing is what lets a board behave like a real one — the parabola
-that was needed to find a tangent is wiped once the tangent is there, because
-the model simply stops listing it. Nothing here diffs or animates; the scene
-is a statement of the present, and the page replaces the canvas in place.
+now. A source curve stays beside the tangent just earned from it; it is wiped
+when the lesson turns to a different source curve, or when that second tangent
+is complete. Nothing here diffs or animates; the scene is a statement of the
+present, and the page replaces the canvas in place.
 
 Which means the model has to know what the problem is FOR. A curve that only
 exists to derive something else is scaffolding; the thing the question asks
@@ -30,11 +30,13 @@ and everything past the student's frontier stays unseen.
 from __future__ import annotations
 
 import logging
+import math
 import re
 from typing import Literal
 
 from pydantic import BaseModel
 
+from tutor.knowledge import mathnorm
 from tutor.llm.client import LLMClient
 
 log = logging.getLogger(__name__)
@@ -119,12 +121,23 @@ class Curve(BaseModel):
     role: Literal["target", "scaffold"] = "scaffold"
 
 
+class PlotPoint(BaseModel):
+    """A named construction point; its coordinates are never printed."""
+
+    x: float
+    y: float
+    label: str
+
+
 class FigureSpec(BaseModel):
     """The whole grid as it should look after this turn."""
 
     curves: list[Curve] = []
+    points: list[PlotPoint] = []
     x_min: float | None = None
     x_max: float | None = None
+    show_scale: bool = True
+    show_legend: bool = True
     caption: str = ""                            # short Korean label, like a board note
     why: str = ""                                # logged, never shown to the student
 
@@ -135,6 +148,55 @@ _DERIVATIVE_DEFINITION = re.compile(
 _FUNCTION_DEFINITION = re.compile(
     r"^\s*([A-Za-z])\s*\(\s*x\s*\)\s*=\s*(.+)$"
 )
+
+_Y_DEFINITION = re.compile(r"^\s*y\s*=\s*(.+)$", re.IGNORECASE)
+
+
+def _has_unresolved_plot_parameter(
+    curves: list[Curve], equations: list[str], verified: list[str] | None,
+) -> bool:
+    """Whether a plotted shape replaced an undetermined symbol by a sample.
+
+    This is deliberately structural, not problem-specific.  A symbolic family
+    such as ``y=b**x-3`` cannot be sampled until the drawing hand chooses a
+    legal representative for ``b``.  That internal choice must never look like
+    a value the student derived, so its numeric scale and legend are hidden.
+    Fully specified functions (including the f/g curves in a tangent problem)
+    have no unresolved symbol and keep their normal scale.
+    """
+    definitions = {
+        match.group(1): match.group(2).strip()
+        for equation in equations
+        if (match := _FUNCTION_DEFINITION.match(equation or ""))
+    }
+    y_sources = [
+        match.group(1).strip()
+        for equation in equations
+        if (match := _Y_DEFINITION.match(equation or ""))
+    ]
+    known_text = " ".join([*(equations or []), *(verified or [])])
+
+    for curve in curves:
+        source = _expanded_problem_function(curve.label, equations) if curve.label else None
+        if source is None and y_sources:
+            source = y_sources[0]
+        if not source:
+            continue
+        try:
+            parsed = mathnorm.parse_expression(source)
+        except Exception:
+            continue
+        parameters = {
+            str(symbol) for symbol in parsed.free_symbols
+            if str(symbol) != "x" and str(symbol) not in definitions
+        }
+        unresolved = {
+            name for name in parameters
+            if not re.search(rf"(?<![A-Za-z0-9_']){re.escape(name)}\s*=", known_text)
+        }
+        if unresolved:
+            return True
+    return False
 
 
 def _expanded_problem_function(name: str, equations: list[str]) -> str | None:
@@ -170,10 +232,11 @@ def ensure_verified_scene(
     """Deterministically stage a tangent lesson from its verified prefix.
 
     The latest completed derivative definition chooses the dotted source
-    curve. A later completed labelled tangent retires that scaffold. Earned
-    target lines always remain. This yields the natural progression
-    f (scaffold) → l → l+g (scaffold) → l+m without asking a model to infer
-    which part of the verified lesson is current.
+    curve. The first tangent is shown BESIDE that curve, so the student sees
+    what they just derived. When the next derivative becomes the focus, its
+    source curve replaces the old scaffold. Completing the second tangent
+    retires the scaffold and leaves the two target lines. This yields
+    f → f+l → l+g → l+m without asking a model to infer lesson state.
     """
     out = ensure_verified_targets(spec, verified)
     if out is None:
@@ -206,12 +269,20 @@ def ensure_verified_scene(
     targets = [by_label[label] for label in target_order if label in by_label]
     targets.extend(curve for curve in target_curves if curve not in targets)
     function_name = None
-    if focused_derivative is not None:
+    if len(target_order) >= 2:
+        # The pair of target tangents is now the object the problem uses. The
+        # second source curve has finished its job, but neither target leaves.
+        function_name = None
+    elif focused_derivative is not None:
         # The next task is to work with g'(x): g is printed in the problem and
         # may be shown before its derivative has been completed. This is how
         # the board changes from f to g as the lesson changes tangents.
         function_name = focused_derivative.group(1)
-    elif latest_derivative is not None and latest_derivative[0] > latest_target:
+    elif latest_derivative is not None:
+        # Keep f after l is earned; seeing the curve and its tangent together
+        # is the closure of that subproblem. Once g'(x) is the newest completed
+        # derivative this naturally chooses g instead. The two-target branch
+        # above removes g as soon as m is earned.
         function_name = latest_derivative[1]
     if function_name is not None:
         rhs = _expanded_problem_function(function_name, equations or [])
@@ -243,9 +314,10 @@ something else are `scaffold`; the objects the question is about are `target`.
    to produce l and m, and the area the question asks for does not involve
    them at all.
 
-Wipe a scaffold as soon as the thing it produced is on the grid. Once the
-tangent l is drawn, f has done its job and only crowds the picture — omit it.
-Keep a scaffold while it is still being used, and never wipe a target.
+Keep a source curve when its first tangent has just been earned, so the student
+sees them together. When the lesson turns from f to finding the tangent of g,
+replace f with g but keep l. Once the tangent m is earned, remove g and keep
+both target lines l and m. Never wipe an earned target.
 
 WHAT YOU MAY DRAW
 Up to 4 functions of ONE variable, ASCII in x ("x**2 - 4*x - 3", "-2*x - 4").
@@ -265,6 +337,30 @@ allowed to make from your own working — only from theirs or the verified list.
 
 LABEL each curve with the name the problem uses (l, m, f, g) when it has one.
 
+AN UNKNOWN PARAMETER IS NOT AN ANSWER
+Sometimes the problem gives a FAMILY of curves but has not determined its
+parameter yet, for example b>1 and y=b**x-3. To sketch its qualitative shape,
+choose any legal representative internally and put that numeric expression in
+`expr` so it can be rendered. For an undetermined exponential base constrained
+to be greater than 1, prefer 2 as the conventional representative unless the
+given conditions exclude it. But the student has NOT found that parameter:
+- set `show_scale` to false and `show_legend` to false;
+- do not state the representative value in the caption or anywhere else;
+- use the picture only for shape and relative placement.
+Once the student has actually established the parameter in the verified work,
+draw the real curve and the normal scale may return. Do NOT hide the scale for
+a fully specified graph. In particular, ordinary polynomial curves and tangent
+lines whose formulas are already given or verified keep `show_scale: true`.
+
+NAMED CONSTRUCTION POINTS
+You may place named points already defined in the problem, such as A, B and C.
+Their x/y fields are private drawing coordinates: NEVER print those coordinates
+or use them in the caption. Add at most ONE new named point per turn, in the
+order the statement defines them, and repeat every current point to keep it.
+Place them consistently with the stated geometry. A point whose location is an
+unreached result may be positioned only as an unscaled qualitative sketch, not
+as a measurable coordinate.
+
 THE WINDOW
 Choose x_min and x_max so what the tutor is talking about fills the frame, and
 keep the previous window when the scene grows — a grid that jumps every turn
@@ -283,7 +379,9 @@ NEVER
 
 Return ONLY JSON:
 {"curves": [{"expr": "...", "label": "...", "role": "target|scaffold"}],
- "x_min": null, "x_max": null, "caption": "...", "why": "..."}"""
+ "points": [{"x": 0, "y": 0, "label": "A"}],
+ "x_min": null, "x_max": null, "show_scale": true, "show_legend": true,
+ "caption": "...", "why": "..."}"""
 
 
 class Illustrator:
@@ -301,7 +399,10 @@ class Illustrator:
         misconception: str | None,
         level: int,
         scene: list[Curve] | None = None,
+        points: list[PlotPoint] | None = None,
         span: tuple[float, float] | None = None,
+        show_scale: bool = True,
+        show_legend: bool = True,
         student_said: str | None = None,
         verified: list[str] | None = None,
     ) -> FigureSpec | None:
@@ -322,11 +423,20 @@ class Illustrator:
             )
         if board:
             parts.append(f"칠판에 적힌 식: {' / '.join(board)}")
-        if scene:
+        if scene or points:
             drawn = " / ".join(
-                f"{c.label or '이름없음'}: {c.expr} ({c.role})" for c in scene
+                f"{c.label or '이름없음'}: {c.expr} ({c.role})" for c in (scene or [])
             )
             parts.append(f"지금 그려져 있는 것: {drawn}")
+            if points:
+                parts.append(
+                    "지금 표시된 점 (좌표는 말하지 말고 모두 유지): "
+                    + ", ".join(point.label for point in points)
+                )
+            parts.append(
+                f"현재 눈금: {'표시' if show_scale else '숨김'}, "
+                f"현재 범례: {'표시' if show_legend else '숨김'}"
+            )
             if span:
                 parts.append(f"지금 창: [{span[0]}, {span[1]}]")
         else:
@@ -353,5 +463,27 @@ class Illustrator:
                 kept.append(Curve(expr=expr, label=(c.label or "").strip()[:4],
                                   role=c.role))
         spec.curves = kept[:4]
+        allowed = set(re.findall(
+            r"(?<![A-Za-z])([A-Z])(?![A-Za-z])",
+            " ".join([problem_text, *(verified or [])]),
+        ))
+        clean_points = []
+        for point in spec.points[:8]:
+            label = (point.label or "").strip().upper()[:1]
+            if not label or label not in allowed:
+                continue
+            try:
+                x, y = float(point.x), float(point.y)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(x) and math.isfinite(y):
+                clean_points.append(PlotPoint(x=x, y=y, label=label))
+        spec.points = clean_points
         spec.caption = " ".join(spec.caption.split())[:28]
+        if _has_unresolved_plot_parameter(spec.curves, equations, verified):
+            # The prompt asks for this; the code makes the safety property
+            # unconditional even if a drawing model forgets one of the flags.
+            spec.show_scale = False
+            spec.show_legend = False
+            spec.caption = ""
         return spec

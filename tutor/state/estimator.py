@@ -136,6 +136,109 @@ class StudentStateEstimator:
             )
         return self._post_rules(state, reference, prev_state, rec)
 
+    def vision_context(
+        self,
+        *,
+        reference: ReferenceSolution,
+        prev_state: StudentState | None,
+        prev_work: list[str] | None,
+        history: list[HintRecord],
+        transcript: str | None = None,
+    ) -> str:
+        """Context that lets worksheet reading and diagnosis share one call.
+
+        This contains only information already cached for the active problem.
+        The recognizer is told explicitly that none of it is page content.
+        """
+        misconceptions = [
+            m.model_dump() for m in self.db.misconceptions_for(reference.concepts)
+        ]
+        parts = [
+            "기준 풀이 단계:\n"
+            + "\n".join(
+                f"  {s.idx}. {s.description} → {s.expression}"
+                for s in reference.steps
+            ),
+            "알려진 오개념 목록: "
+            + json.dumps(misconceptions, ensure_ascii=False),
+        ]
+        if prev_state is not None:
+            parts.append("직전 상태: " + prev_state.model_dump_json())
+        if prev_work is not None:
+            parts.append(
+                "직전 사진의 학생 풀이 (현재 사진과 비교할 때만 사용): "
+                + json.dumps(prev_work, ensure_ascii=False)
+            )
+        if history:
+            parts.append(
+                "지금까지 준 힌트: "
+                + json.dumps(
+                    [
+                        {
+                            "step": h.step,
+                            "level": h.level,
+                            "action": h.action,
+                            "effective": h.effective,
+                        }
+                        for h in history
+                    ],
+                    ensure_ascii=False,
+                )
+            )
+        if transcript:
+            parts.append(f"학생이 직전에 말한 내용: {transcript}")
+        return "\n\n".join(parts)
+
+    def accept_vision_estimate(
+        self,
+        state: StudentState | None,
+        *,
+        rec: Recognition,
+        reference: ReferenceSolution,
+        prev_state: StudentState | None,
+        prev_work: list[str] | None,
+        history: list[HintRecord],
+        transcript: str | None = None,
+    ) -> StudentState | None:
+        """Validate a diagnosis returned with worksheet recognition.
+
+        Deterministic checks still outrank the model. Ambiguous diagnoses that
+        the ordinary estimator would retry are declined here, causing the
+        session to fall back to the existing dedicated estimate call.
+        """
+        pre = self._pre_check(rec, prev_state, prev_work, history, transcript)
+        if pre is not None:
+            return pre
+        quick = self._rule_based_progress(rec, reference, prev_state)
+        if quick is not None:
+            return self._post_rules(quick, reference, prev_state, rec)
+        if state is None:
+            return None
+        if (
+            state.status == "UNCERTAIN"
+            and prev_state is not None
+            and rec.student_work
+            and rec.confidence >= self.conf_threshold
+        ):
+            log.info(
+                "inline estimate was UNCERTAIN on a legible page; using dedicated estimate"
+            )
+            return None
+        if (
+            state.status != "CORRECT"
+            and prev_state is not None
+            and prev_state.misconception
+            and state.misconception == prev_state.misconception
+            and prev_work is not None
+            and rec.student_work != prev_work
+        ):
+            log.info(
+                "inline estimate repeated an old misconception on changed work; "
+                "using dedicated estimate"
+            )
+            return None
+        return self._post_rules(state, reference, prev_state, rec)
+
     # --- deterministic pre-checks: no LLM call -------------------------------
 
     def precheck(

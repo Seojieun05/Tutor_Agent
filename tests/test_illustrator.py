@@ -114,6 +114,91 @@ class TestTheSpec:
         assert len(spec.caption) <= 28
 
 
+class TestUnknownParametersStayQualitative:
+    def test_a_representative_value_cannot_gain_a_scale_or_legend(self, db):
+        llm = EchoLLMClient({"illustrate": [{
+            "curves": [{"expr": "2**x - 3", "role": "scaffold"}],
+            "points": [{"x": 1, "y": -1, "label": "P"}],
+            # Deliberately unsafe proposal: the general guard must override it.
+            "show_scale": True,
+            "show_legend": True,
+            "caption": "b=2인 그래프",
+        }]})
+        spec = Illustrator(llm).draw(
+            hint="점 P의 위치를 살펴볼까요?",
+            problem_text="상수 b>1에 대하여 y=b^x-3 위의 점 P를 생각하자.",
+            equations=["y = b**x - 3"],
+            student_work=[], board=[], misconception=None, level=1,
+        )
+
+        assert [point.label for point in spec.points] == ["P"]
+        assert not spec.show_scale and not spec.show_legend
+        assert spec.caption == ""
+
+    def test_a_fully_specified_graph_keeps_the_normal_scale(self, db):
+        llm = EchoLLMClient({"illustrate": [{
+            "curves": [
+                {"expr": "x**2 - 4*x - 3", "label": "f"},
+                {"expr": "(x**3 - 2*x)*(x**2 - 4*x - 3)", "label": "g"},
+            ],
+        }]})
+        spec = Illustrator(llm).draw(
+            hint="곡선 f와 g를 살펴볼까요?",
+            problem_text="함수 f와 g의 접선을 구하는 문제",
+            equations=[
+                "f(x) = x**2 - 4*x - 3",
+                "g(x) = (x**3 - 2*x)*f(x)",
+            ],
+            student_work=[], board=[], misconception=None, level=1,
+        )
+
+        assert spec.show_scale and spec.show_legend
+
+    def test_existing_named_points_are_given_back_to_the_drawing_model(self, db):
+        from tutor.hints.illustrator import PlotPoint
+
+        class Recording(EchoLLMClient):
+            def __init__(self):
+                super().__init__({"illustrate": [{
+                    "curves": [{"expr": "2**x - 3"}],
+                    "points": [
+                        {"x": 1, "y": -1, "label": "P"},
+                        {"x": 1, "y": 0, "label": "Q"},
+                    ],
+                }]})
+                self.user = ""
+
+            def complete_json(self, **kwargs):
+                self.user = kwargs["user"]
+                return super().complete_json(**kwargs)
+
+        llm = Recording()
+        spec = Illustrator(llm).draw(
+            hint="다음 점을 표시해 볼까요?",
+            problem_text="점 P와 점 Q를 표시한다.",
+            equations=["y = b**x - 3"],
+            student_work=[], board=[], misconception=None, level=2,
+            points=[PlotPoint(x=1, y=-1, label="P")],
+            show_scale=False, show_legend=False,
+        )
+
+        assert "지금 표시된 점" in llm.user and "P" in llm.user
+        assert [point.label for point in spec.points] == ["P", "Q"]
+
+
+@pytest.mark.asyncio
+async def test_area_equation_already_said_in_prose_is_not_printed_twice(db):
+    session, _, _ = build(db, [])
+    session.ws.events.clear()
+    await session._send_problem(Recognition(
+        problem_text="삼각형 AOC의 넓이가 8일 때 값을 구하여라.",
+        equations=["Area(AOC) = 8"],
+    ))
+
+    event = next(e for e in session.ws.events if e["event"] == "problem")
+    assert event["data"]["equations"] == []
+
+
 class FakeWS:
     def __init__(self):
         self.events: list[dict] = []
@@ -503,7 +588,11 @@ class TestTheVerifiedTangentSceneHasADeterministicOrder:
         assert [(c.label, c.role) for c in scene.curves] == [("f", "scaffold")]
 
         scene = self.advance(scene.curves, 2)
-        assert [(c.label, c.role) for c in scene.curves] == [("l", "target")]
+        # l appears the moment it is earned, while the dotted source f stays
+        # long enough for the student to see the curve/tangent pair.
+        assert [(c.label, c.role) for c in scene.curves] == [
+            ("l", "target"), ("f", "scaffold")
+        ]
 
         # As the next hint opens work on g'(x), the problem-given g replaces f
         # immediately; its derivative need not already be solved to show it.
@@ -526,3 +615,55 @@ class TestTheVerifiedTangentSceneHasADeterministicOrder:
         assert [(c.label, c.role) for c in scene.curves] == [
             ("l", "target"), ("m", "target")
         ]
+
+    async def test_each_verified_transition_is_published_immediately(self, db):
+        """The local publisher, not the later drawing model, owns the flow."""
+        from tutor.state.models import StudentState
+
+        reference = ReferenceSolution(
+            steps=[
+                SolutionStep(idx=i + 1, description=description, expression=expression)
+                for i, (description, expression) in enumerate(zip(
+                    [
+                        "f'(x)로 접선 l의 기울기 구하기",
+                        "l의 방정식 쓰기",
+                        "곱의 미분법으로 g'(x) 쓰기",
+                        "g'(1) 계산",
+                        "m의 방정식 쓰기",
+                    ],
+                    self.STEPS,
+                ))
+            ],
+            final_answer=Answer(kind="SCALAR", value="49"),
+            concepts=["differentiation"], verified=True, origin="db",
+        )
+        session, _, _ = build(db, [])
+        session.ctx.reference = reference
+        session.ctx.recognition = Recognition(
+            problem_text="두 접선 l, m을 구하는 문제",
+            equations=self.EQUATIONS,
+            concepts=["differentiation"], confidence=1.0,
+        )
+
+        async def publish(frontier, target, *, focus=False):
+            session.store.set_state(StudentState(
+                current_step="t", last_correct_step=frontier, status="CORRECT"
+            ))
+            changed = await session._publish_verified_scene(
+                Decision(Action.WAIT, 0, target, None, "verified transition"),
+                session.ctx, "p1", focus_target=focus,
+            )
+            assert changed
+            return [c.label for c in session.ctx.scene]
+
+        assert await publish(1, 2) == ["f"]
+        # l is sent immediately and f is still present; no wait for g or m.
+        assert await publish(2, 3) == ["l", "f"]
+        figure = [e for e in session.ws.events if e["event"] == "figure"][-1]
+        assert "-2·x - 4" in figure["data"]["svg"]
+        assert "x² - 4·x - 3" in figure["data"]["svg"]
+
+        # The g' invitation swaps only the dotted scaffold.
+        assert await publish(2, 3, focus=True) == ["l", "g"]
+        # Earning m removes g and leaves the two target lines.
+        assert await publish(5, 6) == ["l", "m"]

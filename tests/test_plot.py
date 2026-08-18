@@ -91,6 +91,27 @@ class TestItStaysASketch:
         ticks = re.findall(r'<text[^>]*>(-?\d+\.?\d*)</text>', svg)
         assert ticks and max(abs(float(t)) for t in ticks) < 1000
 
+    def test_named_construction_points_can_be_shown_without_a_scale(self):
+        from tutor.hints.illustrator import Curve, PlotPoint
+
+        svg = function_svg(
+            [Curve(expr="2**x - 2")],
+            span=(-1, 3),
+            points=[
+                PlotPoint(x=2, y=2, label="A"),
+                PlotPoint(x=2, y=0, label="B"),
+                PlotPoint(x=2, y=-2, label="C"),
+            ],
+            show_scale=False,
+            show_legend=False,
+        )
+
+        assert svg.count("<circle") == 3
+        assert all(f">{label}</text>" in svg for label in "ABC")
+        assert 'class="axes"' in svg
+        assert 'class="grid"' not in svg and 'class="ticks"' not in svg
+        assert 'class="legend"' not in svg
+
 
 def tick_step(svg: str) -> tuple[float, float]:
     """(x step, y step) as drawn. The x labels sit under the axis, the y

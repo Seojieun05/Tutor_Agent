@@ -189,6 +189,68 @@ async def test_a_work_check_reuses_the_problem_it_is_already_on(db):
     assert llm.calls.count("tag") == 0
 
 
+async def test_same_problem_vision_diagnosis_skips_the_second_model_call(db):
+    """Reading and diagnosis share one request when the reference is cached."""
+    inline = seen(["3*x = 25"])
+    inline["state_estimate"] = {
+        "current_step": "상수항 계산",
+        "last_correct_step": 0,
+        "status": "CALCULATION_ERROR",
+        "misconception": "20에서 5를 빼지 않고 더함",
+        "attempt_count": 2,
+        "previous_hint_effective": False,
+    }
+    session, llm, _, _ = build(
+        db, "풀이 맞아?", llm_responses={"recognize": [inline]}
+    )
+    ask_l1(session)
+
+    await session._handle_utterance(PCM, 16000)
+
+    assert llm.calls.count("recognize") == 1
+    assert llm.calls.count("estimate") == 0
+    state = session.store.get_state()
+    assert state is not None
+    assert state.status == "CALCULATION_ERROR"
+    assert state.current_step == "상수항 계산"
+
+
+async def test_uncertain_inline_diagnosis_falls_back_to_dedicated_estimate(db):
+    """Latency never wins over a reliable verdict on a legible changed page."""
+    inline = seen(["3*x = 25"])
+    inline["state_estimate"] = {
+        "current_step": "판독 불확실",
+        "last_correct_step": 0,
+        "status": "UNCERTAIN",
+        "misconception": None,
+        "attempt_count": 2,
+        "previous_hint_effective": None,
+    }
+    session, llm, _, _ = build(
+        db,
+        "풀이 맞아?",
+        llm_responses={
+            "recognize": [inline],
+            "estimate": [{
+                "current_step": "상수항 계산",
+                "last_correct_step": 0,
+                "status": "CALCULATION_ERROR",
+                "misconception": "20에서 5를 빼지 않고 더함",
+                "attempt_count": 2,
+                "previous_hint_effective": False,
+            }],
+        },
+    )
+    ask_l1(session)
+
+    await session._handle_utterance(PCM, 16000)
+
+    assert llm.calls.count("recognize") == 1
+    assert llm.calls.count("estimate") == 1
+    state = session.store.get_state()
+    assert state is not None and state.status == "CALCULATION_ERROR"
+
+
 async def test_a_chain_equality_reread_stays_the_same_problem(db):
     """The 등비수열 regression: a = b = c cannot be sympy-parsed, and an
     unparseable comparison used to mean "different problem" — resetting the

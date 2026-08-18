@@ -9,7 +9,7 @@ every stage, because the interesting question is not "is it slow" but "which
 call". The three differ in what they are allowed to skip:
 
     HINT_REQUEST  recognize(+tags) → match → phrase  (solve runs in the background)
-    WORK_CHECK    recognize → estimate → phrase        (problem already known)
+    WORK_CHECK    recognize(+diagnosis) → phrase        (estimate is fallback)
     ANSWER        evaluate → phrase                    (no photo at all)
 
 Capture and STT are excluded: they are measured elsewhere and depend on the
@@ -131,17 +131,30 @@ def hint_request(dep, jpeg: bytes) -> tuple[Timer, object]:
 
 
 def work_check(dep, jpeg: bytes, ctx) -> Timer:
-    """Same page, already identified: no tagging, no matching, no solving."""
+    """Same page: recognition also diagnoses from the cached reference."""
     rec0, match, reference = ctx
     t = Timer()
-    rec = t.run("recognize", dep["recognizer"].recognize, jpeg)
-    rec.problem_type, rec.concepts = rec0.problem_type, rec0.concepts
-    state = t.run(
-        "estimate", lambda: dep["estimator"].estimate(
-            rec=rec, reference=reference, prev_state=None, prev_work=rec0.student_work,
-            history=[], transcript="풀이 맞아요?",
-        )
+    diagnosis_context = dep["estimator"].vision_context(
+        reference=reference, prev_state=None, prev_work=rec0.student_work,
+        history=[], transcript="풀이 맞아요?",
     )
+    rec = t.run(
+        "recognize", dep["recognizer"].recognize, jpeg,
+        diagnosis_context=diagnosis_context,
+    )
+    rec.problem_type, rec.concepts = rec0.problem_type, rec0.concepts
+    state = dep["estimator"].accept_vision_estimate(
+        rec.state_estimate,
+        rec=rec, reference=reference, prev_state=None,
+        prev_work=rec0.student_work, history=[], transcript="풀이 맞아요?",
+    )
+    if state is None:
+        state = t.run(
+            "estimate", lambda: dep["estimator"].estimate(
+                rec=rec, reference=reference, prev_state=None,
+                prev_work=rec0.student_work, history=[], transcript="풀이 맞아요?",
+            )
+        )
     decision = Decision(Action.SOCRATIC_QUESTION, 1, state.last_correct_step + 1, None, "bench")
     text = t.run(
         "phrase", dep["hint_gen"].generate, decision, match, reference, rec, [],

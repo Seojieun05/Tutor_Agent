@@ -25,6 +25,7 @@ from tutor.knowledge.taxonomy import (
     problem_types_for_prompt,
 )
 from tutor.llm.client import LLMClient
+from tutor.state.models import StudentState
 
 log = logging.getLogger(__name__)
 
@@ -46,9 +47,42 @@ class Recognition(BaseModel):
     # them, so an invented id becomes "unknown"/dropped rather than a KB key.
     problem_type: str = UNKNOWN_PROBLEM_TYPE
     concepts: list[str] = []
+    # When the server already knows this problem, the same vision call can
+    # compare the newly photographed work with the cached reference.  This is
+    # internal evidence, never worksheet text; the session accepts it only if
+    # the photo is confirmed to be the same problem and deterministic checks
+    # agree.  New-problem recognition leaves it null.
+    state_estimate: StudentState | None = None
 
 
-def _system_prompt() -> str:
+def _system_prompt(with_diagnosis: bool = False) -> str:
+    diagnosis = """
+
+OPTIONAL SAME-PROBLEM DIAGNOSIS:
+The user message contains a cached reference solution only when the server is
+already teaching this problem. In that case, do a third job in this SAME pass:
+compare the handwritten `student_work` visible in the CURRENT photo with that
+reference and fill `state_estimate`.
+
+- The reference is context, never content from the page. Do not copy reference
+  expressions into `student_work`, `problem_text`, or `equations` unless they
+  are genuinely visible in the photo.
+- `last_correct_step` is the largest N for which reference steps 1..N are all
+  accounted for. A later correct line does not bridge a missing earlier step.
+- A previous state is context, not evidence. Diagnose the CURRENT photo.
+- Use CORRECT only when everything shown is sound; otherwise choose the most
+  specific status. Use UNCERTAIN rather than guessing about illegible work.
+- Prefer a listed misconception id when it fits; otherwise use a short Korean
+  description or null.
+- Keep `current_step` to one short Korean description.
+
+If no cached diagnosis context is supplied, set `state_estimate` to null.
+""" if with_diagnosis else """
+
+NO SAME-PROBLEM DIAGNOSIS CONTEXT:
+Set `state_estimate` to null. Do not try to infer reference-step progress.
+"""
+
     return f"""You read a photo of a math worksheet. Two jobs, one answer:
 transcribe exactly what is written, then classify the problem.
 
@@ -79,6 +113,7 @@ CLASSIFICATION rules:
 - If you cannot classify confidently, use problem_type "unknown" and concepts [].
   Guessing is worse than admitting uncertainty. A low READING confidence does
   not force "unknown": classify whatever you did read clearly.
+{diagnosis}
 
 Return ONLY the JSON object."""
 
@@ -90,12 +125,22 @@ class Recognizer:
         # a model. Without settings the frame is sent exactly as photographed.
         self.settings = settings
 
-    def recognize(self, jpeg: bytes) -> Recognition:
+    def recognize(
+        self, jpeg: bytes, *, diagnosis_context: str | None = None
+    ) -> Recognition:
         jpeg = self._framed(jpeg)
+        diagnose = bool((diagnosis_context or "").strip())
+        user = "Transcribe and classify this worksheet photo into the JSON schema."
+        if diagnose:
+            user += (
+                "\n\nThe following is INTERNAL cached context for diagnosing the "
+                "handwriting in this same photo. Never transcribe it as page content:\n"
+                + diagnosis_context.strip()
+            )
         rec = self.llm.complete_json(
             purpose="recognize",
-            system=_system_prompt(),
-            user="Transcribe and classify this worksheet photo into the JSON schema.",
+            system=_system_prompt(with_diagnosis=diagnose),
+            user=user,
             images=[jpeg],
             schema=Recognition,
         )

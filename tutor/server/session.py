@@ -310,6 +310,24 @@ def answer_core(transcript: str) -> str | None:
 
 # Does this string claim anything, or is it a lone term?
 _RELATES = re.compile(r"[=<>≤≥]")
+_AREA_EQUATION = re.compile(
+    r"area\s*\(\s*([a-z]{3,})\s*\)\s*=\s*(-?\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+
+
+def _repeats_area_from_statement(equation: str, problem_text: str) -> bool:
+    """True when ``Area(AOC)=8`` only restates Korean prose already shown."""
+    match = _AREA_EQUATION.search(equation or "")
+    if match is None:
+        return False
+    compact = mathnorm.compact(problem_text or "").lower()
+    polygon, value = match.groups()
+    return (
+        ("넓이" in compact or "area" in compact)
+        and polygon.lower() in compact
+        and value in compact
+    )
 
 
 def preflight_fallback(concept_name: str) -> str:
@@ -341,6 +359,7 @@ class ProblemContext:
     # is drawn in. The illustrator redeclares both every turn, which is how a
     # scaffold curve disappears once the thing it produced is on the board.
     scene: tuple = ()
+    points: tuple = ()
     span: tuple[float, float] | None = None
     # The student's own window: (x0, x1, y0, y1), or None while the automatic
     # guess (the middle 90% of the target's values) is still in charge. The
@@ -353,6 +372,8 @@ class ProblemContext:
     view: tuple[float, float, float, float] | None = None
     view_rev: int = 0
     caption: str = ""
+    show_scale: bool = True
+    show_legend: bool = True
 
     def reference_if_ready(self) -> ReferenceSolution | None:
         """The reference if it exists RIGHT NOW; never waits.
@@ -675,6 +696,8 @@ class Session:
         seen = mathnorm.compact(text)
         equations = []
         for raw in rec.equations:
+            if _repeats_area_from_statement(raw, rec.problem_text):
+                continue
             eq = mathspeak.displayable(raw)
             compact = mathnorm.compact(eq)
             # a bare term ("a_10") states nothing; a repeat of the sentence
@@ -1346,13 +1369,37 @@ class Session:
             return
 
         await self._stage("쓴 풀이를 읽고 있어요" if question else "문제를 읽고 있어요")
-        rec = await asyncio.to_thread(self.deps.recognizer.recognize, jpeg)
+        # On an active problem the reference and previous state are already in
+        # memory. Give them to the vision call so it can transcribe AND diagnose
+        # the new handwriting in one remote round trip. If the photo turns out
+        # to be another problem, the inline diagnosis is ignored below.
+        inline_ctx = self.ctx
+        inline_reference = inline_ctx.reference_if_ready() if inline_ctx else None
+        inline_prev_state = self.store.get_state()
+        inline_history = (
+            self.store.get_history(problem_hash=inline_ctx.hash)
+            if inline_ctx is not None else []
+        )
+        diagnosis_context = None
+        if inline_reference is not None:
+            diagnosis_context = self.deps.estimator.vision_context(
+                reference=inline_reference,
+                prev_state=inline_prev_state,
+                prev_work=self.prev_work,
+                history=inline_history,
+                transcript=self.last_transcript,
+            )
+        rec = await asyncio.to_thread(
+            self.deps.recognizer.recognize,
+            jpeg,
+            diagnosis_context=diagnosis_context,
+        )
         # What the VLM actually read. Nothing here comes from the solver, so no
         # answer can reach the log through this line — it is the worksheet, which
         # the student is looking at anyway.
         log.info(
             "recognized: conf=%.2f problem=%r equations=%s work=%s uncertain=%s",
-            rec.confidence, rec.problem_text[:60], rec.equations,
+            rec.confidence, rec.problem_text[:200], rec.equations,
             rec.student_work, rec.uncertain_regions,
         )
         if rec.confidence < self.deps.settings.recog_conf_threshold:
@@ -1409,6 +1456,24 @@ class Session:
             except Exception:
                 log.exception("solver died during a work check; diagnosing from concepts")
                 reference = None
+        inline_state = None
+        if (
+            reference is not None
+            and inline_reference is not None
+            and ctx is inline_ctx
+        ):
+            inline_state = self.deps.estimator.accept_vision_estimate(
+                rec.state_estimate,
+                rec=rec,
+                reference=reference,
+                prev_state=prev_state,
+                prev_work=self.prev_work,
+                history=history,
+                transcript=self.last_transcript,
+            )
+            if inline_state is not None:
+                log.info("using state diagnosis returned with worksheet recognition")
+
         if reference is None:
             # The solver is still writing the reference solution. The full
             # diagnosis compares work against that solution, so it cannot run
@@ -1428,6 +1493,8 @@ class Session:
                 attempt_count=prev_state.attempt_count + 1 if prev_state else 1,
             )
             log.info("solver still running: first hint from concepts alone")
+        elif inline_state is not None:
+            new_state = inline_state
         else:
             new_state = await asyncio.to_thread(
                 self.deps.estimator.estimate,
@@ -1971,9 +2038,10 @@ class Session:
         the drawing model finishes deciding the rest of the scene.
         """
         verified = self._verified_steps(ctx)
-        before = tuple(
+        before_curves = tuple(
             (c.label, c.expr.replace(" ", ""), c.role) for c in ctx.scene
         )
+        before_points = tuple((p.label, p.x, p.y) for p in ctx.points)
         target = next(
             (step for step in (ctx.reference.steps if ctx.reference else [])
              if step.idx == decision.target_step),
@@ -1981,20 +2049,35 @@ class Session:
         )
         focus_step = target.description if focus_target and target is not None else ""
         spec = illustrator.ensure_verified_scene(
-            illustrator.FigureSpec(curves=list(ctx.scene)),
+            illustrator.FigureSpec(
+                curves=list(ctx.scene), points=list(ctx.points),
+                show_scale=ctx.show_scale, show_legend=ctx.show_legend,
+                caption=ctx.caption,
+            ),
             verified,
             list(ctx.recognition.equations),
             focus_step,
         )
         if spec is None:
             return False
-        after = tuple(
+        after_curves = tuple(
             (c.label, c.expr.replace(" ", ""), c.role) for c in spec.curves
         )
-        if after == before:
+        after_points = tuple((p.label, p.x, p.y) for p in spec.points)
+        span = ctx.span or plot.DEFAULT_SPAN
+        if spec.x_min is not None and spec.x_max is not None and spec.x_min < spec.x_max:
+            span = (spec.x_min, spec.x_max)
+        if (
+            after_curves == before_curves
+            and after_points == before_points
+            and spec.show_scale == ctx.show_scale
+            and spec.show_legend == ctx.show_legend
+            and spec.caption == ctx.caption
+            and span == ctx.span
+        ):
             return False
 
-        existing = set(before)
+        existing = set(before_curves)
         added = [
             c for c in spec.curves
             if (c.label, c.expr.replace(" ", ""), c.role) not in existing
@@ -2007,14 +2090,17 @@ class Session:
             log.info("a newly verified curve still tripped the leak gate; not drawn")
             return False
 
-        span = ctx.span or plot.DEFAULT_SPAN
         svg = await asyncio.to_thread(
-            plot.function_svg, spec.curves, span, view=ctx.view
+            plot.function_svg, spec.curves, span, view=ctx.view,
+            points=spec.points, show_scale=spec.show_scale,
+            show_legend=spec.show_legend,
         )
         if not svg or self.ctx is not ctx or ctx.hash != problem_hash:
             return False
 
-        ctx.scene, ctx.span = tuple(spec.curves), span
+        ctx.scene, ctx.points, ctx.span = tuple(spec.curves), tuple(spec.points), span
+        ctx.caption, ctx.show_scale = spec.caption, spec.show_scale
+        ctx.show_legend = spec.show_legend
         try:
             await self.ws.send(make_event("figure", {
                 "id": problem_hash or "scene",
@@ -2070,7 +2156,10 @@ class Session:
             misconception=decision.misconception,
             level=decision.level,
             scene=list(ctx.scene),
+            points=list(ctx.points),
             span=ctx.span,
+            show_scale=ctx.show_scale,
+            show_legend=ctx.show_legend,
             student_said=student_said,
             verified=verified,
         )
@@ -2105,10 +2194,15 @@ class Session:
         current_scene = tuple(
             (c.label, c.expr.replace(" ", ""), c.role) for c in ctx.scene
         )
+        next_points = tuple((p.label, p.x, p.y) for p in spec.points)
+        current_points = tuple((p.label, p.x, p.y) for p in ctx.points)
         if (
             next_scene == current_scene
+            and next_points == current_points
             and span == ctx.span
             and spec.caption == ctx.caption
+            and spec.show_scale == ctx.show_scale
+            and spec.show_legend == ctx.show_legend
         ):
             # The immediate verified-target render already shows exactly this
             # scene. Do not make the page repaint the same graph a second time.
@@ -2116,7 +2210,9 @@ class Session:
         # through the student's own window when they have chosen one — the
         # next turn's redraw must not snap their view back to the guess
         svg = await asyncio.to_thread(
-            plot.function_svg, spec.curves, span, view=ctx.view
+            plot.function_svg, spec.curves, span, view=ctx.view,
+            points=spec.points, show_scale=spec.show_scale,
+            show_legend=spec.show_legend,
         )
         if not svg:
             return
@@ -2130,7 +2226,9 @@ class Session:
             return
         gone = [c.label or c.expr for c in ctx.scene
                 if c.expr not in {n.expr for n in spec.curves}]
-        ctx.scene, ctx.span, ctx.caption = tuple(spec.curves), span, spec.caption
+        ctx.scene, ctx.points = tuple(spec.curves), tuple(spec.points)
+        ctx.span, ctx.caption, ctx.show_scale = span, spec.caption, spec.show_scale
+        ctx.show_legend = spec.show_legend
         try:
             await self.ws.send(make_event("figure", {
                 # one canvas per problem: the page replaces it in place, so
@@ -2207,7 +2305,9 @@ class Session:
 
         ctx.view_rev += 1
         svg = await asyncio.to_thread(
-            plot.function_svg, list(ctx.scene), span, view=ctx.view
+            plot.function_svg, list(ctx.scene), span, view=ctx.view,
+            points=list(ctx.points), show_scale=ctx.show_scale,
+            show_legend=ctx.show_legend,
         )
         if not svg or self.ctx is not ctx:
             return

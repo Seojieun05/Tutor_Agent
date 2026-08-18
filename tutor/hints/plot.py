@@ -222,6 +222,7 @@ def compute_view(
 def function_svg(
     curves, span: tuple[float, float] = DEFAULT_SPAN, zoom: float = 1.0,
     view: tuple[float, float, float, float] | None = None,
+    points=(), show_scale: bool = True, show_legend: bool = True,
 ) -> str | None:
     """Markup for the scene, or None when nothing in it can be drawn.
 
@@ -248,12 +249,13 @@ def function_svg(
         f'<svg viewBox="0 0 {WIDTH} {HEIGHT}" xmlns="http://www.w3.org/2000/svg" '
         f'role="img" aria-label="함수의 그래프" class="fnplot">'
     ]
-    grid = []
-    for t in _ticks(x0, x1):
-        grid.append(f'<line x1="{px(t):.1f}" y1="{PAD}" x2="{px(t):.1f}" y2="{HEIGHT - PAD}"/>')
-    for t in _ticks(y0, y1):
-        grid.append(f'<line x1="{PAD}" y1="{py(t):.1f}" x2="{WIDTH - PAD}" y2="{py(t):.1f}"/>')
-    parts.append(f'<g class="grid">{"".join(grid)}</g>')
+    if show_scale:
+        grid = []
+        for t in _ticks(x0, x1):
+            grid.append(f'<line x1="{px(t):.1f}" y1="{PAD}" x2="{px(t):.1f}" y2="{HEIGHT - PAD}"/>')
+        for t in _ticks(y0, y1):
+            grid.append(f'<line x1="{PAD}" y1="{py(t):.1f}" x2="{WIDTH - PAD}" y2="{py(t):.1f}"/>')
+        parts.append(f'<g class="grid">{"".join(grid)}</g>')
 
     axes = []
     if y0 <= 0 <= y1:
@@ -262,24 +264,25 @@ def function_svg(
         axes.append(f'<line x1="{px(0):.1f}" y1="{PAD}" x2="{px(0):.1f}" y2="{HEIGHT - PAD}"/>')
     parts.append(f'<g class="axes">{"".join(axes)}</g>')
 
-    labels = []
-    baseline = py(0) if y0 <= 0 <= y1 else HEIGHT - PAD
-    for t in _ticks(x0, x1):
-        if abs(t) > 1e-9:
-            labels.append(
-                f'<text x="{px(t):.1f}" y="{baseline + 13:.1f}" text-anchor="middle">{_fmt(t)}</text>'
-            )
-    left = px(0) if x0 <= 0 <= x1 else PAD
-    for t in _ticks(y0, y1):
-        if abs(t) > 1e-9:
-            labels.append(
-                f'<text x="{left - 5:.1f}" y="{py(t) + 4:.1f}" text-anchor="end">{_fmt(t)}</text>'
-            )
-    parts.append(f'<g class="ticks">{"".join(labels)}</g>')
+    if show_scale:
+        labels = []
+        baseline = py(0) if y0 <= 0 <= y1 else HEIGHT - PAD
+        for t in _ticks(x0, x1):
+            if abs(t) > 1e-9:
+                labels.append(
+                    f'<text x="{px(t):.1f}" y="{baseline + 13:.1f}" text-anchor="middle">{_fmt(t)}</text>'
+                )
+        left = px(0) if x0 <= 0 <= x1 else PAD
+        for t in _ticks(y0, y1):
+            if abs(t) > 1e-9:
+                labels.append(
+                    f'<text x="{left - 5:.1f}" y="{py(t) + 4:.1f}" text-anchor="end">{_fmt(t)}</text>'
+                )
+        parts.append(f'<g class="ticks">{"".join(labels)}</g>')
 
     targets = scaffolds = 0
     legend: list[tuple[str, str]] = []
-    for i, (curve, points) in enumerate(series):
+    for i, (curve, sampled_points) in enumerate(series):
         text = curve if isinstance(curve, str) else curve.expr
         label = "" if isinstance(curve, str) else (curve.label or "")
         target = not isinstance(curve, str) and getattr(curve, "role", "") == "target"
@@ -293,7 +296,7 @@ def function_svg(
             scaffolds += 1
 
         segments, run = [], []
-        for x, y in points:
+        for x, y in sampled_points:
             if y is None or not (y0 - (y1 - y0) <= y <= y1 + (y1 - y0)):
                 if len(run) > 1:
                     segments.append(run)
@@ -312,6 +315,27 @@ def function_svg(
         name = f"{escape(label)}: y = " if label else "y = "
         legend.append((f"{name}{escape(mathspeak.displayable(text))}", colour))
 
-    parts.append(_legend_svg(legend, series, px, py))
+    if show_legend:
+        parts.append(_legend_svg(legend, series, px, py))
+    marked = []
+    for point in points or ():
+        try:
+            x, y = float(point.x), float(point.y)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if not (x0 <= x <= x1 and y0 <= y <= y1):
+            continue
+        label = escape(str(getattr(point, "label", ""))[:4])
+        marked.append(
+            f'<circle cx="{px(x):.1f}" cy="{py(y):.1f}" r="5" '
+            f'fill="var(--accent-deep)" stroke="var(--board-bg-hi)" stroke-width="2"/>'
+        )
+        if label:
+            marked.append(
+                f'<text x="{px(x) + 9:.1f}" y="{py(y) - 7:.1f}" '
+                f'class="point-label" fill="var(--text)">{label}</text>'
+            )
+    if marked:
+        parts.append(f'<g class="points">{"".join(marked)}</g>')
     parts.append("</svg>")
     return "".join(parts)
