@@ -1348,6 +1348,34 @@ class TestAHalfComputedCompositeIsNotDone:
         )
         assert v.verdict == "CORRECT"       # step 2 ends symbolically: no gate
 
+    INTERCEPTS = ReferenceSolution(
+        steps=[SolutionStep(
+            idx=1, description="두 직선 l, m의 y절편 구하기",
+            expression="l(0) = -4, m(0) = 10",
+        )],
+        final_answer=Answer(kind="SCALAR", value="49"),
+        concepts=[], verified=True, origin="db",
+    )
+
+    def test_saying_the_values_needs_no_attribution(self, db):
+        """Live: both intercepts arrived inside a plan-shaped sentence and the
+        gate held the student at step 7, asking which line owns which — a
+        distinction no later step needs. Said values outrank phrasing."""
+        v = self.judge(db).evaluate(
+            problem_text="p", reference=self.INTERCEPTS, question="q",
+            target_step=1,
+            transcript="x에 0을 대입하면 돼요. 마이너스 4하고 10이에요.",
+        )
+        assert v.verdict == "CORRECT"
+
+    def test_the_plan_alone_is_still_partial(self, db):
+        v = self.judge(db).evaluate(
+            problem_text="p", reference=self.INTERCEPTS, question="q",
+            target_step=1,
+            transcript="x에 0을 대입하면 돼요.",
+        )
+        assert v.verdict == "PARTIAL"
+
     def test_y_is_repaired_to_x_only_for_an_x_coordinate_step(self, db):
         coordinate = ReferenceSolution(
             steps=[SolutionStep(

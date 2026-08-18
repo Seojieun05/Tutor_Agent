@@ -76,6 +76,10 @@ verdict:
                 asked for a slope and they give the whole tangent, they have
                 done the step and more. Grade what they demonstrated, not
                 whether it matches the question word for word.
+                A step may store several labeled results at once
+                ("l(0) = -4, m(0) = 10"): a student who says all the values
+                ("-4하고 10이요") has completed it — do NOT hold the step
+                open for not naming which label goes with which value.
 - "PARTIAL"   — the student's direction, prerequisite, or intermediate result
                 is mathematically right, but it does not yet complete the
                 targeted step or answer the tutor's actual question. This is
@@ -315,14 +319,13 @@ class AnswerEvaluator:
     )
 
     @staticmethod
-    def _final_piece_missing(expression: str, transcript: str) -> bool:
-        """The composite step ends on a plain number the transcript never says.
+    def _final_piece_spoken(expression: str, transcript: str) -> bool | None:
+        """Did the transcript say the composite step's final numeric piece?
 
         "f'(x) = 2*x - 4, f'(1) = -2" ends on -2; a transcript that computed
         only 2x-4 does not contain it. Only numeric tails are judged — a
-        symbolic tail has no fixed spoken shape — and a number that merely
-        appears anywhere counts as said, so this can only ever DOWNGRADE a
-        transcript that truly stopped early.
+        symbolic tail has no fixed spoken shape and answers None — and a
+        number that merely appears anywhere counts as said.
         """
         from fractions import Fraction
 
@@ -330,7 +333,7 @@ class AnswerEvaluator:
         try:
             target = Fraction(tail.replace(" ", ""))
         except (ValueError, ZeroDivisionError):
-            return False
+            return None
         # STT writes the sign as a word: "마이너스 2" must read as -2
         spoken = re.sub(r"마이너스\s*", "-", transcript or "")
         for said in re.findall(
@@ -338,10 +341,10 @@ class AnswerEvaluator:
         ):
             try:
                 if Fraction(said.replace(" ", "")) == target:
-                    return False
+                    return True
             except (ValueError, ZeroDivisionError):
                 continue
-        return True
+        return False
 
     @staticmethod
     def _normalize_partial_feedback(
@@ -391,8 +394,17 @@ class AnswerEvaluator:
         # then congratulated a slope nobody had computed. When the step's
         # FINAL piece is a plain number (-2), its absence from the transcript
         # is checkable — and absent means not done.
+        #
+        # A SAID final result outranks how the sentence was phrased. Live on
+        # step 7 ("l(0) = -4, m(0) = 10") both intercepts arrived inside a
+        # plan-shaped sentence, this gate demoted the second opinion's
+        # CORRECT, and the tutor then asked which line owns which intercept —
+        # a distinction no later step needs spoken.
+        spoken = cls._final_piece_spoken(expression, transcript)
+        if spoken:
+            return verdict
         planned = cls._UNFINISHED_PLAN_RE.search(transcript.strip())
-        if not planned and not cls._final_piece_missing(expression, transcript):
+        if spoken is None and not planned:
             return verdict
         log.info("correct direction but unfinished composite step; grading PARTIAL")
         return verdict.model_copy(
