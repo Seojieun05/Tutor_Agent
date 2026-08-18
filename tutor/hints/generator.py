@@ -56,6 +56,10 @@ _STEP_TOKEN_STOP = {
     "구하기", "쓰기", "해보기", "해볼까", "어떻게", "우선", "이제", "다음",
     "사용", "생각", "좋을까", "차례", "단계",
 }
+_WEAK_FUTURE_TOKENS = {"x", "y"}
+_FUTURE_TASK_TOKENS = {
+    "방정식", "미분법", "미분계수", "교점", "좌표", "넓이", "절편",
+}
 _JOSA = ("으로", "에서", "까지", "부터", "처럼", "보다", "하고", "이며",
          "에게", "한테", "께서", "과", "와", "을", "를", "이", "가", "은",
          "는", "의", "에", "로")
@@ -107,12 +111,34 @@ def mentions_future_step(
         if step.idx <= target_step:
             continue
         future = _step_tokens(step.description) - own
-        overlap = spoken & future
+        # Coordinates and the conventional variables x/y occur throughout a
+        # multi-step problem.  They may support a match once real task words
+        # agree, but must never be the second token that turns one generic word
+        # into a confident future-step verdict.  Live, "직선" + "x" made a
+        # point-slope L2 look like step 6 (the intersection's x-coordinate).
+        all_overlap = spoken & future
+        overlap = {
+            token for token in all_overlap
+            if token not in _WEAK_FUTURE_TOKENS and not token.isdigit()
+        }
         concept_overlap = {
             token for token in overlap
             if re.fullmatch(r"[가-힣]{2,}", token)
         }
-        if concept_overlap and len(overlap) >= 2 and len(overlap) / max(len(future), 1) >= 0.4:
+        normal_match = (
+            len(overlap) >= 2
+            and len(overlap) / max(len(future), 1) >= 0.4
+        )
+        # One distinctive task noun (for example, 방정식) plus a supporting
+        # coordinate/variable is enough to catch a genuine step jump.  A
+        # generic relation noun such as 직선 plus x is not: that exact pair
+        # also occurs naturally while explaining point-slope form at step 2.
+        anchored_match = (
+            bool(overlap & _FUTURE_TASK_TOKENS)
+            and len(all_overlap) >= 2
+            and len(all_overlap) / max(len(future), 1) >= 0.4
+        )
+        if concept_overlap and (normal_match or anchored_match):
             return True
     return False
 
@@ -230,9 +256,9 @@ def partial_continuation_question(
     """A deterministic next nudge for common composite reference steps.
 
     The student has already been graded PARTIAL, so the first sub-result is
-    established.  Problem 13's step 1 stores two claims in one step: derive
-    ``f'(x)`` and then evaluate ``f'(1)``.  Asking for the derivative rule
-    again is backwards; ask only for the remaining evaluation.
+    established.  A composite step may store both ``f'(x)`` and ``f'(1)``.
+    Invite the student to use the derivative for the remaining slope without
+    giving away the substitution procedure in the question itself.
     """
     if reference is None or not student_answer:
         return None
@@ -250,13 +276,9 @@ def partial_continuation_question(
     )
     if evaluated is None:
         return None
-    at = evaluated.group(1).strip()
     tangent = re.search(r"접선\s+([A-Za-z])", step.description or "")
     subject = f"접선 {tangent.group(1)}의 기울기" if tangent else "그 점에서의 기울기"
-    return (
-        f"이제 구한 {function}'(x)에 x = {at}을 대입하면 "
-        f"{subject}는 얼마일까요?"
-    )
+    return f"이제 구한 {function}'(x)를 이용해 {_object(subject)} 구해 볼까요?"
 
 # "Show me again" means different things depending on where the picture comes
 # from, and telling a student to hold a worksheet up to a camera that is not
@@ -363,6 +385,12 @@ HOW TO TEACH (this is the part that matters)
   곱이라는 점을 보고, 어떻게 미분하면 좋을까요?" At L1, if the step label
   names the method, ask about the mathematical structure without naming that
   method. L2 may name the concept when the student needs it.
+- Hint levels must differ in INFORMATION, not just wording. L1 asks the student
+  to recall or notice the relation. L2 supplies one missing concept or general
+  formula and then asks them to apply it; never turn L1 into another abstract
+  "어떻게 관계지을까요?" question. For example, after a tangent slope is known,
+  L2 gives the point-slope form and leaves the known point's substitution to
+  the student. L3 may then make that substitution procedure explicit.
 - Stay inside the given target step. Even if the student's last sentence hints
   at later work, do not ask them to perform a later reference step. In
   particular, a slope target may ask them to finish the slope; it may not jump
@@ -555,6 +583,34 @@ def visible_to_student(rec: Recognition | None) -> list[str]:
     return [rec.problem_text, *rec.equations, *rec.choices, *rec.diagram_conditions]
 
 
+def _screen_board(
+    board: tuple[BoardLine, ...],
+    reference: ReferenceSolution | None,
+    target_step: int,
+    rec: Recognition | None,
+) -> tuple[BoardLine, ...]:
+    """Apply the same whiteboard policy to generated and reviewed hints."""
+    board = _clean_board(board)
+    if board and rec is not None and rec.student_work:
+        # The board is the tutor's own hand. A line the student wrote —
+        # verbatim or reformatted — rewritten there reads as endorsement.
+        theirs = {mathnorm.compact(w) for w in rec.student_work}
+        kept = tuple(b for b in board if mathnorm.compact(b.expr) not in theirs)
+        if kept != board:
+            log.info("dropped %d board line(s) copied from the student's work",
+                     len(board) - len(kept))
+            board = kept
+    if board and reference is not None and any(
+        leaks_answer(part, reference, target_step, visible_to_student(rec))
+        for b in board for part in (b.expr, b.note) if part
+    ):
+        # All or nothing: dropping one line of a two-line derivation leaves a
+        # misleading fragment, so a leaking item cancels the whole board.
+        log.info("a board line would leak the answer; the board stays empty")
+        return ()
+    return board
+
+
 class SafeWordEmitter:
     """Commit only answer-screened Korean word units to a live consumer.
 
@@ -685,6 +741,7 @@ class HintGenerator:
         student_answer: str | None = None,
         *,
         partial: bool = False,
+        answer_error: str | None = None,
         on_delta: Callable[[str], None] | None = None,
     ) -> str:
         if decision.action in self.fixed:
@@ -753,9 +810,10 @@ class HintGenerator:
             and match.tier is Tier.EXACT
             and match.problem is not None
         ):
-            written = self.db.prewritten_hint(
+            artifact = self.db.prewritten_hint_artifact(
                 match.problem.id, decision.target_step, decision.level
             )
+            written = artifact.text if artifact is not None else None
             if (
                 written
                 # SUBSTRING, not membership: the confirmation quotes this very
@@ -769,7 +827,12 @@ class HintGenerator:
                     written, reference, decision.target_step, visible_to_student(rec)
                 ))
             ):
-                return written
+                board = tuple(
+                    BoardLine(expr=item.expr, note=item.note)
+                    for item in artifact.board
+                )
+                board = _screen_board(board, reference, decision.target_step, rec)
+                return _with_board(written, board)
 
         # A verified noun-form step can produce the weakest, most natural L1
         # without another model call.  This keeps problem 13 stable: step 3 is
@@ -818,6 +881,20 @@ class HintGenerator:
                 break
             if template.concept_id is None and template.misconception_id is None:
                 continue
+            if (
+                reference is not None
+                and decision.target_step > 1
+                and decision.level >= 2
+                and template.misconception_id is None
+            ):
+                # A concept template knows the problem's broad topic, not the
+                # current reference step.  After real progress that is too
+                # little context: a derivative-applications L2 sent a student
+                # who was constructing l back to "what should we differentiate?"
+                # Problem+step prewrites already ran above; a diagnosed
+                # misconception remains specific enough to use.  Otherwise the
+                # target-aware phrasing prompt is the safe fallback.
+                continue
             if (decision.misconception or correcting) and template.misconception_id is None:
                 # A diagnosed mistake outranks concept boilerplate. Live, the
                 # policy had named the exact slip ("2x의 미분을 2x로 계산") and
@@ -857,6 +934,8 @@ class HintGenerator:
             decision, match, slots, history, rec, reference,
             student_answer=student_answer,
             partial=partial,
+            correcting=correcting,
+            answer_error=answer_error,
             on_delta=emitter.feed if emitter is not None else None,
         )
         stream_blocked = False
@@ -874,6 +953,7 @@ class HintGenerator:
             text, board = self._phrase(
                 decision, match, slots, history, rec, reference,
                 stronger=True, student_answer=student_answer, partial=partial,
+                correcting=correcting, answer_error=answer_error,
             )
             still_out_of_scope = (
                 (decision.level == 1 and announces_step(text))
@@ -900,6 +980,7 @@ class HintGenerator:
             text, board = self._phrase(
                 decision, match, slots, history, rec, reference,
                 stronger=True, student_answer=student_answer, partial=partial,
+                correcting=correcting, answer_error=answer_error,
             )
             if (
                 (decision.level == 1 and announces_step(text))
@@ -911,24 +992,7 @@ class HintGenerator:
         # carefully not saying it is still giving the answer. All or nothing —
         # dropping one line of two left fragments like a bare "a₁" on screen,
         # and half a board reads worse than no board.
-        board = _clean_board(board)
-        if board and rec is not None and rec.student_work:
-            # The board is the tutor's own hand. A line the student wrote —
-            # verbatim or reformatted — rewritten there reads as the tutor
-            # endorsing it, and live that put a wrong 등비수열 relation under
-            # the "튜터 풀이" heading in the tutor's own emphasis style.
-            theirs = {mathnorm.compact(w) for w in rec.student_work}
-            kept = tuple(b for b in board if mathnorm.compact(b.expr) not in theirs)
-            if kept != board:
-                log.info("dropped %d board line(s) copied from the student's work",
-                         len(board) - len(kept))
-                board = kept
-        if board and reference is not None and any(
-            leaks_answer(part, reference, decision.target_step, seen)
-            for b in board for part in (b.expr, b.note) if part
-        ):
-            log.info("a board line would leak the answer; the board stays empty")
-            board = ()
+        board = _screen_board(board, reference, decision.target_step, rec)
         return _with_board(text, board)
 
     def prewrite(
@@ -1112,6 +1176,8 @@ class HintGenerator:
         stronger: bool = False,
         student_answer: str | None = None,
         partial: bool = False,
+        correcting: bool = False,
+        answer_error: str | None = None,
         on_delta: Callable[[str], None] | None = None,
     ) -> str:
         """Context = what the tutor may talk about: the problem itself, its
@@ -1162,6 +1228,32 @@ class HintGenerator:
                 "아직 말하지 않은 바로 다음 값이나 식 하나만 질문하세요. 목표가 끝난 "
                 "것처럼 다음 reference step으로 넘어가지는 마세요."
             )
+
+        if correcting:
+            established = []
+            if reference is not None:
+                established = [
+                    f"  {step.idx}. {step.description} → {step.expression}"
+                    for step in reference.steps
+                    if step.idx < decision.target_step
+                ]
+            parts.append(
+                "오답 뒤 재검토 (이번 힌트의 최우선 목표): 학생의 방금 답변은 "
+                "현재 목표에 대한 오답으로 판정되었습니다. 새 풀이 절차를 처음부터 "
+                "이어 설명하지 마세요. 학생 답변의 어느 부분이 현재 구하는 대상과 "
+                "어긋났는지 먼저 구체적으로 짚고, 바로 그 혼동을 다시 살펴보게 하는 "
+                "질문 하나만 하세요. 고친 값이나 완성된 식은 알려주지 마세요. 학생의 "
+                "답이 이전 단계의 결과라면, 그것이 이미 구한 무엇인지 명확히 대비해 "
+                "주세요. 앞서 별도의 반응 문장으로 틀렸다는 사실은 이미 말했으므로 "
+                "'틀렸어요'를 반복하지 마세요."
+            )
+            if answer_error:
+                parts.append(f"답변 판정기가 특정한 오류: {answer_error}")
+            if established:
+                parts.append(
+                    "이미 완료되어 비교 근거로 써도 되는 단계 (다시 풀게 하지 말 것):\n"
+                    + "\n".join(established)
+                )
 
         if decision.misconception:
             # A named mistake outranks the target step. Live: a student wrote

@@ -256,6 +256,65 @@ class TestRuleBasedProgress:
         )
         assert (state.status, state.last_correct_step) == ("CORRECT", 2)
 
+    def test_expanded_derivative_advances_from_proven_prefix_without_llm(self, db):
+        """Live problem 13: step 3 substitutes f'(x), while the verified
+        reference leaves it symbolic.  A cropped photo no longer shows steps
+        1-2, but their proven prefix plus this line must advance to step 3."""
+        reference = ReferenceSolution(
+            steps=[
+                SolutionStep(
+                    idx=1,
+                    description="f'(x)로 접선 l의 기울기 구하기",
+                    expression="f'(x) = 2*x - 4, f'(1) = -2",
+                ),
+                SolutionStep(
+                    idx=2,
+                    description="점 (1, -6)을 지나는 l의 방정식 쓰기",
+                    expression="l: y = -2*x - 4",
+                ),
+                SolutionStep(
+                    idx=3,
+                    description="곱의 미분법으로 g'(x) 쓰기",
+                    expression=(
+                        "g'(x) = (3*x**2 - 2)*f(x) "
+                        "+ (x**3 - 2*x)*f'(x)"
+                    ),
+                ),
+                SolutionStep(
+                    idx=4,
+                    description="g'(1) 계산",
+                    expression="g'(1) = -4",
+                ),
+            ],
+            final_answer=Answer(kind="SCALAR", value="49"),
+            concepts=["differentiation"],
+            verified=True,
+            origin="db",
+        )
+        rec = Recognition(
+            problem_text="13. 함수 f(x)의 접선과 함수 g(x)의 접선",
+            equations=[
+                "f(x) = x**2 - 4*x - 3",
+                "g(x) = (x**3 - 2*x)*f(x)",
+            ],
+            student_work=[
+                "g'(x) = (3*x**2 - 2)*f(x) "
+                "+ (x**3 - 2*x)*(2*x - 4)"
+            ],
+            confidence=1.0,
+        )
+        llm = EchoLLMClient()
+        state = StudentStateEstimator(llm, db).estimate(
+            rec=rec,
+            reference=reference,
+            prev_state=StudentState(status="CORRECT", last_correct_step=2),
+            prev_work=["l: y = -2*x - 4"],
+            history=[],
+        )
+
+        assert llm.calls == []
+        assert (state.status, state.last_correct_step) == ("CORRECT", 3)
+
     def test_same_solution_set_is_not_the_same_step(self, db):
         # 'x = 5' as the only line is step 2, never step 1 ('3*x = 15')
         est = StudentStateEstimator(EchoLLMClient(), db)

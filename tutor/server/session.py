@@ -186,7 +186,7 @@ READOUT_CLOSERS: dict[bool, str] = {
 _POLITE_TAILS = ("입니다", "이에요", "이예요", "예요", "에요", "이요", "요")
 
 
-def final_value_claim(transcript: str, answer) -> str:
+def final_value_claim(transcript: str, answer, question: str = "") -> str:
     """What the transcript claims about the final value.
 
     "said"      — the value is ASSERTED AS THE RESULT at the utterance's
@@ -199,6 +199,10 @@ def final_value_claim(transcript: str, answer) -> str:
     "none"      — no number claims the result: a plan, a setup, a method.
     "unknown"   — the final is not machine-checkable from speech (a surd, a
                   power): the judge's call stands, permissive as before.
+
+    `question` matters when the tutor asks for several intermediate values.
+    In "밑변과 높이는 각각 무엇일까요?", a tail such as "높이는 7" answers
+    that sub-question; it is not a claim that the final area equals 7.
 
     Only plain-rational finals are checkable (49, 1/2, 24/7 — STT writes
     digits); 3*sqrt(10)/10 has no fixed transcription shape.
@@ -213,6 +217,21 @@ def final_value_claim(transcript: str, answer) -> str:
         return "unknown"
     # STT writes the sign as a word: "마이너스 2" must read as -2
     transcript = re.sub(r"마이너스\s*", "-", transcript or "")
+
+    # A scalar final step can contain a Socratic sub-question asking for two
+    # or more ingredients.  Its answer naturally ends in a number, but that
+    # number belongs to the named ingredient, not to the final scalar.  Only
+    # an explicit result claim overrides this question context.  This is
+    # deliberately structural ("각각"), not tied to problem 13 or to the
+    # particular words 밑변/높이.
+    asks_for_parts = "각각" in (question or "")
+    explicitly_final = bool(re.search(
+        r"(?:최종\s*)?(?:답|정답|결과)\s*(?:은|는|이|가|=)?|"
+        r"(?:계산|곱|더|빼|나누)\w*\s*(?:하면|해서|하니|했더니)",
+        transcript,
+    ))
+    if asks_for_parts and not explicitly_final:
+        return "none"
 
     def parse(number: str) -> Fraction | None:
         try:
@@ -553,6 +572,17 @@ class Session:
             # not linger and be read into the next diagnosis.
             await self._send_transcript(text, False)
             return
+
+        if intent == "ANSWER" and pending is not None and self.ctx is not None:
+            reference = self.ctx.reference_if_ready()
+            if reference is not None:
+                normalized = self.deps.evaluator.normalize_transcript(
+                    reference, pending.step, text
+                )
+                if normalized != text:
+                    log.info("answer transcript repaired by step context: %r -> %r",
+                             text, normalized)
+                    text = normalized
 
         self.last_transcript = text
         await self._send_transcript(text, True)
@@ -913,7 +943,9 @@ class Session:
         # Orchestrator-owned writes. The policy needs no new rules: resolving
         # the pending hint IS the signal that moves it up, down or nowhere.
         prev = self.store.get_state() or StudentState()
-        claim = final_value_claim(transcript, reference.final_answer)
+        claim = final_value_claim(
+            transcript, reference.final_answer, pending.hint_text
+        )
         if claim == "said":
             # The student ASSERTED the verified final value — however far the
             # pending question was from the end, arriving is arriving. A tutor
@@ -960,12 +992,15 @@ class Session:
                 })
             elif verdict.verdict == "CORRECT" and claim == "none":
                 log.info(
-                    "final step: the plan was right but no value was said — "
-                    "PARTIAL, the problem stays open"
+                    "final step: the tutor's sub-question was answered but no "
+                    "final value was said — PARTIAL, the problem stays open"
                 )
                 verdict = verdict.model_copy(update={
                     "verdict": "PARTIAL",
-                    "feedback": "좋아요, 제대로 접근하고 있어요.",
+                    # It was fully correct for what the tutor actually asked.
+                    # Keep that acknowledgement even though the coarser final
+                    # reference step remains unfinished.
+                    "feedback": verdict.feedback or "맞아요, 여기까지는 잘했어요.",
                 })
         if verdict.verdict == "CORRECT":
             reached = self._reached_step(verdict, reference, pending.step, transcript)
@@ -1037,13 +1072,30 @@ class Session:
         decision = decide(state, history, "HINT_REQUEST")
         log.info("decision after answer (%s): %s", verdict.verdict, decision)
 
+        if verdict.verdict == "CORRECT":
+            # The state frontier was just advanced. A labelled equation such
+            # as l: y = ... can therefore be plotted now, locally, while the
+            # next spoken question is still being prepared.
+            await self._publish_verified_scene(decision, ctx, ctx.hash)
+
         await self._stage("다음 질문을 만들고 있어요")
         # The reaction is ready NOW and the hint needs ~5s of model. Speaking
         # "맞아요, 그렇게 하면 돼요!" WHILE the next question is being written
         # is where the answer turn stops feeling slow: first meaningful sound
         # at evaluate-time instead of evaluate+phrase+TTS-time.
-        sink = self._new_hint_stream(paused=True)
-        kwargs = {"partial": verdict.verdict == "PARTIAL"}
+        # A correcting turn must name the mismatch precisely.  The immediate
+        # reaction already covers the model latency, so validate the complete
+        # correction before speaking it instead of risking an unsafe streamed
+        # equation being cut into "… 직접 이어서 완성해 볼까요?" mid-sentence.
+        sink = (
+            None
+            if verdict.verdict == "INCORRECT"
+            else self._new_hint_stream(paused=True)
+        )
+        kwargs = {
+            "partial": verdict.verdict == "PARTIAL",
+            "answer_error": verdict.error_focus if verdict.verdict == "INCORRECT" else None,
+        }
         if sink is not None:
             kwargs["on_delta"] = sink.push
         hint_task = asyncio.create_task(asyncio.to_thread(
@@ -1449,6 +1501,11 @@ class Session:
                 current, reference,
                 invite=self._forward_invite(ctx, current.last_correct_step + 1),
             )
+            draw_decision = Decision(
+                Action.WAIT, 0, current.last_correct_step + 1, None,
+                "work confirmed",
+            )
+            await self._publish_verified_scene(draw_decision, ctx, ctx.hash)
             await self._speak(line, final=True)
             pending_now = self.store.pending_hint(ctx.hash)
             if asked_step is not None and (
@@ -1472,8 +1529,7 @@ class Session:
             # the confirmation is also the one moment the whole picture is
             # right so far — let the board show it
             self._spawn(self._illustrate(
-                Decision(Action.WAIT, 0, current.last_correct_step + 1, None,
-                         "work confirmed"),
+                draw_decision,
                 line, (), ctx.hash, student_said=question,
             ))
             return
@@ -1898,6 +1954,81 @@ class Session:
             except Exception:
                 pass
 
+    async def _publish_verified_scene(
+        self,
+        decision: Decision,
+        ctx: ProblemContext,
+        problem_hash: str,
+        *,
+        focus_target: bool = False,
+    ) -> bool:
+        """Publish the verified tangent/scaffold stage without an LLM wait.
+
+        Scene composition can still run afterward to remove scaffolding or
+        adjust the caption.  Whether a machine-verified ``l: y = ...`` first
+        appears is deterministic and local: the student should see the line
+        as soon as the equation is accepted, not several seconds later when
+        the drawing model finishes deciding the rest of the scene.
+        """
+        verified = self._verified_steps(ctx)
+        before = tuple(
+            (c.label, c.expr.replace(" ", ""), c.role) for c in ctx.scene
+        )
+        target = next(
+            (step for step in (ctx.reference.steps if ctx.reference else [])
+             if step.idx == decision.target_step),
+            None,
+        )
+        focus_step = target.description if focus_target and target is not None else ""
+        spec = illustrator.ensure_verified_scene(
+            illustrator.FigureSpec(curves=list(ctx.scene)),
+            verified,
+            list(ctx.recognition.equations),
+            focus_step,
+        )
+        if spec is None:
+            return False
+        after = tuple(
+            (c.label, c.expr.replace(" ", ""), c.role) for c in spec.curves
+        )
+        if after == before:
+            return False
+
+        existing = set(before)
+        added = [
+            c for c in spec.curves
+            if (c.label, c.expr.replace(" ", ""), c.role) not in existing
+        ]
+        seen = visible_to_student(ctx.recognition)
+        if ctx.reference is not None and any(
+            leaks_answer(c.expr, ctx.reference, decision.target_step, seen)
+            for c in added
+        ):
+            log.info("a newly verified curve still tripped the leak gate; not drawn")
+            return False
+
+        span = ctx.span or plot.DEFAULT_SPAN
+        svg = await asyncio.to_thread(
+            plot.function_svg, spec.curves, span, view=ctx.view
+        )
+        if not svg or self.ctx is not ctx or ctx.hash != problem_hash:
+            return False
+
+        ctx.scene, ctx.span = tuple(spec.curves), span
+        try:
+            await self.ws.send(make_event("figure", {
+                "id": problem_hash or "scene",
+                "svg": svg,
+                "of": ", ".join(c.expr for c in spec.curves),
+                "note": ctx.caption,
+                "v": ctx.view_rev,
+            }))
+        except Exception:
+            log.debug("could not send verified target figure (connection gone)")
+            return False
+        log.info("verified scene drawn immediately: %s", [c.label for c in spec.curves])
+        return True
+
     async def _illustrate(
         self, decision: Decision, hint: str, board: tuple, problem_hash: str,
         student_said: str | None = None,
@@ -1906,9 +2037,17 @@ class Session:
         spoken. Never awaited by the turn: a picture is optional, and a slow
         or broken drawing hand must cost the lesson nothing."""
         ctx = self.ctx
-        if self.deps.illustrator is None or ctx is None:
+        if ctx is None:
             return
         verified = self._verified_steps(ctx)
+        # A labelled line in the verified prefix is a fact, not an illustration
+        # proposal. Publish it before any remote drawing call; the slower scene
+        # pass below may then wipe scaffolds or improve framing around it.
+        await self._publish_verified_scene(
+            decision, ctx, problem_hash, focus_target=True
+        )
+        if self.deps.illustrator is None:
+            return
         if (
             not ctx.scene
             and not illustrator.wants_a_picture(hint)
@@ -1937,7 +2076,14 @@ class Session:
         )
         # the model proposes the scene; the student's earned target lines are
         # not up for proposal — l went undrawn twice on the model's judgement
-        spec = illustrator.ensure_verified_targets(spec, verified)
+        spec = illustrator.ensure_verified_scene(
+            spec, verified, list(ctx.recognition.equations),
+            next(
+                (step.description for step in (ctx.reference.steps if ctx.reference else [])
+                 if step.idx == decision.target_step),
+                "",
+            ),
+        )
         if spec is None or not spec.curves:
             return
         # The same gate as the words: a curve of the answer IS the answer.
@@ -1953,6 +2099,20 @@ class Session:
         span = ctx.span or plot.DEFAULT_SPAN
         if spec.x_min is not None and spec.x_max is not None and spec.x_min < spec.x_max:
             span = (spec.x_min, spec.x_max)
+        next_scene = tuple(
+            (c.label, c.expr.replace(" ", ""), c.role) for c in spec.curves
+        )
+        current_scene = tuple(
+            (c.label, c.expr.replace(" ", ""), c.role) for c in ctx.scene
+        )
+        if (
+            next_scene == current_scene
+            and span == ctx.span
+            and spec.caption == ctx.caption
+        ):
+            # The immediate verified-target render already shows exactly this
+            # scene. Do not make the page repaint the same graph a second time.
+            return
         # through the student's own window when they have chosen one — the
         # next turn's redraw must not snap their view back to the guess
         svg = await asyncio.to_thread(

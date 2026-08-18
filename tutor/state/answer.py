@@ -110,17 +110,27 @@ intent — decide this FIRST, it matters more than the verdict:
 For "QUESTION" and "WORK_CHECK" the verdict is ignored — use "UNCLEAR" and
 leave feedback empty.
 
-feedback: ONE short spoken Korean sentence reacting to the answer (친근한 반말체
-금지, 존댓말). For CORRECT confirm briefly, and when it is natural, name in a
+feedback: A short spoken Korean reaction to the answer (친근한 반말체 금지,
+존댓말). For CORRECT confirm briefly, and when it is natural, name in a
 word or two WHAT was right — the idea or value they nailed ("맞아요, 기울기를
 정확히 봤어요!") — feedback that names what worked teaches more than a bare
 맞아요; still one clause, still never the next step. For PARTIAL affirm the
 direction without saying the step is finished ("좋아요, 제대로 접근하고 있어요.").
-For INCORRECT do NOT correct it and do NOT give the next step — just acknowledge
-warmly ("음, 조금 달라요."). For UNCLEAR say you did not catch it.
+For INCORRECT, first say it is different and then briefly name WHAT in the
+student's answer does not match the target. You may use an already-established
+result, but do NOT supply the corrected value/equation or the next step. For
+example, if a student gives the derivative where a tangent-line equation was
+asked for: "조금 달라요. 방금 말한 식은 앞에서 구한 도함수예요." For UNCLEAR
+say you did not catch it.
 This is the ONLY reaction the student hears — what follows it is written
 separately, so keep feedback to one clause and never continue into a hint.
 NEVER state the final answer, a later step, or the result of the current step.
+
+error_focus: only for an INCORRECT attempted answer, write one short Korean
+phrase identifying the exact mismatch for the next tutor turn, without the
+corrected answer (example: "2x-4를 접선의 방정식으로 혼동함; 이는 앞에서 구한
+f'(x)임"). Leave it empty for CORRECT, PARTIAL, UNCLEAR, questions, work checks,
+and a student who simply says they do not know.
 
 reached_step / reached_claim: only with CORRECT, when the student answered BEYOND the step
 they were asked about. `reached_step` is the highest reference step their
@@ -155,6 +165,12 @@ class AnswerVerdict(BaseModel):
     intent: Intent = "ANSWER"
     verdict: Verdict
     feedback: str = ""
+    # A private hand-off to the hint generator: what the attempted answer got
+    # wrong.  It is not itself spoken, and it must never contain the corrected
+    # current-step result.  Keeping it separate from a broad misconception id
+    # lets a one-off mix-up (derivative versus tangent equation) be addressed
+    # just as specifically as an error diagnosed from the photographed work.
+    error_focus: str = ""
     misconception: str | None = None
     status: Status | None = None
     # A PROPOSAL, not a verdict: how far the student ran ahead, and the
@@ -192,10 +208,21 @@ class AnswerEvaluator:
         surrendered = self._gave_up(transcript)
         if surrendered is not None:
             return surrendered
-        context = self._context(problem_text, reference, question, target_step, transcript)
+        graded_transcript = self.normalize_transcript(
+            reference, target_step, transcript
+        )
+        if graded_transcript != transcript:
+            log.info(
+                "contextual transcript normalization: %r -> %r",
+                transcript,
+                graded_transcript,
+            )
+        context = self._context(
+            problem_text, reference, question, target_step, graded_transcript
+        )
         verdict = self._judge(self.llm, context)
         verdict = self._downgrade_unfinished_plan(
-            verdict, reference, target_step, transcript
+            verdict, reference, target_step, graded_transcript
         )
         verdict = self._normalize_partial_feedback(
             verdict, reference, target_step
@@ -219,7 +246,7 @@ class AnswerEvaluator:
             try:
                 better = self._judge(self.second_opinion, context)
                 better = self._downgrade_unfinished_plan(
-                    better, reference, target_step, transcript
+                    better, reference, target_step, graded_transcript
                 )
                 better = self._normalize_partial_feedback(
                     better, reference, target_step
@@ -234,6 +261,53 @@ class AnswerEvaluator:
                 )
                 return better
         return verdict
+
+    @staticmethod
+    def normalize_transcript(
+        reference: ReferenceSolution, target_step: int, transcript: str
+    ) -> str:
+        """Repair narrow STT errors only when the target step disambiguates.
+
+        Korean ``마이너스 이`` has arrived live as ``Minus e.``.  In isolation
+        that text could mean the mathematical constant e, so it is never
+        rewritten globally.  It means -2 only when the current verified step
+        itself ends in -2 and the whole utterance is this short answer shape.
+        The ordinary English spellings are accepted by the same narrow gate.
+
+        Likewise, a spoken ``x는 7`` can arrive as ``y는 7``.  It is repaired
+        only for a step explicitly asking for an x-coordinate, and only for a
+        short variable-plus-number answer. A wrong number stays wrong.
+        """
+        from fractions import Fraction
+
+        step = next((s for s in reference.steps if s.idx == target_step), None)
+        if step is None:
+            return transcript
+        normalized = transcript
+        if "x좌표" in (step.description or ""):
+            short_coordinate = re.sub(
+                r"[.,!?]+$", "", (transcript or "").strip().lower()
+            )
+            mistaken_axis = re.fullmatch(
+                r"(?:y|와이)\s*(?:는|은|가|=)?\s*"
+                r"(-?\d+(?:\.\d+)?)\s*(?:이에요|예요|이요|요)?",
+                short_coordinate,
+            )
+            if mistaken_axis:
+                normalized = f"x는 {mistaken_axis.group(1)}"
+
+        tail = (step.expression or "").split("=")[-1].strip()
+        try:
+            target = Fraction(tail.replace(" ", ""))
+        except (ValueError, ZeroDivisionError):
+            return normalized
+        if target != -2:
+            return normalized
+
+        short = re.sub(r"[.,!?]+$", "", normalized.strip().lower())
+        if re.fullmatch(r"minus\s+(?:2|two|to|too|e|ee)", short):
+            return "-2"
+        return normalized
 
     _UNFINISHED_PLAN_RE = re.compile(
         r"(?:대입|계산|정리|구하|쓰).{0,40}(?:하면|해서|해)\s*"

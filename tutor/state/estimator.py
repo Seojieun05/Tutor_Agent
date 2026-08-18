@@ -207,7 +207,13 @@ class StudentStateEstimator:
             return None
 
         def same(a: str, b: str) -> bool:
-            return mathnorm.equations_same_form(a, b)
+            # A reference may leave f'(x) symbolic while the student has
+            # already inserted the derivative obtained from the problem's
+            # explicit f(x) definition.  That is the same written step once
+            # the independently verified substitution is applied.
+            return mathnorm.equations_same_form_with_derivatives(
+                a, b, rec.equations
+            )
 
         matched = {
             step.idx
@@ -226,7 +232,13 @@ class StudentStateEstimator:
             if done.idx in matched and done.idx > earlier.idx
             and mathnorm.equations_equivalent(done.expression, earlier.expression)
         }
-        covered = matched | implied
+        # A fresh capture often contains only the newest line.  Correct work
+        # already proven on this same problem remains part of the prefix even
+        # when the camera crop no longer shows it.
+        proven = set()
+        if prev_state is not None:
+            proven = set(range(1, min(prev_state.last_correct_step, len(reference.steps)) + 1))
+        covered = matched | implied | proven
         # The PREFIX, not the peak: steps 1..N all accounted for. A page
         # showing steps 1, 3 and 4 of independent sub-results is not "step 4
         # done" — the hole at 2 is the very thing the tutor exists to notice

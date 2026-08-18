@@ -958,6 +958,157 @@ class TestAPrewrittenLineServesFirst:
         assert str(text) != self.LINE
 
 
+def test_problem_13_curated_l2_is_source_data_and_survives_presolve(db):
+    from tutor.knowledge.matching import Matcher
+    from tutor.scripts.warm_kb import load_presolve, presolve
+
+    entries = load_presolve()
+    spec = entries["13"]
+    source_hint = next(
+        h for h in entries["13"]["prewritten_hints"]
+        if h["step"] == 2 and h["level"] == 2
+    )
+    line = source_hint["text"]
+
+    assert presolve(db, None, "13", entries)
+    assert db.prewritten_hint("presolved-13", 2, 2) == line
+    assert db.prewritten_hint("presolved-13-v1", 2, 2) == line
+    stored = db.prewritten_hint_artifact("presolved-13", 2, 2)
+    assert stored is not None
+    assert stored.text == line
+    assert [b.expr for b in stored.board] == ["y - y_1 = -2*(x - x_1)"]
+    assert "y - y_1" not in line
+    assert "다음과 같은 꼴" in line
+    assert "어떻게 관계" not in line
+    assert "y = -2*x - 4" not in line
+
+    rec = Recognition(
+        problem_text=spec["problem_text"],
+        equations=spec["equations"][0],
+        problem_type=spec["problem_type"],
+        concepts=spec["concepts"],
+    )
+    match = Matcher(db).match(rec)
+    llm = EchoLLMClient()
+    served = HintGenerator(llm, db).generate(
+        decision(2, target=2), match, match.reference, rec, []
+    )
+
+    assert match.tier is Tier.EXACT
+    assert str(served) == line
+    assert [b.expr for b in served.board] == ["y - y_1 = -2*(x - x_1)"]
+    assert llm.calls == []
+
+
+def test_problem_13_curated_first_l1_survives_presolve(db):
+    from tutor.knowledge.matching import Matcher
+    from tutor.scripts.warm_kb import load_presolve, presolve
+
+    entries = load_presolve()
+    spec = entries["13"]
+    source_hint = next(
+        h for h in spec["prewritten_hints"]
+        if h["step"] == 1 and h["level"] == 1
+    )
+
+    assert presolve(db, None, "13", entries)
+    assert db.prewritten_hint("presolved-13", 1, 1) == source_hint["text"]
+    assert db.prewritten_hint("presolved-13-v1", 1, 1) == source_hint["text"]
+
+    rec = Recognition(
+        problem_text=spec["problem_text"],
+        equations=spec["equations"][0],
+        problem_type=spec["problem_type"],
+        concepts=spec["concepts"],
+    )
+    match = Matcher(db).match(rec)
+    llm = EchoLLMClient()
+    served = HintGenerator(llm, db).generate(
+        decision(1, target=1), match, match.reference, rec, []
+    )
+
+    assert str(served) == source_hint["text"]
+    assert "어떤 값을 먼저 계산" in served
+    assert "f'(x)로" not in served
+    assert llm.calls == []
+
+
+def test_problem_13_uses_socratic_transitions_and_an_intercept_step(db):
+    from tutor.knowledge.matching import Matcher
+    from tutor.scripts.warm_kb import load_presolve, presolve
+
+    entries = load_presolve()
+    spec = entries["13"]
+    assert len(spec["steps"]) == 8
+    assert spec["steps"][6]["description"] == "두 직선 l, m의 y절편 구하기"
+    assert "넓이" in spec["steps"][7]["description"]
+
+    curated = {
+        (hint["step"], hint["level"]): hint["text"]
+        for hint in spec["prewritten_hints"]
+    }
+    assert "어떤 값을 대입" in curated[(4, 1)]
+    assert "g'(1)을 계산해 볼까요" not in curated[(4, 1)]
+    assert "y축과 만나는 위치" in curated[(7, 1)]
+    assert "밑변과 높이" in curated[(8, 1)]
+
+    assert presolve(db, None, "13", entries)
+    rec = Recognition(
+        problem_text=spec["problem_text"], equations=spec["equations"][0],
+        problem_type=spec["problem_type"], concepts=spec["concepts"],
+    )
+    match = Matcher(db).match(rec)
+    for target in (4, 7, 8):
+        llm = EchoLLMClient()
+        served = HintGenerator(llm, db).generate(
+            decision(1, target=target), match, match.reference, rec, []
+        )
+        assert str(served) == curated[(target, 1)]
+        assert llm.calls == []
+
+
+def test_later_step_never_uses_a_broad_concept_template(db):
+    from tutor.knowledge.models import HintTemplate
+
+    db.insert_hint_template(HintTemplate(
+        id="broad-l2",
+        concept_id="step_sensitive_concept",
+        misconception_id=None,
+        level=2,
+        template_text="처음 사용한 개념부터 다시 떠올려 볼까요?",
+    ))
+    reference = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="기울기 구하기", expression="m = -2"),
+            SolutionStep(idx=2, description="직선의 방정식 쓰기", expression="y = -2*x - 4"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="49"),
+        concepts=["step_sensitive_concept"],
+        verified=True,
+        origin="db",
+    )
+    llm = EchoLLMClient({"phrase": [{
+        "hint": "점과 기울기를 점-기울기 형태에 넣어 볼까요?"
+    }]})
+    rec = Recognition(
+        problem_text="직선의 방정식을 구하시오",
+        concepts=["step_sensitive_concept"],
+    )
+    match = MatchResult(
+        tier=Tier.CONCEPT,
+        concepts=["step_sensitive_concept"],
+        reference=reference,
+    )
+
+    text = HintGenerator(llm, db).generate(
+        decision(2, target=2), match, reference, rec, []
+    )
+
+    assert str(text) == "점과 기울기를 점-기울기 형태에 넣어 볼까요?"
+    assert "처음 사용한 개념" not in text
+    assert llm.calls == ["phrase"]
+
+
 class TestPrewriteScreensItsOwnPen:
     """prewrite() = the live phrasing path with the clock removed: same
     screens, one retry, and None rather than a line that fails them."""
@@ -1052,6 +1203,66 @@ class TestACorrectingTurnIsNeverCanned:
         text = gen.generate(helper.decision(), match, None, rec, history=failed)
         assert str(text) != helper.LINE
         assert "phrase" in llm.calls
+
+    def test_the_model_is_told_to_point_at_the_spoken_error(self, db):
+        from tutor.store.session_store import HintRecord
+
+        class Recording(EchoLLMClient):
+            def __init__(self):
+                super().__init__()
+                self.prompt = ""
+
+            def run_with_tools(
+                self, *, purpose, system, user, images=(), schema, max_rounds=6
+            ):
+                if purpose == "phrase":
+                    self.prompt = user
+                return super().run_with_tools(
+                    purpose=purpose, system=system, user=user, images=images,
+                    schema=schema, max_rounds=max_rounds,
+                )
+
+        reference = ReferenceSolution(
+            steps=[
+                SolutionStep(
+                    idx=1,
+                    description="f'(x)로 접선 l의 기울기 구하기",
+                    expression="f'(x) = 2*x - 4, f'(1) = -2",
+                ),
+                SolutionStep(
+                    idx=2,
+                    description="점 (1, -6)을 지나는 l의 방정식 쓰기",
+                    expression="l: y = -2*x - 4",
+                ),
+            ],
+            final_answer=Answer(kind="SCALAR", value="49"),
+            concepts=["differentiation"],
+            verified=True,
+            origin="db",
+        )
+        failed = [HintRecord(
+            id=1, problem_hash="h", step=2, level=2,
+            action="CONCEPT_HINT",
+            hint_text="기울기가 -2인 직선의 꼴에 접점을 넣어 볼까요?",
+            effective=False,
+        )]
+        llm = Recording()
+        HintGenerator(llm, db).generate(
+            decision(3, target=2),
+            MatchResult(tier=Tier.NEW, concepts=["differentiation"], reference=reference),
+            reference,
+            Recognition(problem_text="접선 문제"),
+            failed,
+            student_answer="그럼 2x 마이너스 4 맞아?",
+            answer_error="2x-4를 접선의 방정식으로 혼동함; 앞에서 구한 f'(x)임",
+        )
+
+        assert "오답 뒤 재검토" in llm.prompt
+        assert "답변 판정기가 특정한 오류" in llm.prompt
+        assert "2x-4를 접선의 방정식으로 혼동" in llm.prompt
+        assert "이미 완료되어 비교 근거로 써도 되는 단계" in llm.prompt
+        assert "f'(x) = 2*x - 4, f'(1) = -2" in llm.prompt
+        assert "새 풀이 절차를 처음부터 이어 설명하지 마세요" in llm.prompt
 
 
 class TestABlockedStreamTrailsOffOnPurpose:

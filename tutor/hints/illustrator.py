@@ -90,6 +90,16 @@ def ensure_verified_targets(
         return spec
     if spec is None:
         spec = FigureSpec()
+    # If the model mentioned an earned line but mislabeled it as scaffolding
+    # (or rewrote its expression), the verified version wins. Otherwise the
+    # target filter below could silently drop l until another target appears.
+    for required in obligates:
+        for index, existing in enumerate(spec.curves):
+            same_expr = existing.expr.replace(" ", "") == required.expr.replace(" ", "")
+            same_label = bool(required.label and existing.label == required.label)
+            if same_expr or same_label:
+                spec.curves[index] = required
+                break
     have = {c.expr.replace(" ", "") for c in spec.curves}
     labels = {c.label for c in spec.curves if c.label}
     missing = [
@@ -117,6 +127,100 @@ class FigureSpec(BaseModel):
     x_max: float | None = None
     caption: str = ""                            # short Korean label, like a board note
     why: str = ""                                # logged, never shown to the student
+
+
+_DERIVATIVE_DEFINITION = re.compile(
+    r"(?:^|,)\s*([A-Za-z])\s*['′]\s*\(\s*x\s*\)\s*="
+)
+_FUNCTION_DEFINITION = re.compile(
+    r"^\s*([A-Za-z])\s*\(\s*x\s*\)\s*=\s*(.+)$"
+)
+
+
+def _expanded_problem_function(name: str, equations: list[str]) -> str | None:
+    """Return a plottable RHS, expanding definitions such as g(x)=...f(x)."""
+    definitions = {}
+    for equation in equations:
+        match = _FUNCTION_DEFINITION.match(equation or "")
+        if match:
+            definitions[match.group(1)] = match.group(2).strip()
+    rhs = definitions.get(name)
+    if not rhs:
+        return None
+    for _ in range(len(definitions)):
+        changed = False
+        for dependency, value in definitions.items():
+            if dependency == name:
+                continue
+            pattern = rf"\b{re.escape(dependency)}\s*\(\s*x\s*\)"
+            replaced = re.sub(pattern, f"({value})", rhs)
+            changed = changed or replaced != rhs
+            rhs = replaced
+        if not changed:
+            break
+    return rhs
+
+
+def ensure_verified_scene(
+    spec: FigureSpec | None,
+    verified: list[str] | None,
+    equations: list[str] | None,
+    focus_step: str = "",
+) -> FigureSpec | None:
+    """Deterministically stage a tangent lesson from its verified prefix.
+
+    The latest completed derivative definition chooses the dotted source
+    curve. A later completed labelled tangent retires that scaffold. Earned
+    target lines always remain. This yields the natural progression
+    f (scaffold) → l → l+g (scaffold) → l+m without asking a model to infer
+    which part of the verified lesson is current.
+    """
+    out = ensure_verified_targets(spec, verified)
+    if out is None:
+        out = FigureSpec()
+
+    latest_derivative: tuple[int, str] | None = None
+    latest_target = -1
+    for index, expression in enumerate(verified or []):
+        derivative = _DERIVATIVE_DEFINITION.search(expression or "")
+        if derivative:
+            latest_derivative = (index, derivative.group(1))
+        if _LABELLED_LINE.match((expression or "").strip()):
+            latest_target = index
+
+    focused_derivative = re.search(
+        r"([A-Za-z])\s*['′]\s*\(\s*x\s*\)", focus_step or ""
+    )
+
+    # No tangent-lesson signal: preserve the illustrator's proposed scene.
+    if latest_derivative is None and latest_target < 0 and focused_derivative is None:
+        return out if out.curves else spec
+
+    target_curves = [curve for curve in out.curves if curve.role == "target"]
+    target_order = []
+    for expression in verified or []:
+        labelled = _LABELLED_LINE.match((expression or "").strip())
+        if labelled and labelled.group(1) not in target_order:
+            target_order.append(labelled.group(1))
+    by_label = {curve.label: curve for curve in target_curves if curve.label}
+    targets = [by_label[label] for label in target_order if label in by_label]
+    targets.extend(curve for curve in target_curves if curve not in targets)
+    function_name = None
+    if focused_derivative is not None:
+        # The next task is to work with g'(x): g is printed in the problem and
+        # may be shown before its derivative has been completed. This is how
+        # the board changes from f to g as the lesson changes tangents.
+        function_name = focused_derivative.group(1)
+    elif latest_derivative is not None and latest_derivative[0] > latest_target:
+        function_name = latest_derivative[1]
+    if function_name is not None:
+        rhs = _expanded_problem_function(function_name, equations or [])
+        if rhs:
+            targets.append(Curve(
+                expr=rhs, label=function_name, role="scaffold"
+            ))
+    out.curves = targets[:4]
+    return out
 
 
 _SYSTEM = """PERSONA

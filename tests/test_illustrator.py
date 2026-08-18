@@ -401,6 +401,27 @@ class TestAVerifiedLineReachesTheBoard:
         assert recorder.kw is not None                  # the hand was called
         assert recorder.kw["verified"] == ["f'(1) = -2", "l: y = -2*x - 4"]
 
+    async def test_the_earned_line_arrives_before_the_drawing_model(self, db):
+        session, _ = self.with_recorder(db, last_correct_step=2)
+        observed = {}
+
+        class ObservingHand:
+            def draw(inner_self, **kw):
+                observed["figure_already_sent"] = "figure" in session.ws.names()
+                return None
+
+        session.deps.illustrator = ObservingHand()
+        await session._illustrate(
+            Decision(Action.WAIT, 0, 3, None, "confirmed"),
+            "이제 g'(x)를 구해 볼까요?", (), "p1",
+        )
+
+        assert observed["figure_already_sent"] is True
+        figures = [e for e in session.ws.events if e["event"] == "figure"]
+        assert len(figures) == 1                         # no duplicate repaint
+        assert "-2·x - 4" in figures[0]["data"]["svg"]
+        assert [c.label for c in session.ctx.scene] == ["l"]
+
     async def test_nothing_past_the_frontier_is_handed_over(self, db):
         session, recorder = self.with_recorder(db, last_correct_step=2)
         await session._illustrate(
@@ -447,3 +468,61 @@ class TestAnEarnedLineIsNotUpForProposal:
     def test_scalar_steps_obligate_nothing(self):
         from tutor.hints.illustrator import ensure_verified_targets
         assert ensure_verified_targets(None, ["f'(1) = -2", "g'(1) = -4"]) is None
+
+    def test_a_model_cannot_demote_an_earned_target_to_scaffolding(self):
+        from tutor.hints.illustrator import Curve, FigureSpec, ensure_verified_targets
+        spec = FigureSpec(curves=[
+            Curve(expr="-2*x - 4", label="l", role="scaffold")
+        ])
+        out = ensure_verified_targets(spec, self.VERIFIED)
+        assert out.curves[0].role == "target"
+
+
+class TestTheVerifiedTangentSceneHasADeterministicOrder:
+    EQUATIONS = [
+        "f(x) = x**2 - 4*x - 3",
+        "g(x) = (x**3 - 2*x)*f(x)",
+    ]
+    STEPS = [
+        "f'(x) = 2*x - 4, f'(1) = -2",
+        "l: y = -2*(x - 1) - 6 = -2*x - 4",
+        "g'(x) = (3*x**2 - 2)*f(x) + (x**3 - 2*x)*f'(x)",
+        "g'(1) = 1*(-6) + (-1)*(-2) = -4",
+        "m: y = -4*(x - 1) + 6 = -4*x + 10",
+    ]
+
+    def advance(self, scene, frontier, focus=""):
+        from tutor.hints.illustrator import FigureSpec, ensure_verified_scene
+        return ensure_verified_scene(
+            FigureSpec(curves=list(scene)), self.STEPS[:frontier], self.EQUATIONS,
+            focus,
+        )
+
+    def test_f_then_l_then_l_plus_g_then_l_plus_m(self):
+        scene = self.advance([], 1)
+        assert [(c.label, c.role) for c in scene.curves] == [("f", "scaffold")]
+
+        scene = self.advance(scene.curves, 2)
+        assert [(c.label, c.role) for c in scene.curves] == [("l", "target")]
+
+        # As the next hint opens work on g'(x), the problem-given g replaces f
+        # immediately; its derivative need not already be solved to show it.
+        scene = self.advance(
+            scene.curves, 2, "곱의 미분법으로 g'(x) 쓰기"
+        )
+        assert [(c.label, c.role) for c in scene.curves] == [
+            ("l", "target"), ("g", "scaffold")
+        ]
+        assert "f(x)" not in scene.curves[1].expr
+        assert "x**2 - 4*x - 3" in scene.curves[1].expr
+
+        scene = self.advance(scene.curves, 3)
+        assert [c.label for c in scene.curves] == ["l", "g"]
+
+        scene = self.advance(scene.curves, 4)
+        assert [c.label for c in scene.curves] == ["l", "g"]
+
+        scene = self.advance(scene.curves, 5)
+        assert [(c.label, c.role) for c in scene.curves] == [
+            ("l", "target"), ("m", "target")
+        ]

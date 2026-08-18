@@ -1,3 +1,6 @@
+import sqlite3
+
+from tutor.knowledge.db import KnowledgeDB
 from tutor.knowledge.models import ReferenceSolution, SolutionStep, Answer
 
 
@@ -40,3 +43,40 @@ def test_hint_templates_misconception_first(db):
 def test_misconceptions_for_concaccording(db):
     ids = {m.id for m in db.misconceptions_for(["differentiation"])}
     assert ids == {"exponent_not_decremented", "constant_term_kept"}
+
+
+def test_prewritten_hint_stores_speech_and_board_together(db):
+    db.save_prewritten_hint(
+        "p", 2, 2, "다음과 같은 꼴로 나타낼 수 있어요.",
+        [{"expr": "y - y_1 = -2*(x - x_1)", "note": "점-기울기형"}],
+    )
+
+    artifact = db.prewritten_hint_artifact("p", 2, 2)
+
+    assert artifact is not None
+    assert artifact.text == "다음과 같은 꼴로 나타낼 수 있어요."
+    assert [(b.expr, b.note) for b in artifact.board] == [
+        ("y - y_1 = -2*(x - x_1)", "점-기울기형")
+    ]
+    # Text-only callers such as the forward-invitation path remain compatible.
+    assert db.prewritten_hint("p", 2, 2) == artifact.text
+
+
+def test_existing_prewritten_hint_table_gains_an_empty_board(tmp_path):
+    path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE prewritten_hints ("
+        "problem_id TEXT NOT NULL, step INTEGER NOT NULL, level INTEGER NOT NULL, "
+        "hint_text TEXT NOT NULL, PRIMARY KEY (problem_id, step, level))"
+    )
+    conn.execute("INSERT INTO prewritten_hints VALUES ('old', 1, 1, '기존 힌트')")
+    conn.commit()
+    conn.close()
+
+    migrated = KnowledgeDB(path)
+    artifact = migrated.prewritten_hint_artifact("old", 1, 1)
+
+    assert artifact is not None
+    assert artifact.text == "기존 힌트"
+    assert artifact.board == ()

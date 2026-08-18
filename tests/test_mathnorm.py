@@ -2,6 +2,7 @@ from tutor.knowledge.mathnorm import (
     compute_answer,
     equations_equivalent,
     equations_same_form,
+    equations_same_form_with_derivatives,
     expressions_equivalent,
     instantiate,
     match_template,
@@ -62,6 +63,27 @@ class TestEquivalence:
         # a greedy d/dx(...) rewrite would capture through the middle ')'
         assert equations_equivalent(
             "d/dx(x^3) + d/dx(2x)", "Derivative(x**3, x) + Derivative(2*x, x)"
+        )
+
+    def test_schoolbook_prime_notation_is_parseable(self):
+        assert equations_same_form("g'(x) = 3*x", "g′(x) = 3*x")
+        assert not equations_same_form("g'(x) = 3*x", "g'(x) = 2*x")
+
+    def test_derivative_substitution_uses_explicit_function_definition(self):
+        student = "g'(x) = (3*x**2 - 2)*f(x) + (x**3 - 2*x)*(2*x - 4)"
+        reference = "g'(x) = (3*x**2 - 2)*f(x) + (x**3 - 2*x)*f'(x)"
+        definitions = [
+            "f(x) = x**2 - 4*x - 3",
+            "g(x) = (x**3 - 2*x)*f(x)",
+        ]
+
+        assert not equations_same_form(student, reference)
+        assert equations_same_form_with_derivatives(student, reference, definitions)
+        assert not equations_same_form_with_derivatives(
+            student.replace("2*x - 4", "2*x + 4"), reference, definitions
+        )
+        assert not equations_same_form_with_derivatives(
+            "f'(x) = f'(x)", "f'(x) = 2*x - 4", definitions
         )
 
     def test_same_form_distinguishes_rearrangement_steps(self):

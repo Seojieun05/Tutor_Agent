@@ -232,9 +232,18 @@ def presolve(db, llm, key: str, entries: dict) -> bool:
         # ONE solution, or verified_solution picks whichever row it meets first
         db._conn.execute("DELETE FROM solutions WHERE problem_id = ?", (pid,))
         db.insert_solution(pid, reference, verified=True)
-        # hints written against the OLD steps are stale the moment the steps
-        # change; --hints refills the gap on its next run
+        # Hints written against OLD steps are stale the moment the steps
+        # change. Curated per-problem lines are restored immediately; --hints
+        # may fill every remaining gap with model-written lines later.
         db.clear_prewritten_hints(pid)
+        for hint in spec.get("prewritten_hints", []):
+            db.save_prewritten_hint(
+                pid,
+                int(hint["step"]),
+                int(hint["level"]),
+                str(hint["text"]),
+                hint.get("board", []),
+            )
         say(f"  stored {pid}: {len(equations)} equation(s)")
     say(f"  {key} is verified KB now — the solver will not run for it again")
     return True

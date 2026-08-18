@@ -7,6 +7,7 @@ re-recognizes the worksheet.
 """
 
 import asyncio
+import json
 
 import pytest
 
@@ -147,6 +148,46 @@ async def test_correct_answer_advances_to_next_step_l1(db):
     assert llm.calls.count("evaluate") == 1
 
 
+async def test_a_verified_tangent_is_drawn_before_the_next_question_is_built(db):
+    reference = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="접선의 기울기 구하기",
+                         expression="f'(1) = -2"),
+            SolutionStep(idx=2, description="l의 방정식 구하기",
+                         expression="l: y = -2*x - 4"),
+            SolutionStep(idx=3, description="다음 접선 구하기",
+                         expression="m: y = -4*x + 10"),
+            SolutionStep(idx=4, description="넓이 구하기", expression="49"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="49"),
+        concepts=["differentiation"], verified=True, origin="db",
+    )
+    session, _, _ = build_session(db, [{
+        "verdict": "CORRECT", "feedback": "맞아요!",
+        "misconception": None, "status": "CORRECT",
+    }])
+    session.ctx.reference = reference
+    session.ctx.match = MatchResult(
+        tier=Tier.EXACT, concepts=reference.concepts, reference=reference,
+    )
+    ask_l1(session, step=2)
+
+    await session.handle_answer(
+        "l은 y는 마이너스 2x 마이너스 4예요",
+        session.store.pending_hint("p1"),
+    )
+    await asyncio.gather(*[t for t in session._tasks if not t.done()])
+
+    events = [json.loads(raw) for raw in session.ws.events]
+    figure_at = next(i for i, e in enumerate(events) if e["event"] == "figure")
+    next_question_at = next(
+        i for i, e in enumerate(events)
+        if e["event"] == "stage" and e["data"]["text"] == "다음 질문을 만들고 있어요"
+    )
+    assert figure_at < next_question_at
+    assert "-2·x - 4" in events[figure_at]["data"]["svg"]
+
+
 async def test_partial_answer_stays_on_the_same_step_and_gets_a_new_question(db):
     session, llm, speaker = build_session(
         db,
@@ -210,8 +251,9 @@ async def test_problem_13_derivative_partial_fades_l2_and_asks_only_for_slope(db
     latest = history[-1]
     assert (latest.step, latest.level, latest.action) == (1, 1, "SOCRATIC_QUESTION")
     assert latest.hint_text == (
-        "이제 구한 f'(x)에 x = 1을 대입하면 접선 l의 기울기는 얼마일까요?"
+        "이제 구한 f'(x)를 이용해 접선 l의 기울기를 구해 볼까요?"
     )
+    assert "x = 1" not in latest.hint_text
     assert "가장 확실한 줄" not in latest.hint_text
     assert speaker.spoken and "잘 구했어요" in speaker.spoken[0]
 
@@ -363,6 +405,90 @@ async def test_wrong_answer_escalates_same_step_to_l2(db):
     assert issued.action == "CONCEPT_HINT"
     assert session.store.get_state().last_correct_step == 0
     assert "capture_request" not in session.ws.event_names()
+
+
+async def test_wrong_spoken_equation_is_diagnosed_before_the_review_question(db):
+    class RecordingCorrectionLLM(EchoLLMClient):
+        def __init__(self, responses):
+            scripted = dict(responses)
+            scripted["phrase"] = [{
+                "hint": (
+                    "방금 말한 2x 마이너스 4는 앞에서 구한 도함수예요. "
+                    "지금 구하는 대상과 같은 것인지 다시 살펴볼까요?"
+                )
+            }]
+            super().__init__(scripted)
+            self.phrase_prompt = ""
+            self.phrase_stream_calls = 0
+
+        def run_with_tools(
+            self, *, purpose, system, user, images=(), schema, max_rounds=6
+        ):
+            if purpose == "phrase":
+                self.phrase_prompt = user
+            return super().run_with_tools(
+                purpose=purpose, system=system, user=user, images=images,
+                schema=schema, max_rounds=max_rounds,
+            )
+
+        def complete_json_stream(self, **kwargs):
+            if kwargs.get("purpose") == "phrase":
+                self.phrase_stream_calls += 1
+            return super().complete_json_stream(**kwargs)
+
+    reference = ReferenceSolution(
+        steps=[
+            SolutionStep(
+                idx=1,
+                description="f'(x)로 접선 l의 기울기 구하기",
+                expression="f'(x) = 2*x - 4, f'(1) = -2",
+            ),
+            SolutionStep(
+                idx=2,
+                description="점 (1, -6)을 지나는 l의 방정식 쓰기",
+                expression="l: y = -2*x - 4",
+            ),
+            SolutionStep(idx=3, description="g'(x) 쓰기", expression="g'(x) = 0"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="49"),
+        concepts=["differentiation"], verified=True, origin="db",
+    )
+    session, llm, speaker = build_session(
+        db,
+        [{
+            "verdict": "INCORRECT",
+            "feedback": "조금 달라요. 방금 말한 식은 앞에서 구한 도함수예요.",
+            "error_focus": "2x-4를 접선의 방정식으로 혼동함; 앞에서 구한 f'(x)임",
+            "misconception": None,
+            "status": "PROCEDURAL_ERROR",
+        }],
+        client=RecordingCorrectionLLM,
+    )
+    session.ctx.reference = reference
+    session.ctx.match = MatchResult(
+        tier=Tier.NEW, concepts=reference.concepts, reference=reference,
+    )
+    session.store.set_state(StudentState(
+        status="STUCK", last_correct_step=1, misconception=None,
+    ))
+    session.store.append_hint(
+        problem_hash="p1", step=2, level=2, action="CONCEPT_HINT",
+        hint_text=(
+            "기울기가 -2인 직선은 다음과 같은 꼴로 나타낼 수 있어요. "
+            "접점 (1, -6)을 이 식에 넣어 볼까요?"
+        ),
+    )
+
+    await session.handle_answer(
+        "그럼 2x 마이너스 4 맞아?", session.store.pending_hint("p1")
+    )
+
+    assert speaker.spoken[0] == \
+        "조금 달라요. 방금 말한 식은 앞에서 구한 도함수예요."
+    assert "다시 살펴볼까요" in speaker.spoken[-1]
+    assert "답변 판정기가 특정한 오류" in llm.phrase_prompt
+    assert "2x-4를 접선의 방정식으로 혼동" in llm.phrase_prompt
+    assert llm.phrase_stream_calls == 0
 
 
 async def test_unclear_answer_reasks_same_level(db):
@@ -921,6 +1047,25 @@ class TestAPlanDoesNotCloseTheProblem:
         surd = Answer(kind="SCALAR", value="3*sqrt(10)/10")
         assert names_the_final_value("루트로 나와요", surd)
 
+    def test_component_values_are_not_mistaken_for_the_final_value(self):
+        from tutor.knowledge.models import Answer
+        from tutor.server.session import final_value_claim
+
+        answer = Answer(kind="SCALAR", value="49")
+        question = (
+            "두 y절편 사이의 길이와 교점의 x좌표를 이용하면, "
+            "삼각형의 밑변과 높이는 각각 무엇일까요?"
+        )
+        assert final_value_claim(
+            "밑변은 14고 높이는 7", answer, question
+        ) == "none"
+        assert final_value_claim(
+            "밑변은 14고 높이는 7이라서 곱한 뒤 나누면 돼요", answer, question
+        ) == "none"
+        assert final_value_claim(
+            "밑변은 14고 높이는 7이고 최종 답은 49예요", answer, question
+        ) == "said"
+
     async def test_a_right_plan_keeps_the_problem_open(self, db):
         session, llm, speaker = build_session(
             db,
@@ -936,9 +1081,54 @@ class TestAPlanDoesNotCloseTheProblem:
         assert session.ctx is not None                     # NOT closed
         assert "solved" not in session.ws.event_names()
         assert "끝까지 풀었네요" not in " ".join(speaker.spoken)
-        assert speaker.spoken[0].startswith("좋아요, 제대로 접근하고 있어요.")
+        assert speaker.spoken[0].startswith("맞아요!")
         state = session.store.get_state()
         assert state is not None and state.status == "STUCK"   # the partial path
+
+    async def test_correct_base_and_height_are_confirmed_not_called_wrong(self, db):
+        reference = ReferenceSolution(
+            steps=[
+                SolutionStep(
+                    idx=1,
+                    description="y절편 사이를 밑변으로 삼각형의 넓이 구하기",
+                    expression="(1/2)*(10 - (-4))*7 = 49",
+                ),
+            ],
+            final_answer=Answer(kind="SCALAR", value="49"),
+            concepts=["triangle_area"], verified=True, origin="db",
+        )
+        session, _, speaker = build_session(
+            db,
+            [{
+                "verdict": "CORRECT",
+                "feedback": "맞아요, 밑변과 높이를 정확히 찾았어요!",
+                "misconception": None,
+                "status": "CORRECT",
+            }],
+        )
+        session.ctx.reference = reference
+        session.ctx.match = MatchResult(
+            tier=Tier.NEW, concepts=reference.concepts, reference=reference,
+        )
+        session.store.set_state(StudentState(status="STUCK", last_correct_step=0))
+        session.store.append_hint(
+            problem_hash="p1", step=1, level=1, action="SOCRATIC_QUESTION",
+            hint_text=(
+                "두 y절편 사이의 길이와 교점의 x좌표를 이용하면, "
+                "삼각형의 밑변과 높이는 각각 무엇일까요?"
+            ),
+        )
+
+        await session.handle_answer(
+            "밑변은 14고 높이는 7", session.store.pending_hint("p1")
+        )
+
+        assert session.ctx is not None
+        assert "solved" not in session.ws.event_names()
+        assert speaker.spoken[0] == "맞아요, 밑변과 높이를 정확히 찾았어요!"
+        assert not speaker.spoken[0].startswith("접근 방식은 좋아요")
+        latest = session.store.get_history(problem_hash="p1")[-1]
+        assert (latest.step, latest.level) == (1, 1)
 
 
 class TestAWrongValueNeverHearsRight:
@@ -1124,9 +1314,85 @@ class TestAHalfComputedCompositeIsNotDone:
         )
         assert v.verdict == "CORRECT"       # 마이너스 2 reads as -2
 
+    @pytest.mark.parametrize("transcript", ["Minus e.", "Minus two.", "Minus 2."])
+    def test_context_repairs_the_short_english_minus_two_transcript(
+        self, db, transcript
+    ):
+        v = self.judge(db).evaluate(
+            problem_text="p",
+            reference=self.REF,
+            question="f 프라임 1은 얼마일까요?",
+            target_step=1,
+            transcript=transcript,
+        )
+
+        assert v.verdict == "CORRECT"
+
+    def test_minus_e_is_not_rewritten_for_a_different_target(self, db):
+        other = self.REF.model_copy(deep=True)
+        other.steps[0].expression = "f'(x) = 2*x - 5, f'(1) = -3"
+        v = self.judge(db).evaluate(
+            problem_text="p",
+            reference=other,
+            question="f 프라임 1은 얼마일까요?",
+            target_step=1,
+            transcript="Minus e.",
+        )
+
+        assert v.verdict == "PARTIAL"
+
     def test_a_symbolic_tail_stays_the_judges_call(self, db):
         v = self.judge(db).evaluate(
             problem_text="p", reference=self.REF, question="q", target_step=2,
             transcript="y는 마이너스 2x 마이너스 4예요",
         )
         assert v.verdict == "CORRECT"       # step 2 ends symbolically: no gate
+
+    def test_y_is_repaired_to_x_only_for_an_x_coordinate_step(self, db):
+        coordinate = ReferenceSolution(
+            steps=[SolutionStep(
+                idx=1, description="두 직선의 교점의 x좌표 구하기",
+                expression="-2*x - 4 = -4*x + 10, x = 7",
+            )],
+            final_answer=Answer(kind="SCALAR", value="49"),
+            concepts=[], verified=True, origin="db",
+        )
+        evaluator = self.judge(db)
+
+        assert evaluator.normalize_transcript(coordinate, 1, "y는 7이요") == "x는 7"
+        assert evaluator.normalize_transcript(coordinate, 1, "y는 5이요") == "x는 5"
+        assert evaluator.normalize_transcript(self.REF, 1, "y는 7이요") == "y는 7이요"
+
+
+async def test_the_context_repaired_x_reaches_the_transcript_event(db):
+    from tutor.speech.stt import Transcript
+
+    reference = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="두 직선의 교점의 x좌표 구하기",
+                         expression="-2*x - 4 = -4*x + 10, x = 7"),
+            SolutionStep(idx=2, description="y절편 구하기",
+                         expression="l(0) = -4, m(0) = 10"),
+            SolutionStep(idx=3, description="넓이 구하기", expression="49"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="49"),
+        concepts=[], verified=True, origin="db",
+    )
+    session, _, _ = build_session(db, [{
+        "verdict": "CORRECT", "feedback": "맞아요!",
+        "misconception": None, "status": "CORRECT",
+    }])
+    session.ctx.reference = reference
+    session.ctx.match = MatchResult(tier=Tier.EXACT, concepts=[], reference=reference)
+
+    class HeardY:
+        def transcribe(self, pcm, sample_rate=16000):
+            return Transcript(text="y는 7이요", language="ko")
+
+    session.deps.transcriber = HeardY()
+    ask_l1(session, step=1)
+    await session._handle_utterance(b"\x00\x00" * 100, 16000)
+
+    events = [json.loads(raw) for raw in session.ws.events]
+    transcript = next(e for e in events if e["event"] == "transcript")
+    assert transcript["data"]["text"] == "x는 7"

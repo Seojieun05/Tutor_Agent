@@ -20,6 +20,13 @@ from sympy.parsing.sympy_parser import (
 _TRANSFORMS = standard_transformations + (implicit_multiplication_application, convert_xor)
 
 _DERIV_PREFIX = re.compile(r"d\s*/\s*d([a-zA-Z])\s*\(")
+_PRIME_CALL = re.compile(
+    r"\b([A-Za-z][A-Za-z0-9_]*)\s*(['′]+)\s*\(\s*([A-Za-z0-9_.+-]+)\s*\)"
+)
+_FUNCTION_DEFINITION = re.compile(
+    r"^\s*([A-Za-z][A-Za-z0-9_]*)\s*\(\s*([A-Za-z])\s*\)\s*=\s*(.+?)\s*$"
+)
+_FUNCTION_CALL = re.compile(r"\b[A-Za-z][A-Za-z0-9_]*\s*\(")
 _UNICODE_MATH = {"×": "*", "÷": "/", "−": "-", "²": "**2", "³": "**3", "√": "sqrt"}
 
 
@@ -56,10 +63,30 @@ def _rewrite_derivatives(s: str) -> str:
         s = f"{s[:m.start()]}Derivative({inner}, {m.group(1)}){s[i:]}"
 
 
+def _rewrite_prime_calls(s: str) -> str:
+    """Turn schoolbook ``f'(x)`` into a parseable atomic symbol.
+
+    SymPy reads an apostrophe as the start of a Python string, so a perfectly
+    ordinary worksheet line such as ``g'(x) = ...`` used to make every
+    equivalence check silently return False.  The application is intentionally
+    atomic: without a supplied definition, ``f'(x)`` is an unknown value, not
+    something SymPy is allowed to invent a derivative for.
+    """
+
+    def replacement(match: re.Match[str]) -> str:
+        name, primes, argument = match.groups()
+        order = len(primes)
+        suffix = "prime" if order == 1 else f"prime{order}"
+        safe_argument = re.sub(r"[^A-Za-z0-9_]", "_", argument)
+        return f"{name}_{suffix}_at_{safe_argument}"
+
+    return _PRIME_CALL.sub(replacement, s)
+
+
 def _preprocess(s: str) -> str:
     for k, v in _UNICODE_MATH.items():
         s = s.replace(k, v)
-    return _rewrite_derivatives(s).strip()
+    return _rewrite_prime_calls(_rewrite_derivatives(s)).strip()
 
 
 def parse_expression(s: str) -> sympy.Expr:
@@ -249,6 +276,80 @@ def equations_same_form(a: str, b: str) -> bool:
         return (eq(la, lb) and eq(ra, rb)) or (eq(la, rb) and eq(ra, lb))
     except (ParseError, Exception):
         return False
+
+
+def derivative_substitutions(equations: list[str]) -> dict[tuple[str, str], str]:
+    """Derive safe ``f'(x)`` substitutions from explicit function definitions.
+
+    Only definitions whose right side contains no other function call qualify.
+    Thus ``f(x) = x**2 - 4*x - 3`` yields ``f'(x) = 2*x - 4``, while
+    ``g(x) = h(x)*f(x)`` is deliberately skipped: treating ``f(x)`` as a
+    constant symbol there would manufacture a wrong derivative.
+    """
+    substitutions: dict[tuple[str, str], str] = {}
+    for equation in equations:
+        match = _FUNCTION_DEFINITION.match(_preprocess(equation))
+        if match is None:
+            continue
+        function, variable, rhs = match.groups()
+        if _FUNCTION_CALL.search(rhs):
+            continue
+        try:
+            expression = parse_expression(rhs)
+            derivative = sympy.simplify(sympy.diff(expression, sympy.Symbol(variable)))
+        except (ParseError, Exception):
+            continue
+        substitutions[(function, variable)] = str(derivative)
+    return substitutions
+
+
+def equations_same_form_with_derivatives(
+    a: str, b: str, definitions: list[str]
+) -> bool:
+    """Same written step after applying derivatives proven by the problem.
+
+    This is contextual equivalence, not a license to collapse arbitrary
+    pedagogical steps.  It handles the common pair
+    ``...*f'(x)`` and ``...*(2*x - 4)`` only when the page also provides a
+    definition from which SymPy independently derives that substitution.
+    """
+    substitutions = derivative_substitutions(definitions)
+
+    def reflexive(text: str) -> bool:
+        lhs, separator, rhs = text.partition("=")
+        return bool(
+            separator
+            and "=" not in rhs
+            and expressions_equivalent(lhs.strip(), rhs.strip())
+        )
+
+    # A definition can turn f'(x)=f'(x) into the computed derivative on both
+    # sides.  It remains a tautology, not evidence that the reference step was
+    # performed, so never match it against a non-reflexive claim.
+    if reflexive(a) != reflexive(b):
+        return False
+
+    def apply_to_claim(text: str) -> str:
+        for (function, variable), value in substitutions.items():
+            pattern = re.compile(
+                rf"\b{re.escape(function)}\s*['′]\s*"
+                rf"\(\s*{re.escape(variable)}\s*\)"
+            )
+            text = pattern.sub(f"({value})", text)
+        return text
+
+    def apply(text: str) -> str:
+        # Preserve the left-hand subject of an equation.  Substituting there
+        # would turn the non-progress line "f'(x) = f'(x)" into the computed
+        # derivative and falsely make it look like a completed step.  The
+        # contextual rewrite is for a derivative used inside the student's
+        # claimed result, which is the right-hand side (or a bare expression).
+        lhs, separator, rhs = text.partition("=")
+        if not separator:
+            return apply_to_claim(text)
+        return lhs + separator + apply_to_claim(rhs)
+
+    return equations_same_form(apply(a), apply(b))
 
 
 def _split_sides(s: str) -> tuple[str, str] | None:

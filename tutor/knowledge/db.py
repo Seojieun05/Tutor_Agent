@@ -7,6 +7,7 @@ solutions are stored via insert_unverified_solution and never auto-verified.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import sqlite3
 from pathlib import Path
@@ -55,10 +56,24 @@ CREATE TABLE IF NOT EXISTS concept_preflight (
 -- The runtime serves it verbatim: model quality at template price.
 CREATE TABLE IF NOT EXISTS prewritten_hints (
     problem_id TEXT NOT NULL, step INTEGER NOT NULL, level INTEGER NOT NULL,
-    hint_text TEXT NOT NULL,
+    hint_text TEXT NOT NULL, board_json TEXT NOT NULL DEFAULT '[]',
     PRIMARY KEY (problem_id, step, level)
 );
 """
+
+
+@dataclass(frozen=True)
+class StoredBoardLine:
+    expr: str
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class PrewrittenHint:
+    """A reviewed hint artifact: what is said and what is written."""
+
+    text: str
+    board: tuple[StoredBoardLine, ...] = ()
 
 
 class KnowledgeDB:
@@ -78,6 +93,14 @@ class KnowledgeDB:
         columns = {r[1] for r in self._conn.execute("PRAGMA table_info(problems)")}
         if "equations_sig" not in columns:
             self._conn.execute("ALTER TABLE problems ADD COLUMN equations_sig TEXT")
+        hint_columns = {
+            r[1] for r in self._conn.execute("PRAGMA table_info(prewritten_hints)")
+        }
+        if "board_json" not in hint_columns:
+            self._conn.execute(
+                "ALTER TABLE prewritten_hints "
+                "ADD COLUMN board_json TEXT NOT NULL DEFAULT '[]'"
+            )
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_problems_eqsig ON problems(equations_sig)"
         )
@@ -188,19 +211,54 @@ class KnowledgeDB:
 
     def prewritten_hint(self, problem_id: str, step: int, level: int) -> str | None:
         """The line written for exactly this problem, step and level — if any."""
+        artifact = self.prewritten_hint_artifact(problem_id, step, level)
+        return artifact.text if artifact is not None else None
+
+    def prewritten_hint_artifact(
+        self, problem_id: str, step: int, level: int
+    ) -> PrewrittenHint | None:
+        """The reviewed spoken line and its optional whiteboard writing."""
         row = self._conn.execute(
-            "SELECT hint_text FROM prewritten_hints "
+            "SELECT hint_text, board_json FROM prewritten_hints "
             "WHERE problem_id = ? AND step = ? AND level = ?",
             (problem_id, step, level),
         ).fetchone()
-        return row[0] if row else None
+        if row is None:
+            return None
+        try:
+            raw_board = json.loads(row[1] or "[]")
+            board = tuple(
+                StoredBoardLine(
+                    expr=str(item.get("expr", "")).strip(),
+                    note=str(item.get("note", "")).strip(),
+                )
+                for item in raw_board
+                if isinstance(item, dict) and str(item.get("expr", "")).strip()
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            # A hand-edited legacy row may be malformed. The spoken hint is
+            # still usable; unsafe or unreadable writing simply stays off.
+            board = ()
+        return PrewrittenHint(text=row[0], board=board)
 
     def save_prewritten_hint(
-        self, problem_id: str, step: int, level: int, text: str
+        self, problem_id: str, step: int, level: int, text: str,
+        board=(),
     ) -> None:
+        lines = []
+        for item in board or ():
+            if isinstance(item, dict):
+                expr, note = item.get("expr", ""), item.get("note", "")
+            else:
+                expr, note = getattr(item, "expr", ""), getattr(item, "note", "")
+            expr = str(expr).strip()
+            if expr:
+                lines.append({"expr": expr, "note": str(note).strip()})
         self._conn.execute(
-            "INSERT OR REPLACE INTO prewritten_hints VALUES (?, ?, ?, ?)",
-            (problem_id, step, level, text.strip()),
+            "INSERT OR REPLACE INTO prewritten_hints "
+            "(problem_id, step, level, hint_text, board_json) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (problem_id, step, level, text.strip(), json.dumps(lines, ensure_ascii=False)),
         )
         self._conn.commit()
 
