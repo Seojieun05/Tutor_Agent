@@ -4,9 +4,11 @@ from tutor.knowledge.mathnorm import (
     equations_same_form,
     equations_same_form_with_derivatives,
     expressions_equivalent,
+    identity_text,
     instantiate,
     match_template,
     normalize_text,
+    texts_identical_enough,
     verify_answer,
 )
 
@@ -20,6 +22,54 @@ def test_normalize_text():
 def test_normalize_text_superscripts_survive_nfkc():
     # NFKC alone would fold '²' into a bare '2' ("x2"); the math map must win
     assert normalize_text("x² - 9 = 0") == normalize_text("x**2 - 9 = 0")
+
+
+class TestIdentityText:
+    """Live: the typed presolve entry said "y = aˣ - 2" where the VLM wrote
+    "y=a^x-2" — same printed problem, different rendering. identity_text
+    erases exactly what a faithful read may change (superscript rendering,
+    power notation, overlines, spacing) and nothing that identifies the
+    problem (numbers, conditions, words)."""
+
+    def test_the_photograph_reads_as_the_typed_entry(self):
+        typed = "상수 a (a>1)에 대하여 곡선 y = aˣ - 2 위의 점"
+        photographed = "상수 a(a>1)에 대하여 곡선 y=a^x-2 위의 점"
+        assert identity_text(typed) == identity_text(photographed)
+
+    def test_power_notations_converge(self):
+        assert identity_text("y = a**x - 2") == identity_text("y=a^x-2")
+        assert identity_text("x² - 9") == identity_text("x^2 - 9")
+
+    def test_overline_calls_read_as_the_bare_segment(self):
+        assert identity_text("AB = BC 이고") == identity_text(
+            "overline(AB) = overline(BC) 이고"
+        )
+
+    def test_a_changed_number_is_a_different_problem(self):
+        assert identity_text("넓이가 8일 때") != identity_text("넓이가 12일 때")
+
+
+class TestTextsIdenticalEnough:
+    """Live, capture two: the same printed "상수 a(a>1)" arrived as
+    "실수 a(a>1)" at conf 1.00 — a syllable of ink. Hangul substitutions up
+    to the cap are forgiven; digits, symbols and length never are."""
+
+    def test_a_misread_syllable_is_forgiven(self):
+        assert texts_identical_enough(
+            "10. 상수 a (a>1)에 대하여 곡선 y = aˣ - 2 위의 점",
+            "10. 실수 a(a>1)에 대하여 곡선 y=a^x-2 위의 점",
+        )
+
+    def test_a_changed_digit_never_is(self):
+        assert not texts_identical_enough("넓이가 8일 때", "넓이가 9일 때")
+        assert not texts_identical_enough("넓이가 8일 때", "넓이가 12일 때")
+
+    def test_the_budget_is_two_syllables(self):
+        assert texts_identical_enough("상수 예각 삼각형", "실수 둔각 삼각형")
+        assert not texts_identical_enough("상수 예각 방정식", "실수 둔각 부등식")
+
+    def test_empty_prose_identifies_nothing(self):
+        assert not texts_identical_enough("", "")
 
 
 class TestEquivalence:
@@ -41,6 +91,11 @@ class TestEquivalence:
 
     def test_rearranged(self):
         assert equations_equivalent("3*x = 15", "3*x - 15 = 0")
+
+    def test_overline_is_notation_not_a_function(self):
+        # the VLM transcribes a printed segment bar as overline(AB); the
+        # stored equation writes the bare length
+        assert equations_equivalent("overline(AB) = overline(BC)", "AB = BC")
 
     def test_not_equivalent(self):
         assert not equations_equivalent("3*x + 5 = 20", "3*x + 5 = 21")

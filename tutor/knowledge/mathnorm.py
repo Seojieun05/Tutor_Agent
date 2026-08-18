@@ -43,6 +43,66 @@ def normalize_text(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+# An exam's segment bar is notation, not a function: overline(AB) IS AB. The
+# VLM transcribes printed AB-with-a-bar this way, a stored equation writes the
+# bare length, and left alone SymPy reads a function call — every equivalence
+# against the stored form then silently fails.
+_OVERLINE_CALL = re.compile(r"\boverline\s*\(\s*([A-Za-z][A-Za-z0-9_]*)\s*\)")
+
+# Superscript POWERS a printed page uses and NFKC folds flat: aˣ must read
+# a^x, not ax — the bare fold loses the power and with it the problem's shape.
+_SUPERSCRIPT_POWERS = {
+    "ˣ": "^x", "ʸ": "^y", "ⁿ": "^n",
+    "⁰": "^0", "¹": "^1", "²": "^2", "³": "^3", "⁴": "^4",
+    "⁵": "^5", "⁶": "^6", "⁷": "^7", "⁸": "^8", "⁹": "^9",
+}
+
+
+def identity_text(s: str) -> str:
+    """Rendering-blind prose identity: the same printed problem, however read.
+
+    normalize_text must stay byte-stable — every stored text_hash was minted
+    with it — so the folds a PHOTOGRAPH needs live here instead. Live, a typed
+    presolve entry said "y = aˣ - 2" where the VLM wrote "y=a^x-2": the only
+    differences a faithful read introduces are superscript rendering, power
+    notation, overline calls and spacing, so exactly those are erased. Numbers
+    and conditions survive untouched — a lookalike with one changed value
+    still reads as a different problem.
+    """
+    for k, v in _SUPERSCRIPT_POWERS.items():
+        s = s.replace(k, v)
+    s = _OVERLINE_CALL.sub(r"\1", s)
+    s = normalize_text(s).replace("**", "^")
+    return re.sub(r"\s+", "", s)
+
+
+def texts_identical_enough(a: str, b: str, max_hangul_substitutions: int = 2) -> bool:
+    """identity_text equality, forgiving OCR-grade syllable slips.
+
+    Live, the same printed page read "상수 a(a>1)" on one capture and
+    "실수 a(a>1)" on the next — conf 1.00 both times: one syllable of ink,
+    zero difference in the mathematics. Same-position hangul substitutions
+    up to the cap are forgiven; digits, latin letters, symbols and the
+    length itself must match exactly — those are the problem's parameters
+    and structure, not ink.
+    """
+    ia, ib = identity_text(a), identity_text(b)
+    if ia == ib:
+        return bool(ia)
+    if len(ia) != len(ib):
+        return False
+    substitutions = 0
+    for ca, cb in zip(ia, ib):
+        if ca == cb:
+            continue
+        if not ("가" <= ca <= "힣" and "가" <= cb <= "힣"):
+            return False
+        substitutions += 1
+        if substitutions > max_hangul_substitutions:
+            return False
+    return True
+
+
 def _rewrite_derivatives(s: str) -> str:
     """d/dx(...) → Derivative(..., x), with balanced-paren scanning so trailing
     text like 'd/dx(x^3) + d/dx(2x)' is not swallowed by a greedy match."""
@@ -86,6 +146,7 @@ def _rewrite_prime_calls(s: str) -> str:
 def _preprocess(s: str) -> str:
     for k, v in _UNICODE_MATH.items():
         s = s.replace(k, v)
+    s = _OVERLINE_CALL.sub(r"\1", s)
     return _rewrite_prime_calls(_rewrite_derivatives(s)).strip()
 
 

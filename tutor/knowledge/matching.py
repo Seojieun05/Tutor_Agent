@@ -21,6 +21,7 @@ from tutor.knowledge.db import KnowledgeDB
 from tutor.knowledge.models import (
     Answer,
     MatchResult,
+    Problem,
     ReferenceSolution,
     SolutionStep,
     Template,
@@ -130,6 +131,30 @@ class Matcher:
                 ):
                     candidate = p
                     break
+        if candidate is None and rec.problem_text:
+            # The prose IS the problem — numbers, conditions and all. A
+            # photographed page arrives with printed choices and a re-read
+            # equation list the warm shape never had, so every composite
+            # hash above misses; live, problem 10 fell through to SEMANTIC
+            # and its verified reference sat on the shelf while a generic
+            # concept line misled the student. Identical normalized text,
+            # with each stored equation found among the recognized ones, is
+            # the "verify numbers, equations, and conditions" the spec asks
+            # of a lookalike. Short prose stays safe: a problem whose
+            # parameters live only in its equations fails the subset check.
+            normalized = mathnorm.normalize_text(rec.problem_text)
+            for p in self.db.find_by_normalized_text(normalized):
+                stored = _without_graph_aliases(p.equations)
+                if all(
+                    any(
+                        mathnorm.equations_equivalent(s, r, allow_scale=False)
+                        for r in equations
+                    )
+                    for s in stored
+                ) and self.db.verified_solution(p.id) is not None:
+                    log.info("exact by identical problem text: %s", p.id)
+                    candidate = p
+                    break
         if candidate is None:
             return None
         solution = self.db.verified_solution(candidate.id)
@@ -194,6 +219,54 @@ class Matcher:
             origin="template",
         )
 
+    # --- lookalike verification ----------------------------------------------
+
+    def _verified_lookalike(
+        self, rec: Recognition, hit: Problem
+    ) -> MatchResult | None:
+        """Retrieval only PROPOSES; this verifies before a solution is trusted.
+
+        Live, problem 10 came back SEMANTIC at 0.976 with its verified
+        reference on the shelf: the photographed prose WAS the stored prose in
+        another rendering — "y=a^x-2" for "y = aˣ - 2", overline(AB) for AB —
+        so no hash could see it. Identity of the rendering-blind prose fixes
+        the numbers and conditions (one misread syllable of hangul is ink,
+        not a condition — 상수 arrived as 실수 at conf 1.00); each stored
+        equation found among the recognized ones confirms the algebra;
+        anything less keeps the solver. The hit is ONE stored read of the
+        problem, so its variant rows (same prose, other equation reads) get
+        the same chance.
+        """
+        if not mathnorm.texts_identical_enough(rec.problem_text, hit.problem_text):
+            return None
+        equations = _without_graph_aliases(rec.equations)
+        candidates = self.db.find_by_normalized_text(
+            mathnorm.normalize_text(hit.problem_text)
+        ) or [hit]
+        for p in candidates:
+            stored = _without_graph_aliases(p.equations)
+            if not all(
+                any(
+                    mathnorm.equations_equivalent(s, r, allow_scale=False)
+                    for r in equations
+                )
+                for s in stored
+            ):
+                continue
+            solution = self.db.verified_solution(p.id)
+            if solution is None:
+                continue
+            log.info("lookalike verified as the stored problem: %s", p.id)
+            return MatchResult(
+                tier=Tier.EXACT,
+                problem=p,
+                concepts=p.concepts,
+                reference=solution.model_copy(
+                    update={"origin": "db", "verified": True}
+                ),
+            )
+        return None
+
     # --- CONCEPT -------------------------------------------------------------
 
     def _match_concept(
@@ -205,6 +278,9 @@ class Matcher:
         scored = self.db.problems_by_concepts(concepts, problem_type=ptype)
         if not scored or scored[0][1] < self.CONCEPT_OVERLAP_THRESHOLD:
             return None
+        promoted = self._verified_lookalike(rec, scored[0][0])
+        if promoted is not None:
+            return promoted
         return MatchResult(
             tier=Tier.CONCEPT,
             problem=scored[0][0],
@@ -232,6 +308,9 @@ class Matcher:
             return None
         problem, score = hits[0]
         log.info("semantic match %s (score %.3f)", problem.id, score)
+        promoted = self._verified_lookalike(rec, problem)
+        if promoted is not None:
+            return promoted
         return MatchResult(
             tier=Tier.SEMANTIC,
             problem=problem,

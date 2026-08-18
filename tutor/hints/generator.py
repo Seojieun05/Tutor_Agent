@@ -883,17 +883,25 @@ class HintGenerator:
                 continue
             if (
                 reference is not None
-                and decision.target_step > 1
                 and decision.level >= 2
                 and template.misconception_id is None
+                and (
+                    decision.target_step > 1
+                    or "{step}" not in template.template_text
+                )
             ):
                 # A concept template knows the problem's broad topic, not the
                 # current reference step.  After real progress that is too
                 # little context: a derivative-applications L2 sent a student
                 # who was constructing l back to "what should we differentiate?"
-                # Problem+step prewrites already ran above; a diagnosed
-                # misconception remains specific enough to use.  Otherwise the
-                # target-aware phrasing prompt is the safe fallback.
+                # Step 1 is no shield for a line that cannot even SEE the
+                # step: an exponential L2 re-asked its fixed-point trivia
+                # while the solver's fresh reference already knew the
+                # asymptote WAS the step. A {step}-slotted line reads the
+                # step it aims at and stays.  Problem+step prewrites already
+                # ran above; a diagnosed misconception remains specific
+                # enough to use.  Otherwise the target-aware phrasing prompt
+                # is the safe fallback.
                 continue
             if (decision.misconception or correcting) and template.misconception_id is None:
                 # A diagnosed mistake outranks concept boilerplate. Live, the

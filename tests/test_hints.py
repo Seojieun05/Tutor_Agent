@@ -901,6 +901,51 @@ class TestADiagnosedMistakeOutranksBoilerplate:
         assert "phrase" in llm.calls
 
 
+class TestConceptBoilerplateNeverOutranksAReference:
+    """Live, problem 10 at step 1: the answer to the first concept question
+    escalated to L2 while the solver's reference already knew the asymptote
+    WAS the step — and the exponential concept template re-asked its generic
+    fixed-point trivia anyway. With a reference in hand, L2+ concept lines
+    give way to pedagogy that can see the step; without one they still
+    serve, because they are all there is."""
+
+    LINE = "지수함수는 밑이 무엇이든 반드시 한 점을 지나요. 그 점을 이 문제 어디에 쓸 수 있을까요?"
+
+    def seeded(self, db):
+        from tutor.knowledge.models import HintTemplate
+        db.insert_hint_template(HintTemplate(
+            id="t-l2-expo", concept_id="exponential_function", level=2,
+            template_text=self.LINE,
+        ))
+        llm = EchoLLMClient()
+        gen = HintGenerator(llm, db)
+        rec = Recognition(problem_text="지수함수 문제", equations=[],
+                          concepts=["exponential_function"], confidence=0.95)
+        match = MatchResult(tier=Tier.CONCEPT, concepts=["exponential_function"])
+        return gen, llm, rec, match
+
+    EXPO_REF = ReferenceSolution(
+        steps=[SolutionStep(idx=1, description="점근선 확인",
+                            expression="y = a**x - 2 의 점근선은 y = -2")],
+        final_answer=Answer(kind="SCALAR", value="2**(5/2)"),
+        concepts=["exponential_function"], verified=True, origin="db",
+    )
+
+    def test_step_one_is_no_shield_once_a_reference_exists(self, db):
+        gen, llm, rec, match = self.seeded(db)
+        decision = Decision(Action.CONCEPT_HINT, 2, 1, None, "escalate")
+        text = gen.generate(decision, match, self.EXPO_REF, rec, history=[])
+        assert str(text) != self.LINE
+        assert "phrase" in llm.calls
+
+    def test_without_a_reference_the_template_still_serves(self, db):
+        gen, llm, rec, match = self.seeded(db)
+        decision = Decision(Action.CONCEPT_HINT, 2, 1, None, "escalate")
+        text = gen.generate(decision, match, None, rec, history=[])
+        assert str(text) == self.LINE
+        assert "phrase" not in llm.calls
+
+
 class TestAPrewrittenLineServesFirst:
     """A hint written at warm time for THIS problem's THIS step outranks the
     conjugated label and the concept template — model quality at template
@@ -1000,6 +1045,69 @@ def test_problem_13_curated_l2_is_source_data_and_survives_presolve(db):
     assert llm.calls == []
 
 
+def test_problem_10_curated_l1_l2_hints_survive_presolve_and_all_serve(db):
+    """The demo problem has a complete, deterministic L1/L2 ladder.
+
+    Every source line must pass the same future-step and answer-leak screens as
+    a live hint; otherwise the demo silently falls through to generic pedagogy.
+    """
+    from tutor.knowledge.matching import Matcher
+    from tutor.scripts.warm_kb import load_presolve, presolve
+    from tutor.store.session_store import HintRecord
+
+    entries = load_presolve()
+    spec = entries["10"]
+    source_hints = spec["prewritten_hints"]
+
+    assert len(source_hints) == 12
+    assert {(h["step"], h["level"]) for h in source_hints} == {
+        (step, level) for step in range(1, 7) for level in (1, 2)
+    }
+    assert presolve(db, None, "10", entries)
+
+    rec = Recognition(
+        problem_text=spec["problem_text"],
+        equations=spec["equations"][0],
+        problem_type=spec["problem_type"],
+        concepts=spec["concepts"],
+    )
+    match = Matcher(db).match(rec)
+    llm = EchoLLMClient()
+    generator = HintGenerator(llm, db)
+
+    assert match.tier is Tier.EXACT
+    for source in source_hints:
+        served = generator.generate(
+            decision(source["level"], target=source["step"]),
+            match,
+            match.reference,
+            rec,
+            [],
+        )
+        assert str(served) == source["text"], (source["step"], source["level"])
+
+    first_l1 = next(h for h in source_hints if (h["step"], h["level"]) == (1, 1))
+    first_l2 = next(h for h in source_hints if (h["step"], h["level"]) == (1, 2))
+    after_surrender = generator.generate(
+        decision(2, target=1),
+        match,
+        match.reference,
+        rec,
+        [HintRecord(
+            id=1,
+            problem_hash="problem-10",
+            step=1,
+            level=1,
+            action="SOCRATIC_QUESTION",
+            hint_text=first_l1["text"],
+            effective=False,
+        )],
+        student_answer="잘 모르겠어요",
+    )
+    assert str(after_surrender) == first_l2["text"]
+    assert llm.calls == []
+
+
 def test_problem_13_curated_first_l1_survives_presolve(db):
     from tutor.knowledge.matching import Matcher
     from tutor.scripts.warm_kb import load_presolve, presolve
@@ -1030,6 +1138,56 @@ def test_problem_13_curated_first_l1_survives_presolve(db):
     assert str(served) == source_hint["text"]
     assert "어떤 값을 먼저 계산" in served
     assert "f'(x)로" not in served
+    assert llm.calls == []
+
+
+def test_problem_13_surrender_after_derivative_gets_targeted_l2(db):
+    """Once f'(x) is established, surrendering on the slope question must not
+    fall back to a broad derivative-applications template that asks the student
+    to differentiate all over again.
+    """
+    from tutor.knowledge.matching import Matcher
+    from tutor.scripts.warm_kb import load_presolve, presolve
+    from tutor.store.session_store import HintRecord
+
+    entries = load_presolve()
+    spec = entries["13"]
+    source_hint = next(
+        h for h in spec["prewritten_hints"]
+        if h["step"] == 1 and h["level"] == 2
+    )
+
+    assert presolve(db, None, "13", entries)
+    rec = Recognition(
+        problem_text=spec["problem_text"],
+        equations=spec["equations"][0],
+        problem_type=spec["problem_type"],
+        concepts=spec["concepts"],
+    )
+    match = Matcher(db).match(rec)
+    failed = [HintRecord(
+        id=1,
+        problem_hash="problem-13",
+        step=1,
+        level=1,
+        action="SOCRATIC_QUESTION",
+        hint_text="이제 구한 f'(x)를 이용해 접선 l의 기울기를 구해 볼까요?",
+        effective=False,
+    )]
+    llm = EchoLLMClient()
+
+    served = HintGenerator(llm, db).generate(
+        Decision(Action.CONCEPT_HINT, 2, 1, None, "hint L1 ineffective: escalate to L2"),
+        match,
+        match.reference,
+        rec,
+        failed,
+        student_answer="모르겠는데",
+    )
+
+    assert str(served) == source_hint["text"]
+    assert "구한 f'(x)에서 x에 1을 넣으면" in served
+    assert "무엇을 미분" not in served
     assert llm.calls == []
 
 

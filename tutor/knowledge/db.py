@@ -275,6 +275,21 @@ class KnowledgeDB:
         ).fetchone()
         return Problem.model_validate_json(row[0]) if row else None
 
+    def find_by_normalized_text(self, normalized: str, limit: int = 5) -> list[Problem]:
+        """Verified problems whose stored prose equals this normalized text.
+
+        The identity rung behind find_by_text_hash: printed choices and a
+        re-read equation list change the composite hash on every capture,
+        while the prose itself stays the problem.
+        """
+        if not normalized:
+            return []
+        rows = self._conn.execute(
+            "SELECT body FROM problems WHERE normalized_text = ? AND verified = 1 LIMIT ?",
+            (normalized, limit),
+        )
+        return [Problem.model_validate_json(r[0]) for r in rows]
+
     def all_problems(self, verified_only: bool = True) -> list[Problem]:
         q = "SELECT body FROM problems" + (" WHERE verified = 1" if verified_only else "")
         return [Problem.model_validate_json(r[0]) for r in self._conn.execute(q)]
