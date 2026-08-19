@@ -186,6 +186,16 @@ READOUT_CLOSERS: dict[bool, str] = {
 _POLITE_TAILS = ("입니다", "이에요", "이예요", "예요", "에요", "이요", "요")
 
 
+# The number an utterance PRESENTS as its result: the one at the tail, wearing
+# at most a particle and a politeness ending. Shared by every check that has to
+# tell "the answer is 98" from a working value said along the way.
+_TAIL_ASSERTION_RE = re.compile(
+    r"(-?\d+(?:\.\d+)?(?:\s*/\s*\d+(?:\.\d+)?)?)\s*"
+    r"(?:[이가은는]\s*)?(?:맞나요?|맞아요?|맞죠|맞지|아닌가요?|아니에요|"
+    r"아니야|인가요?|이에요|예요|이요|이네요|네요|잖아요?|요)?\s*[?.!…~]*$"
+)
+
+
 def final_value_claim(transcript: str, answer, question: str = "") -> str:
     """What the transcript claims about the final value.
 
@@ -243,12 +253,7 @@ def final_value_claim(transcript: str, answer, question: str = "") -> str:
     # 맞나/이에요/요 — that is the one presented as the result. Numbers earlier
     # in the sentence are working values and assert nothing, so a problem
     # whose intermediate happens to equal its final answer cannot close on it.
-    tail = re.search(
-        r"(-?\d+(?:\.\d+)?(?:\s*/\s*\d+(?:\.\d+)?)?)\s*"
-        r"(?:[이가은는]\s*)?(?:맞나요?|맞아요?|맞죠|맞지|아닌가요?|아니에요|"
-        r"아니야|인가요?|이에요|예요|이요|이네요|네요|잖아요?|요)?\s*[?.!…~]*$",
-        (transcript or "").strip(),
-    )
+    tail = _TAIL_ASSERTION_RE.search((transcript or "").strip())
     asserted = parse(tail.group(1)) if tail else None
     if asserted is not None:
         return "said" if asserted == target else "wrong"
@@ -258,6 +263,118 @@ def final_value_claim(transcript: str, answer, question: str = "") -> str:
         if parse(said) == target:
             return "mentioned"
     return "none"
+
+
+# "곱하면 …", "답은 …" — the words that present a number as the RESULT of a
+# computation rather than as part of an expression being read out loud.
+_RESULT_MARKER_RE = re.compile(
+    r"(?:최종\s*)?(?:답|정답|결과)\s*(?:은|는|이|가|=)?|"
+    r"(?:계산|곱|더|빼|나누)\w*\s*(?:하면|해서|하니|했더니)"
+)
+
+
+def foreign_value_assertion(
+    transcript: str,
+    reference,
+    target_step: int,
+    question: str = "",
+    equations: list[str] | None = None,
+) -> str | None:
+    """The number this utterance asserts, when the problem knows no such value.
+
+    Live on problem 13: with the target still at the y-intercepts, a student
+    said "두 개를 곱하면 되니까 98인가?" — base times height, the halving
+    forgotten. The judge called it right, a composite-step guard softened
+    that to PARTIAL, and the tutor answered a wrong answer with "맞아요,
+    여기까지는 잘했어요".
+
+    The last step already refuses to nod at a wrong value, but running ahead
+    is not a last-step privilege: the mistake arrives whenever the student
+    gets there. Ungating that check is not enough, though — away from the
+    end, a tail number is usually the CURRENT step's own answer ("마이너스
+    2예요"), and calling those wrong would break every ordinary turn. So the
+    test is not "is it the final answer" but "does this number appear
+    ANYWHERE in the problem's own mathematics": every reference step, the
+    verified answer, the printed equations. 98 appears in none of them; -2,
+    7 and 10 all do. A number the problem knows is left to the judge.
+    """
+    from fractions import Fraction
+
+    def parse(number: str) -> Fraction | None:
+        try:
+            return Fraction(str(number).replace(" ", ""))
+        except (ValueError, ZeroDivisionError):
+            return None
+
+    # Only a number the student PRESENTS AS COMPUTED is judged here. Without
+    # this the trailing term of a spoken equation would count as a claim, and
+    # "L은 마이너스 2x 마이너스 4" — a correct tangent line — would be read as
+    # asserting the number -4. Same marker the final-value check uses to see
+    # past a sub-question, same meaning: "이렇게 계산하니 이 값".
+    if not _RESULT_MARKER_RE.search(transcript or ""):
+        return None
+    spoken = re.sub(r"마이너스\s*", "-", transcript or "")
+    tail = _TAIL_ASSERTION_RE.search(spoken.strip())
+    asserted = parse(tail.group(1)) if tail else None
+    if asserted is None:
+        return None
+
+    known = " ".join(
+        [step.expression or "" for step in getattr(reference, "steps", [])]
+        + [str(getattr(reference.final_answer, "value", ""))]
+        + list(equations or [])
+    )
+    for number in re.findall(r"-?\d+(?:\.\d+)?(?:\s*/\s*\d+(?:\.\d+)?)?", known):
+        value = parse(number)
+        if value is not None and value == asserted:
+            return None
+        # a written "10 - (-4)" holds 14 for anyone who can subtract; the
+        # student who says 14 is quoting the step, not inventing a number
+    if _derived_from_step(asserted, reference, target_step):
+        return None
+    return tail.group(1)
+
+
+def _derived_from_step(value, reference, target_step) -> bool:
+    """Is this number a sub-result the reference itself writes down?
+
+    "(1/2)*(10 - (-4))*7 = 49" holds 14 — the base — inside its middle
+    factor, where no digit scan can see it. Every BALANCED parenthesised
+    group of every step is evaluated instead, so a student who says 14 is
+    quoting the step. What no group produces is 98: the halving they left
+    out never happened, and that is the number the tutor must not praise.
+    """
+    from fractions import Fraction
+
+    for step in getattr(reference, "steps", []):
+        for group in _balanced_groups(step.expression or ""):
+            try:
+                if Fraction(str(eval_arithmetic(group))) == value:
+                    return True
+            except Exception:  # noqa: BLE001 — unparseable groups prove nothing
+                continue
+    return False
+
+
+def _balanced_groups(expression: str) -> list[str]:
+    """Every parenthesised sub-expression, nested ones included."""
+    groups, stack = [], []
+    for i, ch in enumerate(expression):
+        if ch == "(":
+            stack.append(i)
+        elif ch == ")" and stack:
+            groups.append(expression[stack.pop() + 1 : i])
+    return groups
+
+
+def eval_arithmetic(expression: str):
+    """Evaluate a symbol-free arithmetic string with sympy, or raise."""
+    from tutor.knowledge import mathnorm
+
+    result = mathnorm.parse_expression(expression)
+    if result.free_symbols:
+        raise ValueError("not a number")
+    return result
 
 
 def names_the_final_value(transcript: str, answer) -> bool:
@@ -997,6 +1114,36 @@ class Session:
                 })
             await self._finish_problem(ctx, verdict, len(reference.steps))
             return
+        foreign = foreign_value_assertion(
+            transcript, reference, pending.step, pending.hint_text,
+            ctx.recognition.equations,
+        )
+        if verdict.verdict in ("CORRECT", "PARTIAL") and foreign is not None:
+            # They asserted a number the problem knows nothing about. Running
+            # ahead to the end and landing beside it is still landing beside
+            # it, whatever step the tutor last asked about — and the one
+            # reaction that must never follow is 맞아요. Live: "두 개를
+            # 곱하면 되니까 98인가?" arrived while the target was still the
+            # y-intercepts, and heard "맞아요, 여기까지는 잘했어요".
+            log.info(
+                "a value foreign to the whole reference was asserted (%s) "
+                "at step %d — INCORRECT",
+                foreign, pending.step,
+            )
+            verdict = verdict.model_copy(update={
+                "verdict": "INCORRECT",
+                "feedback": "접근 방식은 좋아요. 다만 한 번 더 확인해 볼까요?",
+                "error_focus": verdict.error_focus or (
+                    f"학생이 말한 {foreign}은 지금 단계의 결과도, 문제의 답도 "
+                    "아님; 어떤 계산으로 나왔는지 되짚게 할 것"
+                ),
+                # The judge's own status came with its overturned verdict and
+                # would write CORRECT into the state beside an INCORRECT
+                # answer; None lets the INCORRECT branch apply its default.
+                "status": None,
+                "reached_step": None,
+                "reached_claim": "",
+            })
         if verdict.verdict in ("CORRECT", "PARTIAL") and pending.step >= len(
             reference.steps
         ):
@@ -1010,6 +1157,7 @@ class Session:
                 verdict = verdict.model_copy(update={
                     "verdict": "INCORRECT",
                     "feedback": "접근 방식은 좋아요. 다만 한 번 더 확인해 볼까요?",
+                    "status": None,
                     "reached_step": None,
                     "reached_claim": "",
                 })

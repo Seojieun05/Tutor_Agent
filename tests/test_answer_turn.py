@@ -1424,3 +1424,90 @@ async def test_the_context_repaired_x_reaches_the_transcript_event(db):
     events = [json.loads(raw) for raw in session.ws.events]
     transcript = next(e for e in events if e["event"] == "transcript")
     assert transcript["data"]["text"] == "x는 7"
+
+
+class TestAForeignValueIsNeverPraised:
+    """Live on problem 13, with the target still at the y-intercepts: "두 개를
+    곱하면 되니까 98인가?" — base times height, the halving forgotten. The
+    judge called it right, the composite-step guard softened that to PARTIAL,
+    and the student heard "맞아요, 여기까지는 잘했어요" for a wrong answer.
+    Running ahead to the end and landing beside it is not a last-step
+    privilege, so the refusal to nod cannot be gated on the last step either.
+    """
+
+    AREA_REF = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="두 직선의 교점의 x좌표 구하기",
+                         expression="-2*x - 4 = -4*x + 10, x = 7"),
+            SolutionStep(idx=2, description="두 직선 l, m의 y절편 구하기",
+                         expression="l(0) = -4, m(0) = 10"),
+            SolutionStep(idx=3, description="삼각형의 넓이 구하기",
+                         expression="(1/2)*(10 - (-4))*7 = 49"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="49"),
+        concepts=["derivative_applications"], verified=True, origin="db",
+    )
+
+    def session(self, db, verdict):
+        session, llm, speaker = build_session(db, [verdict])
+        session.ctx.reference = self.AREA_REF
+        return session, llm, speaker
+
+    async def test_ninety_eight_at_an_earlier_step_is_incorrect(self, db):
+        session, _, speaker = self.session(db, {
+            "intent": "ANSWER", "verdict": "CORRECT", "feedback": "맞아요!",
+            "misconception": None, "status": "CORRECT",
+        })
+        ask_l1(session, step=2)              # the tutor is still on y절편
+
+        await session.handle_answer(
+            "두 개를 곱하면 되니까 98인가?", session.store.pending_hint("p1")
+        )
+
+        state = session.store.get_state()
+        assert state.status != "CORRECT"
+        assert state.last_correct_step == 1          # nothing was proven
+        assert "맞아요" not in " ".join(speaker.spoken)
+
+    async def test_the_wrong_answer_escalates_instead_of_fading(self, db):
+        session, _, _ = self.session(db, {
+            "intent": "ANSWER", "verdict": "PARTIAL", "feedback": "좋아요!",
+            "misconception": None, "status": "CORRECT",
+        })
+        pending = ask_l1(session, step=2)
+
+        await session.handle_answer(
+            "두 개를 곱하면 되니까 98인가?", session.store.pending_hint("p1")
+        )
+
+        record = next(
+            h for h in session.store.get_history(problem_hash="p1") if h.id == pending
+        )
+        assert record.effective is False     # PARTIAL would have said True
+
+    def test_the_values_the_problem_knows_are_not_foreign(self):
+        """The guard's contract, where the last-step rules cannot muddy it.
+
+        14 is the base, written inside the step as 10 - (-4) where no digit
+        scan can see it; 49 is the answer; 7 and -4 are earlier results. Only
+        98 — the product of a forgotten halving — is foreign."""
+        from tutor.server.session import foreign_value_assertion
+
+        def foreign(said, step=2):
+            return foreign_value_assertion(said, self.AREA_REF, step, "", [])
+
+        assert foreign("두 개를 곱하면 되니까 98인가?") == "98"
+        assert foreign("답은 100이에요") == "100"
+        assert foreign("빼면 14요") is None
+        assert foreign("곱하면 49예요") is None
+        assert foreign("계산하면 마이너스 4요") is None
+        assert foreign("나누면 7이요") is None
+
+    def test_an_equation_read_aloud_asserts_no_value(self):
+        """"L은 마이너스 2x 마이너스 4" ends in a number without claiming one:
+        the trailing term of a spoken equation is not a result."""
+        from tutor.server.session import foreign_value_assertion
+
+        assert foreign_value_assertion(
+            "L은 마이너스 2x 마이너스 4", self.AREA_REF, 2, "", []
+        ) is None
