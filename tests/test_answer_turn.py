@@ -1549,3 +1549,38 @@ class TestASpokenNumberFinishesItsStep:
             target_step=2, transcript="엑스는 오에서 만날 것 같은데.",
         )
         assert v.verdict == "PARTIAL"
+
+
+class TestTheClosingValueMayBeSpelled:
+    """Live on the last step: the student said 49 and STT wrote 사십구, so the
+    value check found no number, the answer was graded PARTIAL and a finished
+    problem stayed open. The ear's own numerals were already understood in
+    grading; the session's value checks now read them too."""
+
+    from tutor.knowledge.models import Answer as _A
+
+    ANSWER = _A(kind="SCALAR", value="49")
+
+    @pytest.mark.parametrize("said", [
+        "사십구요", "정답은 사십구", "답은 사십구예요", "49요",
+    ])
+    def test_the_answer_closes_however_it_was_written(self, said):
+        from tutor.server.session import final_value_claim
+        assert final_value_claim(said, self.ANSWER, "") == "said"
+
+    def test_a_spelled_wrong_value_is_still_wrong(self):
+        from tutor.server.session import final_value_claim
+        assert final_value_claim("정답은 오십이요", self.ANSWER, "") == "wrong"
+
+    def test_a_foreign_value_said_in_words_is_caught(self, db):
+        from tutor.server.session import foreign_value_assertion
+        from tutor.knowledge.db import KnowledgeDB
+
+        reference = ReferenceSolution(
+            steps=[SolutionStep(idx=1, description="넓이",
+                                expression="(1/2)*(10 - (-4))*7 = 49")],
+            final_answer=self.ANSWER, concepts=[], verified=True, origin="db",
+        )
+        assert foreign_value_assertion(
+            "두 개를 곱하면 구십팔인가?", reference, 1, "", []
+        ) == "98"

@@ -57,6 +57,7 @@ from tutor.protocol.frames import AudioFrame, ImageFrame, ProtocolError, decode
 from tutor.solver.grok_solver import GrokSolver
 from tutor.speech import mathspeak
 from tutor.speech.intent import IntentClassifier, refers_to_work
+from tutor.speech.mathspeak import with_digits
 from tutor.speech.stt import classify_transcript
 from tutor.state.answer import AnswerEvaluator
 from tutor.state.estimator import StudentStateEstimator, hint_was_effective
@@ -225,8 +226,10 @@ def final_value_claim(transcript: str, answer, question: str = "") -> str:
         target = Fraction(str(answer.value).strip())
     except (ValueError, ZeroDivisionError):
         return "unknown"
-    # STT writes the sign as a word: "마이너스 2" must read as -2
-    transcript = re.sub(r"마이너스\s*", "-", transcript or "")
+    # STT writes what it HEARS, and that is not always a digit: live, the
+    # closing "49" arrived as 사십구 and this check found no number at all,
+    # so a finished problem was held open. The sign is a word too.
+    transcript = re.sub(r"마이너스\s*", "-", with_digits(transcript or ""))
 
     # A scalar final step can contain a Socratic sub-question asking for two
     # or more ingredients.  Its answer naturally ends in a number, but that
@@ -313,7 +316,7 @@ def foreign_value_assertion(
     # past a sub-question, same meaning: "이렇게 계산하니 이 값".
     if not _RESULT_MARKER_RE.search(transcript or ""):
         return None
-    spoken = re.sub(r"마이너스\s*", "-", transcript or "")
+    spoken = re.sub(r"마이너스\s*", "-", with_digits(transcript or ""))
     tail = _TAIL_ASSERTION_RE.search(spoken.strip())
     asserted = parse(tail.group(1)) if tail else None
     if asserted is None:
