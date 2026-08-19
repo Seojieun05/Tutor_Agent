@@ -24,7 +24,12 @@ _DIGIT_HAS_FINAL = {"0": True, "1": True, "2": False, "3": True, "4": False,
 # If none of these appear, the text has no math notation worth touching.
 # The backslash is LaTeX: the VLM and the hint model both write \frac{1}{5}.
 # a_4 (수열 항) counts too: a letter directly joined to an underscore.
-_MATH_SIGNAL = re.compile(r"[*^=/×÷'′²³√\\]|[A-Za-z]_\w|\blog|\bsqrt|\bDerivative")
+# A function call is mathematics even when nothing else in the sentence is:
+# "f(1)은 얼마일까요?" is the commonest question the tutor asks, and without
+# this the parens reached the voice for the engine to read as it liked.
+_MATH_SIGNAL = re.compile(
+    r"[*^=/×÷'′²³√\\]|[A-Za-z]_\w|[A-Za-z]\s*\(|\blog|\bsqrt|\bDerivative"
+)
 
 # \frac{1}{5}, \dfrac{x+1}{2} — the args stay brace-free on a K-12 worksheet
 _FRAC = re.compile(r"\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}")
@@ -152,8 +157,12 @@ def _equals(s: str) -> str:
 def _parens(s: str) -> str:
     # A pause where the grouping was — "괄호 열고" is for dictation, not tutoring.
     s = re.sub(r"\s*\(\s*", " ", s)
+    # …but a closing paren with a Korean particle hanging off it is not a
+    # pause: "f(x)와 곱하고" is one noun phrase, and the comma this used to
+    # leave stopped the voice dead before the 와 — "에프 엑스, 와 곱하고".
+    s = re.sub(r"\s*\)(?=[가-힣])", "", s)
     s = re.sub(r"\s*\)\s*", ", ", s)
-    s = re.sub(r"\s*,\s*,+", ",", s)         # collapse stacked pauses
+    s = re.sub(r",\s*,+", ",", s)         # collapse stacked pauses
     s = re.sub(r",\s*(?=[.?!]|$)", "", s)    # no pause right before the end
     return s
 

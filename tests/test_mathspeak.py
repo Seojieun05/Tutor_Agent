@@ -261,3 +261,35 @@ class TestAParticleIsNotADenominator:
     ])
     def test_the_particle_stays_outside_the_fraction(self, text, said):
         assert speakable(text) == said
+
+
+class TestAParticleIsNotAPause:
+    """`)` becomes a pause where the grouping was — but "f(x)와 곱하고" is one
+    noun phrase, and the pause landed between the value and the particle
+    hanging off it: "에프 엑스, 와 곱하고". A closing paren followed straight
+    by hangul closes a name, not a group."""
+
+    @pytest.mark.parametrize("text,said", [
+        ("f(x)와 곱하고", "f x와 곱하고"),
+        ("g(x)의 식을 써 볼까요?", "g x의 식을 써 볼까요?"),
+        ("f(1)은 얼마일까요?", "f 1은 얼마일까요?"),
+    ])
+    def test_the_particle_stays_attached(self, text, said):
+        assert speakable(text) == said
+
+    def test_a_real_grouping_still_pauses(self):
+        said = speakable("(x + 1)(x - 1) = 0")
+        assert ", " in said                 # the group boundary is heard
+        assert "(" not in said and ")" not in said
+
+    def test_a_function_call_alone_is_math_enough(self):
+        """Without this the commonest question the tutor asks never reached
+        the reader, and the engine got the parens to do as it liked with."""
+        assert speakable("f(x)를 미분해 볼까요?") == "f x를 미분해 볼까요?"
+
+    @pytest.mark.parametrize("text", [
+        "어떤 항을 반대쪽으로 옮겨야 할까요?",
+        "5라고 했네요. 한번 볼게요.",
+    ])
+    def test_plain_korean_is_still_untouched(self, text):
+        assert speakable(text) == text
