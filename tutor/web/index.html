@@ -622,6 +622,14 @@
   @media (prefers-reduced-motion: reduce) {
     .msg .bubble .more i { opacity:.6; }
   }
+  /* the pipeline's stage, echoed UNDER the newest bubble in the chat —
+     typed one character at a time (200 ms each) by script, while the
+     header keeps its own faster copy of the same line */
+  #stageEcho {
+    align-self:flex-start; min-height:1.1em;
+    font-size:.74rem; font-weight:600; color:var(--c-dim);
+    padding:0 .35rem; letter-spacing:.01em;
+  }
   /* machine talk (hint level, action): smaller and quieter than speech */
   .msg .note {
     font-size:.68rem; font-weight:600; color:var(--c-dim); padding:0 .35rem;
@@ -1455,7 +1463,7 @@ function onEvent(msg) {
     case "tutor_stream_done":  finishTutorStream(d); break;
     case "board":       for (const line of d.lines || []) boardWrite(line); break;
     case "figure":      boardDraw(d); break;
-    case "stage":       setStage(d.text); break;
+    case "stage":       setStage(d.text); echoStage(d.text); break;
     case "solved":      addSolved(d.text); break;
     case "problem":     showProblem(d); break;
     case "hint_issued": note(`힌트 L${d.level} · ${d.action}`); break;
@@ -1817,10 +1825,12 @@ function setState(s) {
   if (s === "PROCESSING") {
     // the first thing on screen after the student stops talking
     setStage("문제를 살펴보고 있어요");
+    echoStage("문제를 보고 있어요");
     alertThenGo();
   } else {
     const [word, busy] = HEADER_WORDS[s] || HEADER_WORDS[""];
     setStage(word, busy);
+    clearStageEcho();                  // the pipeline stage is over with it
   }
   if (s === "LISTENING" || s === "USER_SPEAKING" || !s) {
     flushHeld();                       // an answer must never be trapped mid-hold
@@ -1871,6 +1881,49 @@ function setDots(on) {
     if (dotN <= 1) dotDir = 1;
     el.textContent = ".".repeat(dotN);
   }, 380);
+}
+
+// The same stage line, echoed inside the chat UNDER the newest speech bubble
+// — typed one character every 200 ms, deliberately slower than the header's
+// copy: the header answers a glance, this one keeps the wait feeling alive.
+let echoTimer = null;
+function echoStage(text) {
+  if (!text) return;
+  const chat = $("chat");
+  let el = $("stageEcho");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "stageEcho";
+    el.setAttribute("aria-hidden", "true"); // #stateLabel already speaks for it
+  }
+  chat.appendChild(el);                  // appendChild MOVES it below the latest bubble
+  clearInterval(echoTimer);
+  echoTimer = null;
+  if (STILL.matches || text.length <= 1) {
+    el.textContent = text;
+    scrollChat();
+    return;
+  }
+  let shown = 0;
+  el.textContent = "";
+  echoTimer = setInterval(() => {
+    shown += 1;
+    el.textContent = text.slice(0, shown);
+    scrollChat();
+    if (shown >= text.length) { clearInterval(echoTimer); echoTimer = null; }
+  }, 200);
+  scrollChat();
+}
+function clearStageEcho() {
+  clearInterval(echoTimer);
+  echoTimer = null;
+  const el = $("stageEcho");
+  if (el) el.remove();
+}
+// a new bubble must not land BELOW the stage line — the line rides the bottom
+function keepEchoBelow() {
+  const el = $("stageEcho");
+  if (el && el.isConnected) $("chat").appendChild(el);
 }
 
 // --- the problem card and the board ----------------------------------------
@@ -2524,6 +2577,7 @@ function addTurn(kind, text, opts = {}) {
     currentDialogue.push({ kind, text });  // this problem's transcript-so-far
   }
   chat.appendChild(div);
+  keepEchoBelow();
   if (kind === "tutor") {
     openTutor = { msg: div, bubble: div.querySelector(".bubble") };
     reveal.start(div, div.querySelector(".bubble"), mathify(text).frag);
@@ -2553,6 +2607,7 @@ function startTutorStream(d) {
     div.className = "msg tutor";
     div.innerHTML = `<div class="who">튜터</div><div class="bubble"></div>`;
     $("chat").appendChild(div);
+    keepEchoBelow();
     bubble = div.querySelector(".bubble");
     openTutor = { msg: div, bubble };
   }
