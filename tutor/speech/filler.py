@@ -100,8 +100,15 @@ class FillerBank:
         The frame varies and the value does not: "5… 어디 보자" this turn,
         "5인지 볼까요?" the next. Repetition of the FRAME is what makes an echo
         sound mechanical; the value repeating is the whole point.
+
+        The value is SPELLED, because this line is only ever heard: live,
+        "정답은 49, 맞는지 확인해 볼게요" was read out as 사만 구. A
+        number the engine still has to interpret is a number it can get
+        wrong; 사십구 has nothing left to decide.
         """
-        return self.rotate(ECHO_FRAMES, "echo").format(v=core)
+        from tutor.speech.mathspeak import spell_numbers
+
+        return self.rotate(ECHO_FRAMES, "echo").format(v=spell_numbers(core))
 
 
 class CachedSpeech:

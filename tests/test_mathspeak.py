@@ -210,3 +210,40 @@ class TestTheEarReadsSpokenNumerals:
     def test_ordinary_words_are_left_alone(self, said):
         from tutor.speech.mathspeak import with_digits
         assert with_digits(said) == said
+
+
+class TestTheVoiceLeavesNothingToInterpret:
+    """A number the engine still has to read is a number it can read wrong.
+    Live, the confirmation "정답은 49, 맞는지 확인해 볼게요" came out as 사만
+    구, so a value quoted back by voice is spelled before it is sent."""
+
+    @pytest.mark.parametrize("value,said", [
+        (0, "영"), (4, "사"), (10, "십"), (11, "십일"), (20, "이십"),
+        (49, "사십구"), (100, "백"), (249, "이백사십구"), (2026, "이천이십육"),
+        (-2, "마이너스 이"),
+    ])
+    def test_the_reading_a_teacher_says(self, value, said):
+        from tutor.speech.mathspeak import sino_korean
+        assert sino_korean(value) == said
+
+    def test_a_quoted_value_is_spelled(self):
+        from tutor.speech.mathspeak import spell_numbers
+        assert spell_numbers("정답은 49") == "정답은 사십구"
+        assert spell_numbers("마이너스 3") == "마이너스 삼"
+
+    @pytest.mark.parametrize("text", [
+        "y = x^2 + 3",        # speakable reads this; it needs the digits
+        "24/7",
+        "f'(1) = 8",
+        "3.5",                # a decimal has its own reading
+        "12345",              # past 천, left to the engine
+    ])
+    def test_mathematics_and_oddities_are_left_alone(self, text):
+        from tutor.speech.mathspeak import spell_numbers
+        assert spell_numbers(text) == text
+
+    def test_the_echo_spells_what_it_quotes(self):
+        import random
+        from tutor.speech.filler import FillerBank
+        said = FillerBank(rng=random.Random(3)).echo("정답은 49")
+        assert "사십구" in said and "49" not in said

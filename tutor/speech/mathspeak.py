@@ -316,3 +316,48 @@ def with_digits(text: str) -> str:
         return str(value)
 
     return _SINO_RUN_RE.sub(replace, text)
+
+
+_SINO_DIGITS = ("영", "일", "이", "삼", "사", "오", "육", "칠", "팔", "구")
+
+
+def sino_korean(value: int) -> str:
+    """49 -> "사십구". The reading a Korean teacher says out loud.
+
+    Only 0-9999, which covers every value a school problem asserts; 만 and
+    above are left to the caller (and to the engine) rather than guessed at.
+    """
+    if value < 0:
+        return "마이너스 " + sino_korean(-value)
+    if value > 9999:
+        raise ValueError("too large to spell")
+    if value < 10:
+        return _SINO_DIGITS[value]
+    out = ""
+    for scale, name in ((1000, "천"), (100, "백"), (10, "십")):
+        digit, value = divmod(value, scale)
+        if digit:
+            # 십, not 일십 — the leading one is silent at every scale
+            out += ("" if digit == 1 else _SINO_DIGITS[digit]) + name
+    return out + (_SINO_DIGITS[value] if value else "")
+
+
+def spell_numbers(text: str) -> str:
+    """Digits read as words, for text going to a voice and nowhere else.
+
+    A TTS engine decides for itself how to read "49", and live it decided
+    wrong — the confirmation "정답은 49, 맞는지 확인해 볼게요" came out as
+    사만 구. A number already spelled has nothing left to decide. Text that
+    carries mathematics is left alone: speakable() reads that, and it needs
+    the digits to find fractions and powers.
+    """
+    if not text or _MATH_SIGNAL.search(text):
+        return text
+
+    def spoken(match: re.Match[str]) -> str:
+        try:
+            return sino_korean(int(match.group(0)))
+        except ValueError:
+            return match.group(0)
+
+    return re.sub(r"(?<![\d.])\d+(?![\d.])", spoken, text)

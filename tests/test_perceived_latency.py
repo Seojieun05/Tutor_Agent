@@ -168,10 +168,12 @@ def test_echo_frames_rotate_instead_of_repeating():
 
     bank = FillerBank(rng=random.Random(7))
     said = [bank.echo("5") for _ in range(6)]
-    assert all("5" in s for s in said)
-    assert all(any(s == f.format(v="5") for f in ECHO_FRAMES) for s in said)
+    # the value is spelled: this line is heard, never read, and a digit is
+    # something the TTS engine still has to interpret
+    assert all("오" in s for s in said)
+    assert all(any(s == f.format(v="오") for f in ECHO_FRAMES) for s in said)
     # the frame never repeats back-to-back — repetition is what sounds mechanical
-    frames = [next(f for f in ECHO_FRAMES if s == f.format(v="5")) for s in said]
+    frames = [next(f for f in ECHO_FRAMES if s == f.format(v="오")) for s in said]
     assert all(a != b for a, b in zip(frames, frames[1:]))
 
 
@@ -190,7 +192,7 @@ async def test_an_answer_turn_opens_with_the_echo(db):
     await session._handle_utterance(PCM, 16000)
 
     # the opener is the VALUE in one of the rotating frames — never "5예요라고"
-    assert speaker.spoken[0] in {f.format(v="5") for f in ECHO_FRAMES}
+    assert speaker.spoken[0] in {f.format(v="오") for f in ECHO_FRAMES}
     assert speaker.spoken[1].startswith("맞아요!")   # then the real reply
     assert llm.calls.count("evaluate") == 1
 
