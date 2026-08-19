@@ -239,3 +239,80 @@ def speakable(text: str) -> str:
     s = _equals(s)
     s = _parens(s)
     return re.sub(r"[ \t]{2,}", " ", s).strip()
+
+
+# --- the ear's own direction: a number the student SPOKE ---------------------
+
+# Sino-Korean numerals, which is how a value is said out loud in a math class:
+# 칠 is 7, 이십사 is 24. STT writes what it hears, so a perfectly correct
+# "엑스는 칠에서 만날 것 같은데" reaches the grader with no digit in it at all.
+_SINO_UNITS = {"영": 0, "공": 0, "일": 1, "이": 2, "삼": 3, "사": 4, "오": 5,
+               "육": 6, "륙": 6, "칠": 7, "팔": 8, "구": 9}
+_SINO_SCALES = {"십": 10, "백": 100, "천": 1000}
+_SINO_CHARS = "".join(_SINO_UNITS) + "".join(_SINO_SCALES)
+
+# A numeral run is only a NUMBER when it stands as its own word. Korean is
+# full of words built from these syllables — 구해요, 삼각형, 사용, 칠판,
+# 넓이, 공식이 — and rewriting those into digits would corrupt the sentence
+# the tutor is trying to read. Two rules keep them out: the run must START a
+# word (no hangul may precede it), and something grammatical must follow.
+_ENDINGS = (
+    "에서", "에게", "에", "이에요", "이예요", "예요", "에요", "이요", "이야",
+    "이고", "이며", "이란", "이라", "이랑", "이다", "인가", "인데", "인",
+    "이", "가", "은", "는", "을", "를", "로", "으로", "하고", "랑", "도",
+    "만", "쯤", "번째", "번", "요", "였", "일",
+)
+_SINO_RUN_RE = re.compile(rf"(?<![0-9A-Za-z가-힣])([{_SINO_CHARS}]+)")
+
+
+def _stands_alone(run: str, after: str) -> bool:
+    """Did this run end where a value ends, rather than mid-word?
+
+    "칠에서" is seven; "칠판" is a blackboard. A trailing particle or ending
+    settles it. Bare punctuation settles it too — except for 이, which is the
+    demonstrative and the subject particle before it is ever the number two,
+    so "이 문제" must stay a problem while "마이너스 이요" becomes -2.
+    """
+    if after.startswith(_ENDINGS):
+        return True
+    if run == "이":
+        return False
+    return after == "" or after[0].isspace() or after[0] in ",.!?…~)]"
+
+
+def _sino_value(run: str) -> int | None:
+    """"이십사" → 24. None when the syllables do not compose a number."""
+    total, current, seen_scale = 0, 0, False
+    for ch in run:
+        if ch in _SINO_UNITS:
+            if current:            # 이이 is not a number, it is a stutter
+                return None
+            current = _SINO_UNITS[ch]
+        else:
+            scale = _SINO_SCALES[ch]
+            if seen_scale and scale >= 10:
+                # 십백 — scales must descend (이십사, 백이십)
+                return None
+            total += (current or 1) * scale
+            current, seen_scale = 0, True
+    return total + current
+
+
+def with_digits(text: str) -> str:
+    """The utterance with spoken numerals rewritten as digits.
+
+    "엑스는 칠에서 만날 것 같은데" → "엑스는 7에서 만날 것 같은데". Identity
+    for text that says no numbers, and — by the rules above — identity for the
+    ordinary words those same syllables build.
+    """
+    if not text:
+        return text
+
+    def replace(match: re.Match[str]) -> str:
+        run = match.group(1)
+        value = _sino_value(run)
+        if value is None or not _stands_alone(run, text[match.end():]):
+            return run
+        return str(value)
+
+    return _SINO_RUN_RE.sub(replace, text)

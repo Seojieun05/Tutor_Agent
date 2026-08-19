@@ -5,6 +5,8 @@ against: a product-rule derivative and a pair of logs. If speakable() reads
 those two aloud sensibly, it earns its place in front of the TTS.
 """
 
+import pytest
+
 from tutor.speech.mathspeak import ends_in_consonant, speakable
 
 
@@ -172,3 +174,39 @@ class TestParticleHelper:
         assert ends_in_consonant("1")            # 일
         assert not ends_in_consonant("5")        # 오
         assert not ends_in_consonant("")
+
+
+class TestTheEarReadsSpokenNumerals:
+    """STT writes what it hears. A correct "그럼 엑스는 칠에서 만날 것 같은데"
+    reached the grader with no digit in it, the composite-step check found no
+    7, and a finished step was graded PARTIAL. Reading 칠 as 7 is the fix —
+    but the same syllables build 구해요, 넓이, 삼각형 and 칠판, so a numeral
+    counts only when it starts a word and something grammatical follows it."""
+
+    @pytest.mark.parametrize("said,expected", [
+        ("그럼 엑스는 칠에서 만날 것 같은데.", "7"),
+        ("마이너스 이요", "2"),
+        ("이십사 나누기 칠이요", "24"),
+        ("답은 구십팔인가?", "98"),
+        ("f 프라임 일은 마이너스 이예요", "1"),
+        ("십이요", "12"),
+    ])
+    def test_a_spoken_number_becomes_a_digit(self, said, expected):
+        from tutor.speech.mathspeak import with_digits
+        assert expected in with_digits(said)
+
+    @pytest.mark.parametrize("said", [
+        "먼저 도함수를 구해요",          # 구
+        "삼각형의 넓이를 구하면 돼요",   # 삼, 이
+        "이 문제 어떻게 풀어요?",        # the demonstrative
+        "칠판에 쓸까요?",                # 칠
+        "사용한 공식이 뭐예요?",         # 사, 이
+        "일단 정리해 볼게요",            # 일
+        "구하는 값이 뭐죠",              # 구, 이
+        "이차방정식이요",
+        "이항하면 돼요",
+        "일이 많아요",
+    ])
+    def test_ordinary_words_are_left_alone(self, said):
+        from tutor.speech.mathspeak import with_digits
+        assert with_digits(said) == said

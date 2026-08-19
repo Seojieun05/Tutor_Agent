@@ -334,8 +334,13 @@ class AnswerEvaluator:
             target = Fraction(tail.replace(" ", ""))
         except (ValueError, ZeroDivisionError):
             return None
-        # STT writes the sign as a word: "마이너스 2" must read as -2
-        spoken = re.sub(r"마이너스\s*", "-", transcript or "")
+        # STT writes what it HEARS: the sign arrives as 마이너스 and the
+        # number itself may never be a digit at all. Live, a correct "엑스는
+        # 칠에서 만날 것 같은데" was graded PARTIAL because the scan below
+        # found no 7 anywhere in it.
+        from tutor.speech.mathspeak import with_digits
+
+        spoken = re.sub(r"마이너스\s*", "-", with_digits(transcript or ""))
         for said in re.findall(
             r"-?\d+(?:\.\d+)?(?:\s*/\s*\d+(?:\.\d+)?)?", spoken
         ):
@@ -471,8 +476,16 @@ class AnswerEvaluator:
         )
 
     def _judge(self, llm: LLMClient, context: str) -> AnswerVerdict:
+        # The prompt asks for "at most one or two" tool calls; the budget now
+        # says the same thing, because a small routed model does not hold that
+        # line on its own. Live, grading "엑스는 칠에서 만날 것 같은데" spent
+        # six rounds looking up check_equivalence — which had answered on the
+        # first — and 4.6s of a student's silence. Running out is not a
+        # failure: the seam asks once more with the tools withdrawn, which is
+        # exactly the "then decide" the prompt already demands.
         return llm.run_with_tools(
-            purpose="evaluate", system=_SYSTEM, user=context, schema=AnswerVerdict
+            purpose="evaluate", system=_SYSTEM, user=context,
+            schema=AnswerVerdict, max_rounds=2,
         )
 
     def _context(

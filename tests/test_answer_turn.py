@@ -1511,3 +1511,41 @@ class TestAForeignValueIsNeverPraised:
         assert foreign_value_assertion(
             "L은 마이너스 2x 마이너스 4", self.AREA_REF, 2, "", []
         ) is None
+
+
+class TestASpokenNumberFinishesItsStep:
+    """Live on problem 13 step 6: "그럼 엑스는 칠에서 만날 것 같은데" is the
+    intersection, found and said. STT wrote 칠, the composite-step guard
+    scanned for digits, found none, and downgraded a finished step to PARTIAL
+    — which then faded the ladder back to L1 on ground already covered."""
+
+    STEP6 = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="m의 방정식", expression="m: y = -4*x + 10"),
+            SolutionStep(idx=2, description="두 직선의 교점의 x좌표 구하기",
+                         expression="-2*x - 4 = -4*x + 10, x = 7"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="49"),
+        concepts=["derivative_applications"], verified=True, origin="db",
+    )
+
+    def judge(self, db):
+        llm = EchoLLMClient({"evaluate": [
+            {"verdict": "CORRECT", "feedback": "맞아요!",
+             "misconception": None, "status": "CORRECT"},
+        ]})
+        return AnswerEvaluator(llm, db)
+
+    def test_the_spoken_seven_completes_the_step(self, db):
+        v = self.judge(db).evaluate(
+            problem_text="p", reference=self.STEP6, question="교점의 x좌표는?",
+            target_step=2, transcript="그럼 엑스는 칠에서 만날 것 같은데.",
+        )
+        assert v.verdict == "CORRECT"
+
+    def test_a_spoken_wrong_number_still_falls_short(self, db):
+        v = self.judge(db).evaluate(
+            problem_text="p", reference=self.STEP6, question="교점의 x좌표는?",
+            target_step=2, transcript="엑스는 오에서 만날 것 같은데.",
+        )
+        assert v.verdict == "PARTIAL"
