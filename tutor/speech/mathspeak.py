@@ -28,7 +28,7 @@ _DIGIT_HAS_FINAL = {"0": True, "1": True, "2": False, "3": True, "4": False,
 # "f(1)은 얼마일까요?" is the commonest question the tutor asks, and without
 # this the parens reached the voice for the engine to read as it liked.
 _MATH_SIGNAL = re.compile(
-    r"[*^=/×÷'′²³√\\]|[A-Za-z]_\w|[A-Za-z]\s*\(|\blog|\bsqrt|\bDerivative"
+    r"[*^=/×÷'′²³√\\]|[A-Za-z]_\w|[A-Za-z]\s*\(|\( *-?\d+ *,|\blog|\bsqrt|\bDerivative"
 )
 
 # \frac{1}{5}, \dfrac{x+1}{2} — the args stay brace-free on a K-12 worksheet
@@ -89,7 +89,10 @@ def ends_in_consonant(text: str) -> bool:
 
 
 def _topic_particle(text: str) -> str:
-    return "은" if ends_in_consonant(text.rstrip()) else "는"
+    # The particle follows the SOUND, and a closing paren makes none:
+    # "f(1) = -2" is read "에프 일은", so the 1 decides, not the ")".
+    # (f'(1) never hit this — _primes had already taken its parens.)
+    return "은" if ends_in_consonant(text.rstrip().rstrip(")")) else "는"
 
 
 def _powers(s: str) -> str:
@@ -151,7 +154,31 @@ def _equals(s: str) -> str:
         left = m.group(1)
         return f"{left}{_topic_particle(left)} "
 
-    return re.sub(r"(\S)\s*=\s*", eq, s)
+    # the whole token, not one character: with just the ")" of "f(1)" to go on,
+    # the particle could not hear the 1 the reader actually says
+    return re.sub(r"(\S+)\s*=\s*", eq, s)
+
+
+# A coordinate pair is two numbers and a pause between them. Swallowing
+# the comma into ordinary punctuation is how "점 (1, 6)" came out as
+# "점 일 육" — two numbers with nothing between them, which is not a point.
+_POINT = re.compile(
+    r"\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)"
+)
+
+
+def _points(s: str) -> str:
+    def read(match: re.Match[str]) -> str:
+        # the sign is spelled here, not left to _operators: between two
+        # coordinates a minus opens a term, and "1 콤마 빼기 6" is a
+        # subtraction nobody wrote
+        parts = [
+            ("마이너스 " + n[1:]) if n.startswith("-") else n
+            for n in match.groups()
+        ]
+        return "(%s 콤마 %s)" % (parts[0], parts[1])
+
+    return _POINT.sub(read, s)
 
 
 def _parens(s: str) -> str:
@@ -242,6 +269,9 @@ def speakable(text: str) -> str:
     if not text or not _MATH_SIGNAL.search(text):
         return text
     s = _latex(text, spoken=True)
+    # before _operators, so a point's own minus is a sign and not a
+    # subtraction, and before _parens, which would eat the comma
+    s = _points(s)
     s = _primes(s)      # before parens: they consume the argument's ()
     s = _logs(s)        # before fractions: log_3 b/a keeps its argument whole
     # a_4 → "a 4": a teacher says the index, not the underscore. After _logs,

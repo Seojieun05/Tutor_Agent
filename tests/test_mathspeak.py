@@ -7,7 +7,7 @@ those two aloud sensibly, it earns its place in front of the TTS.
 
 import pytest
 
-from tutor.speech.mathspeak import ends_in_consonant, speakable
+from tutor.speech.mathspeak import displayable, ends_in_consonant, speakable
 
 
 class TestTheWorksheetReadsAloud:
@@ -293,3 +293,39 @@ class TestAParticleIsNotAPause:
     ])
     def test_plain_korean_is_still_untouched(self, text):
         assert speakable(text) == text
+
+
+class TestAPointIsReadAsAPoint:
+    """Live: "점 (1, 6)을 지나는 m의 방정식" was read as "점 일 육" — two
+    numbers with nothing between them, which is not a point. The sentence
+    never even reached the reader: a bare coordinate carried none of the
+    signals that say "there is mathematics here"."""
+
+    def test_the_comma_is_heard(self):
+        assert speakable("이제 점 (1, 6)을 지나는 m의 방정식은?") == (
+            "이제 점 1 콤마 6을 지나는 m의 방정식은?"
+        )
+
+    def test_a_negative_coordinate_is_a_sign_not_a_subtraction(self):
+        assert "마이너스 6" in speakable("점 (1, -6)에서의 접선")
+        assert "빼기" not in speakable("점 (1, -6)에서의 접선")
+
+    def test_the_screen_still_shows_notation(self):
+        assert displayable("점 (1, 6)을 지나는") == "점 (1, 6)을 지나는"
+
+    def test_a_grouping_is_not_mistaken_for_a_point(self):
+        said = speakable("(x + 1)(x - 1) = 0")
+        assert "콤마" not in said
+
+
+class TestTheParticleHearsThroughAParen:
+    """"f(1) = -2" is read "에프 일은 마이너스 이": the 1 decides the particle,
+    not the ")" written after it. The rule only ever saw one character."""
+
+    @pytest.mark.parametrize("text,expected", [
+        ("f(1) = -2", "f 1은 마이너스 2"),
+        ("g(2) = 3", "g 2는 3"),
+        ("x = 5", "x는 5"),
+    ])
+    def test_the_particle_follows_the_sound(self, text, expected):
+        assert speakable(text) == expected
