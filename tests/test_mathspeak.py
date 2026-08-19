@@ -247,3 +247,17 @@ class TestTheVoiceLeavesNothingToInterpret:
         from tutor.speech.filler import FillerBank
         said = FillerBank(rng=random.Random(3)).echo("정답은 49")
         assert "사십구" in said and "49" not in said
+
+
+class TestAParticleIsNotADenominator:
+    """\w matches Korean, so the fraction rule swallowed the particle after
+    the denominator: problem 12's answer read as "7이요분의 24"."""
+
+    @pytest.mark.parametrize("text,said", [
+        ("답은 24/7이요", "답은 7분의 24이요"),
+        ("24/7이에요", "7분의 24이에요"),
+        ("a/b는", "b분의 a는"),
+        ("3/4 입니다", "4분의 3 입니다"),
+    ])
+    def test_the_particle_stays_outside_the_fraction(self, text, said):
+        assert speakable(text) == said

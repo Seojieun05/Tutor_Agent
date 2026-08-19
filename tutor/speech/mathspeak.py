@@ -120,7 +120,12 @@ def _logs(s: str) -> str:
 
 def _fractions(s: str) -> str:
     # Korean reads the denominator first: 1/2 → "2분의 1", b/a → "a분의 b".
-    return re.sub(r"\b(\w+)\s*/\s*(\w+)\b", r"\2분의 \1", s)
+    # A term is latin/digits, never hangul: \w matches Korean too, so
+    # the particle rode along and "24/7이요" came out "7이요분의 24".
+    return re.sub(
+        r"(?<![0-9A-Za-z_])([0-9A-Za-z_]+)\s*/\s*([0-9A-Za-z_]+)(?![0-9A-Za-z_])",
+        r"\2분의 \1", s,
+    )
 
 
 def _operators(s: str) -> str:
