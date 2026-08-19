@@ -15,7 +15,7 @@ from typing import Callable
 
 from pydantic import BaseModel, field_validator
 
-from tutor.hints.guard import leaks_answer
+from tutor.hints.guard import leaks_answer, states_step_result
 from tutor.knowledge import mathnorm
 from tutor.knowledge.db import KnowledgeDB
 from tutor.knowledge.models import MatchResult, Problem, ReferenceSolution, Tier
@@ -428,6 +428,10 @@ NEVER
 - Never state the final answer, or any result beyond the given step — not as a
   check, not as an example, not "so it becomes 15".
 - Never solve the problem for them, even partially, except the one step L4 gives.
+- Never state the RESULT of the step you are aiming at — below L4 that result
+  is the thing they are for. Not the corrected expression, not the value of one
+  factor of it, not "이 부분의 미분은 -2가 돼요". Correcting is pointing at the
+  line where it went wrong; supplying the fix is answering it for them.
 - Never repeat a hint already given; they are listed, and the student has moved
   on since.
 - Never open with 네 / 맞아요 / 좋아요 / 그렇죠 / 음. The reaction to their answer
@@ -606,6 +610,7 @@ def _screen_board(
     reference: ReferenceSolution | None,
     target_step: int,
     rec: Recognition | None,
+    may_state_step: bool = False,
 ) -> tuple[BoardLine, ...]:
     """Apply the same whiteboard policy to generated and reviewed hints."""
     board = _clean_board(board)
@@ -620,6 +625,8 @@ def _screen_board(
             board = kept
     if board and reference is not None and any(
         leaks_answer(part, reference, target_step, visible_to_student(rec))
+        or (not may_state_step and states_step_result(
+            part, reference, target_step, visible_to_student(rec)))
         for b in board for part in (b.expr, b.note) if part
     ):
         # All or nothing: dropping one line of a two-line derivation leaves a
@@ -659,6 +666,7 @@ class SafeWordEmitter:
         *,
         forbid_step_announcement: bool = False,
         forbid_future_step: bool = False,
+        forbid_step_result: bool = False,
     ):
         self.emit = emit
         self.reference = reference
@@ -671,6 +679,7 @@ class SafeWordEmitter:
         self.blocked = False
         self.forbid_step_announcement = forbid_step_announcement
         self.forbid_future_step = forbid_future_step
+        self.forbid_step_result = forbid_step_result
 
     def _unsafe(self, text: str) -> bool:
         if self.forbid_step_announcement and announces_step(text):
@@ -679,7 +688,13 @@ class SafeWordEmitter:
             text, self.reference, self.target_step
         ):
             return True
-        return self.reference is not None and leaks_answer(
+        if self.reference is None:
+            return False
+        if self.forbid_step_result and states_step_result(
+            text, self.reference, self.target_step, self.given
+        ):
+            return True
+        return leaks_answer(
             text, self.reference, self.target_step, self.given
         )
 
@@ -849,7 +864,8 @@ class HintGenerator:
                     BoardLine(expr=item.expr, note=item.note)
                     for item in artifact.board
                 )
-                board = _screen_board(board, reference, decision.target_step, rec)
+                board = _screen_board(board, reference, decision.target_step, rec,
+                                      may_state_step=decision.level >= 4)
                 return _with_board(written, board)
 
         # A verified noun-form step can produce the weakest, most natural L1
@@ -944,8 +960,13 @@ class HintGenerator:
                 text = f"{lead} {text}"
             if text in given:
                 continue
-            if reference is not None and leaks_answer(
-                text, reference, decision.target_step, visible_to_student(rec)
+            if reference is not None and (
+                leaks_answer(
+                    text, reference, decision.target_step, visible_to_student(rec)
+                )
+                or (decision.level < 4 and states_step_result(
+                    text, reference, decision.target_step, visible_to_student(rec)
+                ))
             ):
                 continue
             return text
@@ -955,6 +976,7 @@ class HintGenerator:
             on_delta, reference, decision.target_step, visible_to_student(rec),
             forbid_step_announcement=decision.level == 1,
             forbid_future_step=True,
+            forbid_step_result=decision.level < 4,
         ) if on_delta is not None else None
         text, board = self._phrase(
             decision, match, slots, history, rec, reference,
@@ -993,9 +1015,18 @@ class HintGenerator:
                 )
                 board = ()
         seen = visible_to_student(rec)
-        if reference is not None and leaks_answer(
-            text, reference, decision.target_step, seen
-        ):
+        # Below L4 the step's OWN result is off limits too — L4 is the level
+        # that exists to say it. Live, a correcting L2 for g'(x) handed over
+        # "첫 번째 괄호를 3 x 제곱 빼기 2로 고쳐서", which is the step.
+        def unsafe(candidate: str) -> bool:
+            return leaks_answer(candidate, reference, decision.target_step, seen) or (
+                decision.level < 4
+                and states_step_result(
+                    candidate, reference, decision.target_step, seen
+                )
+            )
+
+        if reference is not None and unsafe(text):
             if emitter is not None:
                 # SafeWordEmitter has already replaced an unsafe tail. Reaching
                 # here means its generic closure itself tripped a stricter
@@ -1011,14 +1042,15 @@ class HintGenerator:
             if (
                 (decision.level == 1 and announces_step(text))
                 or mentions_future_step(text, reference, decision.target_step)
-                or leaks_answer(text, reference, decision.target_step, seen)
+                or unsafe(text)
             ):
                 return self._generic_fallback(decision, slots)
         # The board passes the SAME gate as the voice: writing "x = 5" while
         # carefully not saying it is still giving the answer. All or nothing —
         # dropping one line of two left fragments like a bare "a₁" on screen,
         # and half a board reads worse than no board.
-        board = _screen_board(board, reference, decision.target_step, rec)
+        board = _screen_board(board, reference, decision.target_step, rec,
+                              may_state_step=decision.level >= 4)
         return _with_board(text, board)
 
     def prewrite(
@@ -1069,6 +1101,7 @@ class HintGenerator:
                 or (level == 1 and announces_step(text))
                 or mentions_future_step(text, reference, step_idx)
                 or leaks_answer(text, reference, step_idx, seen)
+                or (level < 4 and states_step_result(text, reference, step_idx, seen))
             ):
                 return None
             return text

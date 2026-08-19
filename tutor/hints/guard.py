@@ -188,3 +188,87 @@ def leaks_answer(
                     continue
                 return True
     return False
+
+
+# The multiplication a tutor never says out loud: "3 x 제곱" and "3 곱하기 x
+# 제곱" are the same phrase, and a hint that hands over a result writes it
+# either way. Spaces go too, so 띄어쓰기 cannot hide a leak.
+_SPOKEN_NOISE = re.compile(r"곱하기|\s+")
+
+
+def _spoken_fingerprint(text: str) -> str:
+    from tutor.speech.mathspeak import speakable
+
+    return _SPOKEN_NOISE.sub("", speakable(text or ""))
+
+
+def _protected_parts(step_expression: str) -> list[str]:
+    """The pieces of a step whose VALUE is the thing the student must produce.
+
+    Both sides of what the step claims, and every parenthesised factor inside
+    it — "(3*x**2 - 2)*f(x) + …" is a product rule whose first factor is the
+    derivative being asked for, and handing that over is handing over the
+    step. A part with no operation in it ("g'(x)", "y") names something
+    instead of valuing it, so it is not protected.
+    """
+    parts, stack = [], []
+    for i, ch in enumerate(step_expression or ""):
+        if ch == "(":
+            stack.append(i)
+        elif ch == ")" and stack:
+            parts.append(step_expression[stack.pop() + 1 : i])
+    parts.extend(step_expression.split("="))
+    return [
+        p.strip() for p in parts
+        if p.strip() and re.search(r"[*/+^]|(?<![a-zA-Z])-|\d\s*[a-zA-Z]", p)
+    ]
+
+
+def states_step_result(
+    text: str,
+    reference: ReferenceSolution,
+    target_step: int,
+    given: Iterable[str] = (),
+) -> bool:
+    """Does this hint hand over the result of the step it is aiming at?
+
+    The answer-leak guard screens the FINAL answer and steps BEYOND the
+    target; the target's own result was left sayable because L4 exists to say
+    it. Everything below L4 must not. Live, a correcting hint for g'(x) said
+    "첫 번째 괄호를 3 x 제곱 빼기 2로 고쳐서" and the board wrote the
+    derivative outright — the whole step, given away while the student was
+    being asked to find it.
+
+    Verbalised mathematics is caught as well as written: the phrasing prompt
+    asks for "3 x 더하기 5" over "3x + 5", so a guard that only reads ASCII
+    reads none of the hints that matter. Each protected part is spoken by the
+    same reader the tutor speaks through, and the two are compared as phrases.
+
+    What the student can already see is never a leak — the problem's own
+    "(x**3 - 2*x)" may be quoted freely — and neither is a result an earlier
+    step already established.
+    """
+    if not text or reference is None:
+        return False
+    step = next((s for s in reference.steps if s.idx == target_step), None)
+    if step is None or not step.expression:
+        return False
+    visible = re.sub(r"\s+", "", " ".join(given))
+    spoken_visible = _spoken_fingerprint(" ".join(given))
+    earlier = " ".join(
+        s.expression or "" for s in reference.steps if s.idx < target_step
+    )
+    said_ascii = re.sub(r"\s+", "", text)
+    said_spoken = _spoken_fingerprint(text)
+    for part in _protected_parts(step.expression):
+        squeezed = re.sub(r"\s+", "", part)
+        if squeezed in visible or squeezed in re.sub(r"\s+", "", earlier):
+            continue                      # theirs already: the page, or a done step
+        phrase = _spoken_fingerprint(part)
+        if len(phrase) < 4:
+            continue                      # too short to be a claim of its own
+        if phrase in spoken_visible:
+            continue
+        if squeezed in said_ascii or phrase in said_spoken:
+            return True
+    return False

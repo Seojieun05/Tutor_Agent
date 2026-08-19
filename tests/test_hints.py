@@ -1574,3 +1574,72 @@ class TestTheBoardCanQuoteWhatWasEarned:
 
     def test_the_board_line_the_model_can_now_write_passes_the_guard(self, db):
         assert not leaks_answer("-2*x - 4 = -4*x + 10", self.REF, 3, set())
+
+
+class TestTheStepsOwnResultIsNotAHint:
+    """Live, correcting g'(x): "첫 번째 괄호를 3 x 제곱 빼기 2로 고쳐서 g′(x)를
+    다시 정리해 볼까요?" — with the board writing (x^3-2x)' = 3x^2-2 beside it.
+    That IS the step. The answer-leak guard never saw it: it screens the final
+    answer and steps BEYOND the target, and the target's own result was left
+    sayable because L4 exists to say it. Everything below L4 must not."""
+
+    REF = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="f'(x)", expression="f'(x) = 2*x - 4"),
+            SolutionStep(idx=2, description="곱의 미분법으로 g'(x) 쓰기",
+                         expression="g'(x) = (3*x**2 - 2)*f(x) + (x**3 - 2*x)*f'(x)"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="49"),
+        concepts=["differentiation"], verified=True, origin="db",
+    )
+    SEEN = ["13. 함수", "f(x) = x**2 - 4*x - 3", "g(x) = (x**3 - 2*x)*f(x)"]
+    LEAK = ("작성하신 식에서 앞부분 x 세제곱 빼기 2x를 미분할 때, 마이너스 2x의 "
+            "미분은 마이너스 2가 돼요. 첫 번째 괄호를 3 x 제곱 빼기 2로 고쳐서 "
+            "g′(x)를 다시 정리해 볼까요?")
+
+    def test_the_spoken_result_is_caught(self):
+        from tutor.hints.guard import states_step_result
+        assert states_step_result(self.LEAK, self.REF, 2, self.SEEN)
+
+    def test_the_written_result_is_caught(self):
+        from tutor.hints.guard import states_step_result
+        assert states_step_result("(x**3 - 2*x)' = 3*x**2 - 2", self.REF, 2, self.SEEN)
+
+    @pytest.mark.parametrize("hint", [
+        "이제 g(x)가 두 식의 곱이라는 점을 보고, 어떻게 미분하면 좋을까요?",
+        "x 세제곱 빼기 2x 부분을 다시 볼까요?",          # the problem's own, quotable
+        "두 번째 줄에서 부호가 어떻게 됐어요?",
+    ])
+    def test_a_real_hint_still_passes(self, hint):
+        from tutor.hints.guard import states_step_result
+        assert not states_step_result(hint, self.REF, 2, self.SEEN)
+
+    def rec(self):
+        return Recognition(
+            problem_text="13. 두 접선",
+            equations=["f(x) = x**2 - 4*x - 3", "g(x) = (x**3 - 2*x)*f(x)"],
+            concepts=["differentiation"], confidence=0.95,
+        )
+
+    def generated(self, db, level):
+        llm = EchoLLMClient({"phrase": [
+            {"hint": self.LEAK,
+             "board": [{"expr": "(x**3 - 2*x)' = 3*x**2 - 2", "note": ""}]},
+            {"hint": self.LEAK, "board": []},
+        ]})
+        action = Action.PARTIAL_STEP if level >= 4 else Action.CONCEPT_HINT
+        return HintGenerator(llm, db).generate(
+            Decision(action, level, 2, "2x의 미분을 2x로 계산", "t"),
+            MatchResult(tier=Tier.CONCEPT, concepts=["differentiation"],
+                        reference=self.REF),
+            self.REF, self.rec(), history=[],
+        )
+
+    def test_below_l4_the_leak_never_reaches_the_student(self, db):
+        out = self.generated(db, level=2)
+        assert "3 x 제곱 빼기 2" not in str(out)
+        assert getattr(out, "board", ()) == ()
+
+    def test_l4_is_still_allowed_to_say_its_step(self, db):
+        out = self.generated(db, level=4)
+        assert "3 x 제곱 빼기 2" in str(out)
