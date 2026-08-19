@@ -338,6 +338,11 @@ and spoken: the page renders a_10 as a₁₀ and the voice reads it correctly, s
 a spelled-out index makes both worse. Powers are the opposite: "r의 세제곱"
 is how a tutor says r**3 out loud, and is preferred in the spoken sentence.
 
+Say a long expression ONCE. The student is looking at the board, so the second
+time, point at it — "그 식", "같은 식", "앞의 식" — instead of reading every
+term again. An L3 that spelled out x**3 - 2*x twice in one sentence was
+correct and unfollowable: by the end of it nobody knows which half they are in.
+
 BOARD
 Besides the spoken hint you may WRITE 0-2 lines on the student's screen
 (`board`) — what a tutor jots on the whiteboard while saying the hint. Each
