@@ -2032,12 +2032,11 @@ function boardDraw(d) {
       body.appendChild(label);
     }
     box.classList.remove("fading");
-    // Show the picture from ITS top, not the board's bottom. The sketch
-    // fills the board, so scrolling to the foot as a written line does would
-    // put the legend (which says which curve is which) above the visible edge.
-    const lines = $("boardLines");
-    lines.scrollTop +=
-      box.getBoundingClientRect().top - lines.getBoundingClientRect().top - 6;
+    // Show the picture from ITS top, not the board's bottom: the legend that
+    // says which curve is which lives up there. Only when it is not already
+    // in view, though — a redraw of a picture the reader is looking at must
+    // not yank the board out from under the line they just watched appear.
+    revealInBoard(box, true);
     if (fresh) lay(box);
   };
   if (fresh) return paint();
@@ -2162,6 +2161,41 @@ function dryBoard() {
 /** The board shows ONLY what the tutor deliberately wrote (the `board`
     event) — the whiteboard move behind the spoken hint, typeset. Sentences
     live in the chat, full stop. */
+/** Bring `el` into the board's view — and only if it is not already there.
+ *
+ *  The board used to move on every write: a new line snapped it to the foot,
+ *  and a redrawn figure snapped its own top to the head. With both arriving
+ *  in one turn the second undid the first, so the expression just written sat
+ *  below the fold and the reader had to go looking for it. Now the board
+ *  holds still whenever the thing that changed can already be seen, and
+ *  otherwise moves the shortest distance that shows it.
+ */
+function revealInBoard(el, alignTop = false) {
+  const lines = $("boardLines");
+  if (!lines || !el || !el.isConnected) return;
+  const view = lines.getBoundingClientRect();
+  const it = el.getBoundingClientRect();
+  const margin = 6;
+  const fits = it.height <= view.height;
+  const shown = Math.min(it.bottom, view.bottom) - Math.max(it.top, view.top);
+  // A written line has to be there in FULL — half a formula is not readable.
+  // A picture only has to be mostly there: it is taller than the board, so
+  // demanding all of it would re-align the sketch every time anything else
+  // moved, which is the yank this exists to stop.
+  const enough = fits && !alignTop
+    ? it.top >= view.top - 1 && it.bottom <= view.bottom + 1
+    : shown >= Math.min(it.height, view.height) * 0.5;
+  if (enough) return;
+  // its head when it is tall or wants its head shown (a figure's legend
+  // lives there); otherwise the shortest move that brings its foot in
+  const delta = (alignTop || !fits || it.top < view.top)
+    ? it.top - view.top - margin
+    : it.bottom - view.bottom + margin;
+  const top = lines.scrollTop + delta;
+  if (STILL.matches) lines.scrollTop = top;
+  else lines.scrollTo({ top, behavior: "smooth" });
+}
+
 function boardWrite(item) {
   // {expr, note} from the server; a bare string still works
   const expr = ((typeof item === "string" ? item : item && item.expr) || "").trim();
@@ -2184,7 +2218,7 @@ function boardWrite(item) {
     line.appendChild(label);
   }
   lines.appendChild(line);
-  lines.scrollTop = lines.scrollHeight;
+  revealInBoard(line);
   lay(line);
 }
 
