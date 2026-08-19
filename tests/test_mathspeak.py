@@ -329,3 +329,34 @@ class TestTheParticleHearsThroughAParen:
     ])
     def test_the_particle_follows_the_sound(self, text, expected):
         assert speakable(text) == expected
+
+
+class TestAMinusNeedsSomethingToSubtractFrom:
+    """Live, the L2 for line l: "기울기가 -2인 직선은…" was read "기울기가
+    빼기 2인 직선은". The sign was granted only after ^, =, ( or a comma, so a
+    minus that followed Korean prose became a subtraction — and the sentence
+    never even reached the reader, because a signed number was not on the
+    list of things that mean "there is mathematics here"."""
+
+    @pytest.mark.parametrize("text,expected", [
+        ("기울기가 -2인 직선", "기울기가 마이너스 2인 직선"),
+        ("기울기 -2와 점", "기울기 마이너스 2와 점"),
+        ("x = -3", "x는 마이너스 3"),
+    ])
+    def test_after_prose_it_is_a_sign(self, text, expected):
+        assert speakable(text) == expected
+
+    @pytest.mark.parametrize("text,expected", [
+        ("2*x - 4", "2 곱하기 x 빼기 4"),
+        ("3*x**2 - 2", "3 곱하기 x 제곱 빼기 2"),
+        ("y = -2*x - 4", "y는 마이너스 2 곱하기 x 빼기 4"),
+    ])
+    def test_after_an_operand_it_is_a_subtraction(self, text, expected):
+        assert speakable(text) == expected
+
+    def test_the_whole_live_line(self):
+        said = speakable("기울기가 -2인 직선은 다음과 같은 꼴로 나타낼 수 있어요. "
+                         "접점 (1, -6)을 이 식에 넣어 볼까요?")
+        assert "기울기가 마이너스 2인" in said
+        assert "1 콤마 마이너스 6" in said
+        assert "빼기" not in said

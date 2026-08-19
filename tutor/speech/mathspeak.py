@@ -27,8 +27,10 @@ _DIGIT_HAS_FINAL = {"0": True, "1": True, "2": False, "3": True, "4": False,
 # A function call is mathematics even when nothing else in the sentence is:
 # "f(1)은 얼마일까요?" is the commonest question the tutor asks, and without
 # this the parens reached the voice for the engine to read as it liked.
+# A signed number is mathematics all by itself: "기울기가 -2인 직선" has no
+# other sign of it, and left unread the engine said "기울기가 빼기 2인".
 _MATH_SIGNAL = re.compile(
-    r"[*^=/×÷'′²³√\\]|[A-Za-z]_\w|[A-Za-z]\s*\(|\( *-?\d+ *,|\blog|\bsqrt|\bDerivative"
+    r"[*^=/×÷'′²³√\\]|[A-Za-z]_\w|[A-Za-z]\s*\(|\( *-?\d+ *,|[-−]\s*\d|\blog|\bsqrt|\bDerivative"
 )
 
 # \frac{1}{5}, \dfrac{x+1}{2} — the args stay brace-free on a K-12 worksheet
@@ -143,9 +145,6 @@ def _operators(s: str) -> str:
     s = re.sub(r"\s*[*×]\s*", " 곱하기 ", s)
     s = re.sub(r"\s*÷\s*", " 나누기 ", s)
     s = re.sub(r"\s*\+\s*", " 더하기 ", s)
-    # minus: sign when it opens an expression, subtraction between terms
-    s = re.sub(r"(^|[=(,]\s*)[-−]\s*", r"\1마이너스 ", s)
-    s = re.sub(r"\s*[-−]\s*", " 빼기 ", s)
     return s
 
 
@@ -179,6 +178,19 @@ def _points(s: str) -> str:
         return "(%s 콤마 %s)" % (parts[0], parts[1])
 
     return _POINT.sub(read, s)
+
+
+def _signs(s: str) -> str:
+    """Minus as a SIGN unless there is something to its left to subtract.
+
+    A number, a name, a closing bracket is something; Korean prose is not,
+    so "기울기가 -2인 직선" is a slope of minus two and not a subtraction.
+    This runs while the text is still ASCII: by the time the operators are
+    words, the operand left of the minus in "3*x**2 - 2" reads 제곱, and no
+    rule can tell that apart from the 가 of 기울기가.
+    """
+    s = re.sub(r"(?<=[0-9A-Za-z)\]])\s*[-−]\s*(?=[0-9A-Za-z(])", " 빼기 ", s)
+    return re.sub(r"[-−]\s*(?=[0-9A-Za-z(])", "마이너스 ", s)
 
 
 def _parens(s: str) -> str:
@@ -272,6 +284,7 @@ def speakable(text: str) -> str:
     # before _operators, so a point's own minus is a sign and not a
     # subtraction, and before _parens, which would eat the comma
     s = _points(s)
+    s = _signs(s)       # while the operands are still ASCII
     s = _primes(s)      # before parens: they consume the argument's ()
     s = _logs(s)        # before fractions: log_3 b/a keeps its argument whole
     # a_4 → "a 4": a teacher says the index, not the underscore. After _logs,
