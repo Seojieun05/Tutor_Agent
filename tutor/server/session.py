@@ -2208,6 +2208,29 @@ class Session:
         )
         if spec is None:
             return False
+        # A curve that must not be seen is withheld — the rest of the board
+        # still goes up. Refusing the whole scene meant one premature line
+        # blanked the picture beside it: on problem 13 the source curve f and
+        # the freshly earned g were both held back because l shared the frame
+        # with them.
+        existing_before = {c for c in before_curves}
+        seen = visible_to_student(ctx.recognition)
+        if ctx.reference is not None:
+            kept = []
+            for curve in spec.curves:
+                fresh = (
+                    curve.label, curve.expr.replace(" ", ""), curve.role
+                ) not in existing_before
+                if fresh and leaks_answer(
+                    curve.expr, ctx.reference, decision.target_step, seen
+                ):
+                    log.info(
+                        "%s stays off the board for now: it is past the "
+                        "student's frontier", curve.label or curve.expr,
+                    )
+                    continue
+                kept.append(curve)
+            spec.curves = kept
         after_curves = tuple(
             (c.label, c.expr.replace(" ", ""), c.role) for c in spec.curves
         )
@@ -2223,19 +2246,6 @@ class Session:
             and spec.caption == ctx.caption
             and span == ctx.span
         ):
-            return False
-
-        existing = set(before_curves)
-        added = [
-            c for c in spec.curves
-            if (c.label, c.expr.replace(" ", ""), c.role) not in existing
-        ]
-        seen = visible_to_student(ctx.recognition)
-        if ctx.reference is not None and any(
-            leaks_answer(c.expr, ctx.reference, decision.target_step, seen)
-            for c in added
-        ):
-            log.info("a newly verified curve still tripped the leak gate; not drawn")
             return False
 
         svg = await asyncio.to_thread(

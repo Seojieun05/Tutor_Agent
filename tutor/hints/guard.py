@@ -141,6 +141,28 @@ def leaks_answer(
 
     # Reference steps beyond the target step must not appear (levels < 4 get
     # their target step filtered upstream; the guard is belt-and-braces).
+    #
+    # What the student has ALREADY reached is theirs, even when a later step
+    # writes it down again. Problem 13 step 6 intersects the two tangents:
+    # "-2*x - 4 = -4*x + 10, x = 7". Split on "=", its first piece IS line l
+    # — earned back at step 2 — so drawing the l the student just derived
+    # counted as revealing step 6, whose actual content is x = 7. A piece
+    # that appears at or below the target reveals nothing new; only content
+    # that FIRST appears beyond it can give anything away.
+    reached_pieces = [
+        piece.strip()
+        for step in reference.steps
+        if step.idx <= target_step
+        for piece in (step.expression or "").split("=")
+        if piece.strip()
+    ]
+
+    def already_theirs(piece: str) -> bool:
+        return any(
+            mathnorm.expressions_equivalent(piece, reached)
+            for reached in reached_pieces
+        )
+
     squeezed = re.sub(r"\s+", "", text)
     for step in reference.steps:
         if step.idx <= target_step:
@@ -162,5 +184,7 @@ def leaks_answer(
             if not piece or not re.search(r"[*/+\-^]|\d\s*[a-zA-Z]|[a-zA-Z]\s*\d", piece):
                 continue
             if any(mathnorm.expressions_equivalent(e, piece) for e in found.exprs):
+                if already_theirs(piece):
+                    continue
                 return True
     return False

@@ -667,3 +667,56 @@ class TestTheVerifiedTangentSceneHasADeterministicOrder:
         assert await publish(2, 3, focus=True) == ["l", "g"]
         # Earning m removes g and leaves the two target lines.
         assert await publish(5, 6) == ["l", "m"]
+
+
+class TestAnEarnedLineIsDrawnAtOnce:
+    """Live on problem 13: the student derived l and nothing appeared — not l,
+    not the curve beside it, and not g a step later. Reference step 6
+    intersects the two tangents, "-2*x - 4 = -4*x + 10, x = 7", so splitting
+    it on "=" makes its first piece line l itself. l was read as revealing a
+    step it had in fact produced, and because one blocked curve cancelled the
+    whole publish, the innocent curves went down with it."""
+
+    REF = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="기울기", expression="f'(x) = 2*x - 4, f'(1) = -2"),
+            SolutionStep(idx=2, description="l의 방정식",
+                         expression="l: y = -2*(x - 1) - 6 = -2*x - 4"),
+            SolutionStep(idx=3, description="g'(x)",
+                         expression="g'(x) = (3*x**2 - 2)*f(x) + (x**3 - 2*x)*f'(x)"),
+            SolutionStep(idx=4, description="g'(1)", expression="g'(1) = -4"),
+            SolutionStep(idx=5, description="m의 방정식",
+                         expression="m: y = -4*(x - 1) + 6 = -4*x + 10"),
+            SolutionStep(idx=6, description="교점",
+                         expression="-2*x - 4 = -4*x + 10, x = 7"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="49"),
+        concepts=["derivative_applications"], verified=True, origin="db",
+    )
+
+    def test_l_may_be_drawn_the_moment_it_is_earned(self):
+        from tutor.hints.guard import leaks_answer
+        # step 2 done, so the tutor is on step 3
+        assert not leaks_answer("-2*x - 4", self.REF, 3, set())
+
+    def test_m_still_waits_until_the_student_derives_it(self):
+        from tutor.hints.guard import leaks_answer
+        assert leaks_answer("-4*x + 10", self.REF, 3, set())
+        assert leaks_answer("-4*x + 10", self.REF, 4, set())
+        assert not leaks_answer("-4*x + 10", self.REF, 6, set())
+
+    def test_the_scene_after_each_step_holds_what_was_earned(self):
+        from tutor.hints import illustrator
+        from tutor.hints.guard import leaks_answer
+
+        equations = ["f(x) = x**2 - 4*x - 3", "g(x) = (x**3 - 2*x)*f(x)"]
+        for done, target, expected in [(2, 3, {"l", "f"}), (3, 4, {"l", "g"})]:
+            verified = [s.expression for s in self.REF.steps if s.idx <= done]
+            spec = illustrator.ensure_verified_scene(
+                illustrator.FigureSpec(), verified, equations, ""
+            )
+            drawn = {
+                c.label for c in spec.curves
+                if not leaks_answer(c.expr, self.REF, target, set())
+            }
+            assert drawn == expected
