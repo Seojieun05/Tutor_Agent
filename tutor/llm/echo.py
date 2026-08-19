@@ -78,6 +78,17 @@ class EchoLLMClient:
         self._queues = {k: list(v) for k, v in (responses or {}).items()}
         self._image_stage: dict[str, int] = {}  # image hash → progress stage
         self.calls: list[str] = []  # purposes, in order — tests assert on this
+        # The user message of each call, in the same order as `calls`. What a
+        # prompt CARRIES is behaviour too: a hint that must not be written
+        # blind to the rest of its ladder is testable here without a model.
+        self.prompts: list[str] = []
+
+    def prompts_for(self, purpose: str) -> list[str]:
+        """Every user message sent for one purpose, in order."""
+        return [
+            user for called, user in zip(self.calls, self.prompts)
+            if called == purpose
+        ]
 
     def _next(
         self, purpose: str, schema: type[BaseModel], images: Sequence[bytes] = ()
@@ -110,6 +121,7 @@ class EchoLLMClient:
         images: Sequence[bytes] = (),
         schema: type[BaseModel],
     ) -> BaseModel:
+        self.prompts.append(user)
         return self._next(purpose, schema, images)
 
     def run_with_tools(
@@ -122,6 +134,7 @@ class EchoLLMClient:
         schema: type[BaseModel],
         max_rounds: int = 6,
     ) -> BaseModel:
+        self.prompts.append(user)
         return self._next(purpose, schema, images)
 
     def complete_json_stream(
@@ -135,6 +148,7 @@ class EchoLLMClient:
         text_field: str,
         on_text_delta: Callable[[str], None],
     ) -> BaseModel:
+        self.prompts.append(user)
         result = self._next(purpose, schema, images)
         value = getattr(result, text_field, "")
         if value:

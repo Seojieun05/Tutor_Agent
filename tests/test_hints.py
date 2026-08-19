@@ -346,18 +346,6 @@ class TestTheirWorkReachesThePrompt:
     recent photo, no extra capture — so "어디가 잘못된 거야?" can be answered
     by pointing at THEIR line instead of explaining the step in the abstract."""
 
-    class RecordingLLM(EchoLLMClient):
-        def __init__(self, responses=None):
-            super().__init__(responses)
-            self.prompts: dict[str, str] = {}
-
-        def run_with_tools(self, *, purpose, system, user, images=(), schema, max_rounds=6):
-            self.prompts[purpose] = user
-            return super().run_with_tools(
-                purpose=purpose, system=system, user=user, images=images,
-                schema=schema, max_rounds=max_rounds,
-            )
-
     WORKED = Recognition(
         problem_text="다음 일차방정식을 푸시오: 3x + 5 = 20",
         equations=["3*x + 5 = 20"],
@@ -369,13 +357,13 @@ class TestTheirWorkReachesThePrompt:
         return MatchResult(tier=Tier.NEW, concepts=["unknown_concept"], reference=LIN_REF)
 
     def test_the_hint_prompt_carries_their_lines(self, db):
-        llm = self.RecordingLLM()
+        llm = EchoLLMClient()
         gen = HintGenerator(llm, db)
         gen.generate(decision(1), self._llm_match(), LIN_REF, self.WORKED, [])
-        assert "3*x = 20 + 5" in llm.prompts["phrase"]
+        assert "3*x = 20 + 5" in llm.prompts_for("phrase")[0]
 
     def test_the_explain_prompt_carries_their_lines(self, db):
-        llm = self.RecordingLLM()
+        llm = EchoLLMClient()
         gen = HintGenerator(llm, db)
         gen.explain(
             student_question="어디가 잘못된 거예요?",
@@ -385,16 +373,16 @@ class TestTheirWorkReachesThePrompt:
             rec=self.WORKED,
             target_step=1,
         )
-        assert "3*x = 20 + 5" in llm.prompts["explain"]
+        assert "3*x = 20 + 5" in llm.prompts_for("explain")[0]
 
     def test_an_empty_page_adds_nothing(self, db):
-        llm = self.RecordingLLM()
+        llm = EchoLLMClient()
         gen = HintGenerator(llm, db)
         gen.generate(
             decision(1), self._llm_match(), LIN_REF,
             Recognition(problem_text="p", student_work=[]), [],
         )
-        assert "쓴 풀이" not in llm.prompts["phrase"]
+        assert "쓴 풀이" not in llm.prompts_for("phrase")[0]
 
 
 class TestTheHintAimsAtTheMistake:
@@ -578,21 +566,6 @@ class TestTheBoard:
 class TestStudentAnswerInThePrompt:
     """Hints build on what the student just said, at every call site."""
 
-    class RecordingLLM(EchoLLMClient):
-        """Captures the phrase prompt so we can assert on what the model sees."""
-
-        def __init__(self, responses=None):
-            super().__init__(responses)
-            self.prompts: list[str] = []
-
-        def run_with_tools(self, *, purpose, system, user, images=(), schema, max_rounds=6):
-            if purpose == "phrase":
-                self.prompts.append(user)
-            return super().run_with_tools(
-                purpose=purpose, system=system, user=user, images=images,
-                schema=schema, max_rounds=max_rounds,
-            )
-
     def _llm_path_match(self):
         # concepts with no seeded templates → the LLM phrasing path
         return MatchResult(tier=Tier.NEW, concepts=["unknown_concept"], reference=LIN_REF)
@@ -600,14 +573,14 @@ class TestStudentAnswerInThePrompt:
     def test_hint_without_an_answer_still_works(self, db):
         """Regression: _phrase() lacked the parameter, so EVERY phrased hint
         raised TypeError — including plain hint requests that pass nothing."""
-        gen = HintGenerator(self.RecordingLLM(), db)
+        gen = HintGenerator(EchoLLMClient(), db)
         text = gen.generate(
             decision(1), self._llm_path_match(), LIN_REF, Recognition(problem_text="p"), []
         )
         assert text
 
     def test_the_answer_reaches_the_model(self, db):
-        llm = self.RecordingLLM()
+        llm = EchoLLMClient()
         gen = HintGenerator(llm, db)
         gen.generate(
             decision(1),
@@ -617,11 +590,12 @@ class TestStudentAnswerInThePrompt:
             [],
             student_answer="5를 빼면 되는 거 아니에요?",
         )
-        assert llm.prompts, "the phrase call never happened"
-        assert "5를 빼면 되는 거 아니에요?" in llm.prompts[0]
+        phrased = llm.prompts_for("phrase")
+        assert phrased, "the phrase call never happened"
+        assert "5를 빼면 되는 거 아니에요?" in phrased[0]
 
     def test_a_leaking_hint_is_regenerated_with_the_answer_intact(self, db):
-        llm = self.RecordingLLM(
+        llm = EchoLLMClient(
             {"phrase": [{"hint": "정답은 x = 5!"}, {"hint": "그다음은 무엇을 할까요?"}]}
         )
         gen = HintGenerator(llm, db)
@@ -629,8 +603,9 @@ class TestStudentAnswerInThePrompt:
             decision(1), self._llm_path_match(), LIN_REF, Recognition(problem_text="p"), [],
             student_answer="5를 빼요",
         )
-        assert len(llm.prompts) == 2  # first leaked, second is the retry
-        assert all("5를 빼요" in p for p in llm.prompts)
+        phrased = llm.prompts_for("phrase")
+        assert len(phrased) == 2  # first leaked, second is the retry
+        assert all("5를 빼요" in p for p in phrased)
         assert not leaks_answer(text, LIN_REF, 1)
 
 
@@ -899,6 +874,65 @@ class TestADiagnosedMistakeOutranksBoilerplate:
         text = gen.generate(decision, match, None, rec, history=[])
         assert str(text) != self.CONCEPT_LINE
         assert "phrase" in llm.calls
+
+
+class TestAPrewrittenLadderIsWrittenAsALadder:
+    """Live on problem 12 the ten prewritten lines were written in parallel,
+    each blind to the other nine: steps 2 and 3 both asked "두 묶음을 비교해
+    볼까요", and a step-4 L2 taught step 1's division. A prewrite call now
+    sees what earlier steps established, what the other lines already say,
+    and which questions belong to later steps."""
+
+    REF = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="첫 묶음을 a_1로 나타내기",
+                         expression="a_1*(1 + r**3 + r**6) = 3"),
+            SolutionStep(idx=2, description="둘째 묶음을 같은 꼴로 나타내기",
+                         expression="a_1*r**3*(1 + r**3 + r**6) = 6"),
+            SolutionStep(idx=3, description="두 식을 나눠 r³ 구하기",
+                         expression="r**3 = 2"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="24/7"),
+        concepts=["geometric_sequence"], verified=True, origin="db",
+    )
+
+    def written(self, db, step_idx, siblings=()):
+        from tutor.knowledge.models import Problem
+        llm = EchoLLMClient({"phrase": [
+            {"hint": "이제 두 식을 어떻게 이용하면 좋을까요?"}
+        ]})
+        gen = HintGenerator(llm, db)
+        problem = Problem(
+            id="p12", problem_type="geometric_sequence",
+            problem_text="등비수열 문제", equations=[],
+            answer=Answer(kind="SCALAR", value="24/7"),
+            concepts=["geometric_sequence"], verified=True,
+        )
+        gen.prewrite(
+            problem=problem, reference=self.REF,
+            rec=Recognition(problem_text="등비수열 문제",
+                            concepts=["geometric_sequence"]),
+            step_idx=step_idx, level=1, siblings=siblings,
+        )
+        return llm.prompts[-1]
+
+    def test_the_first_line_is_told_which_questions_come_later(self, db):
+        prompt = self.written(db, step_idx=1)
+        assert "뒤에 올 단계들" in prompt
+        assert "두 식을 나눠" in prompt        # step 3's name, so step 1 leaves it
+        assert "r**3 = 2" not in prompt        # names only, never expressions
+
+    def test_a_later_line_is_told_what_is_already_established(self, db):
+        prompt = self.written(db, step_idx=3)
+        assert "이미 구해 놓은 것" in prompt
+        assert "a_1*(1 + r**3 + r**6) = 3" in prompt
+
+    def test_sibling_lines_are_listed_as_do_not_repeat(self, db):
+        prompt = self.written(
+            db, step_idx=3, siblings=["2단계 L1: 두 번째 묶음도 나타내 볼까요?"]
+        )
+        assert "두 번째 묶음도 나타내 볼까요?" in prompt
+        assert "같은 질문을" in prompt
 
 
 class TestConceptBoilerplateNeverOutranksAReference:
@@ -1493,3 +1527,50 @@ class TestASurrenderGetsTheWellMadeLine:
         )
         assert str(text) != self.L2
         assert "phrase" in llm.calls              # an attempt: point at it
+
+
+class TestTheBoardCanQuoteWhatWasEarned:
+    """Live on problem 13 step 6: asked to intersect the two tangents, the
+    board read "y_1 = y_2". The model was never told what l and m ARE — only
+    the NAME of the step it was aiming at — so a placeholder was the most it
+    could write. Every phrasing turn now carries the established results, and
+    the guard already permits them: they sit at or below the target."""
+
+    REF = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="l의 방정식 쓰기",
+                         expression="l: y = -2*(x - 1) - 6 = -2*x - 4"),
+            SolutionStep(idx=2, description="m의 방정식 쓰기",
+                         expression="m: y = -4*(x - 1) + 6 = -4*x + 10"),
+            SolutionStep(idx=3, description="두 직선의 교점의 x좌표 구하기",
+                         expression="-2*x - 4 = -4*x + 10, x = 7"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="49"),
+        concepts=["derivative_applications"], verified=True, origin="db",
+    )
+
+    def prompt_at(self, db, target):
+        llm = EchoLLMClient({"phrase": [{"hint": "이제 두 식을 같게 놓아 볼까요?"}]})
+        HintGenerator(llm, db).generate(
+            # a diagnosed mistake is what sends a turn to the phrasing model
+            Decision(Action.SOCRATIC_QUESTION, 1, target, "force_llm", "t"),
+            MatchResult(tier=Tier.CONCEPT, concepts=["derivative_applications"],
+                        reference=self.REF),
+            self.REF,
+            Recognition(problem_text="두 접선 문제",
+                        concepts=["derivative_applications"], confidence=0.95),
+            history=[],
+        )
+        return llm.prompts_for("phrase")[0]
+
+    def test_the_earned_equations_reach_the_model(self, db):
+        prompt = self.prompt_at(db, target=3)
+        assert "-2*x - 4" in prompt and "-4*x + 10" in prompt
+
+    def test_the_first_step_is_told_nothing_is_established(self, db):
+        prompt = self.prompt_at(db, target=1)
+        assert "아직 아무것도 구해지지" in prompt
+        assert "-2*x - 4" not in prompt
+
+    def test_the_board_line_the_model_can_now_write_passes_the_guard(self, db):
+        assert not leaks_answer("-2*x - 4 = -4*x + 10", self.REF, 3, set())

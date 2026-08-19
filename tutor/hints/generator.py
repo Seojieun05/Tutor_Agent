@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from typing import Callable
 
 from pydantic import BaseModel, field_validator
@@ -331,6 +332,12 @@ One or two short spoken sentences. Korean 존댓말(해요체), never 반말. No
 no markdown, no symbols read aloud badly — say "3 x 더하기 5" rather than
 "3x + 5" when it is easier to hear.
 
+Write a sequence term with its ASCII index — a_1, a_4, a_10 — and never spell
+the index as a word ("a 원", "a 십", "에이 일"). The same text is both shown
+and spoken: the page renders a_10 as a₁₀ and the voice reads it correctly, so
+a spelled-out index makes both worse. Powers are the opposite: "r의 세제곱"
+is how a tutor says r**3 out loud, and is preferred in the spoken sentence.
+
 BOARD
 Besides the spoken hint you may WRITE 0-2 lines on the student's screen
 (`board`) — what a tutor jots on the whiteboard while saying the hint. Each
@@ -342,6 +349,12 @@ line is an expression AND the few words a tutor writes beside it:
 `expr` is ASCII mathematics (3*x + 5 = 20, x**2, sqrt(2), log_3 b), one
 expression, no Korean. A bare term ("a_1") is NOT a board line — write a
 complete equation or expression with an operation in it.
+
+When the student has already worked something out, write THAT, not a symbol
+standing in for it. Asked to set two known lines equal, a tutor writes
+"-2*x - 4 = -4*x + 10" on the board; "y_1 = y_2" names the idea and shows
+none of the problem, which is the one thing the board is there for. Invent a
+placeholder only when the quantity genuinely has no expression yet.
 
 `note` is Korean, a LABEL and not a sentence: 2-8 words, the reason or the
 rule, what a tutor scribbles in the margin. Not the hint repeated, not a
@@ -1011,6 +1024,7 @@ class HintGenerator:
         rec: Recognition,
         step_idx: int,
         level: int,
+        siblings: Sequence[str] = (),
     ) -> str | None:
         """Write one L1/L2 line for a KNOWN problem's KNOWN step, off the clock.
 
@@ -1019,6 +1033,14 @@ class HintGenerator:
         warm time, so the lesson pays nothing and a human can read every
         line before a student hears one. Returns None rather than a line
         that fails its screens; the runtime ladder covers the gap.
+
+        `siblings` are the lines already written for THIS problem's other
+        steps. A live turn gets that context from the session's history; at
+        warm time nothing supplied it, so every line was written blind to
+        the other nine. On problem 12 — where "둘째 묶음을 같은 꼴로
+        나타내기" and "두 식을 나눠 r³ 구하기" sit next to each other — four
+        consecutive lines converged on the same "두 묶음을 비교해 볼까요"
+        question, and one L2 taught step 1's division at step 4.
         """
         decision = Decision(
             Action.SOCRATIC_QUESTION if level == 1 else Action.CONCEPT_HINT,
@@ -1046,11 +1068,15 @@ class HintGenerator:
                 return None
             return text
 
-        text, _board = self._phrase(decision, match, slots, [], rec, reference)
+        text, _board = self._phrase(
+            decision, match, slots, [], rec, reference,
+            prewriting=True, siblings=siblings,
+        )
         line = screened(text)
         if line is None:
             text, _board = self._phrase(
-                decision, match, slots, [], rec, reference, stronger=True
+                decision, match, slots, [], rec, reference, stronger=True,
+                prewriting=True, siblings=siblings,
             )
             line = screened(text)
         return line
@@ -1186,6 +1212,8 @@ class HintGenerator:
         partial: bool = False,
         correcting: bool = False,
         answer_error: str | None = None,
+        prewriting: bool = False,
+        siblings: Sequence[str] = (),
         on_delta: Callable[[str], None] | None = None,
     ) -> str:
         """Context = what the tutor may talk about: the problem itself, its
@@ -1237,14 +1265,56 @@ class HintGenerator:
                 "것처럼 다음 reference step으로 넘어가지는 마세요."
             )
 
+        # What the student has ALREADY worked out, expressions included. A
+        # tutor sitting beside them knows this; the model only ever knew the
+        # NAME of the step it was aiming at, so when the board called for the
+        # two tangents set equal it could only write the placeholder
+        # "y_1 = y_2". These steps sit at or below the target, which is
+        # exactly what the leak guard permits — and it re-screens the output.
+        established = [
+            f"  {step.idx}. {step.description} → {step.expression}"
+            for step in (reference.steps if reference is not None else [])
+            if step.idx < decision.target_step
+        ]
+        if established and not correcting:
+            parts.append(
+                "학생이 이미 구해 놓은 것 (그대로 인용해도 되고 칠판에 써도 "
+                "됩니다. 다만 다시 구하게 하지는 마세요):\n" + "\n".join(established)
+            )
+        elif not established and reference is not None:
+            parts.append(
+                "이 힌트는 문제의 첫 단계입니다. 아직 아무것도 구해지지 "
+                "않았으니 앞 결과를 전제하지 마세요."
+            )
+
+        if prewriting:
+            # A live turn learns the rest of the ladder from the session: the
+            # lines already heard and the steps still to come. Warm time has
+            # neither unless it is said here, and without it ten lines written
+            # in parallel drift onto each other's steps.
+            if siblings:
+                parts.append(
+                    "이 문제의 다른 단계에 이미 배정된 문장들입니다. 같은 질문을 "
+                    "다시 하지 말고, 이 단계에서만 할 수 있는 질문을 쓰세요:\n"
+                    + "\n".join(f"  - {s}" for s in siblings)
+                )
+            upcoming = [
+                f"  {step.idx}. {step.description}"
+                for step in (reference.steps if reference is not None else [])
+                if step.idx > decision.target_step
+            ]
+            if upcoming:
+                # Names only, never expressions. Without them the FIRST line
+                # of a ladder — which has no siblings yet — reaches for the
+                # most interesting question in the problem: live, problem
+                # 12's step-1 L1 asked about the relation BETWEEN the two
+                # bundles, which is step 3's whole job.
+                parts.append(
+                    "뒤에 올 단계들 (다른 힌트가 맡습니다. 지금 이 질문을 "
+                    "가져오지 말고, 현재 단계에서 멈추세요):\n" + "\n".join(upcoming)
+                )
+
         if correcting:
-            established = []
-            if reference is not None:
-                established = [
-                    f"  {step.idx}. {step.description} → {step.expression}"
-                    for step in reference.steps
-                    if step.idx < decision.target_step
-                ]
             parts.append(
                 "오답 뒤 재검토 (이번 힌트의 최우선 목표): 학생의 방금 답변은 "
                 "현재 목표에 대한 오답으로 판정되었습니다. 새 풀이 절차를 처음부터 "

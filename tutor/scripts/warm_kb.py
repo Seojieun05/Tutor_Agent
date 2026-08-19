@@ -277,7 +277,10 @@ def seed_hint_templates(db, entries: dict) -> int:
     return n
 
 
-def prewrite_hints(db, gen, entries: dict, workers: int = 6) -> int:
+def prewrite_hints(
+    db, gen, entries: dict, workers: int = 6,
+    only: list[str] | None = None, rewrite: bool = False,
+) -> int:
     """L1/L2 for every step of every stored presolve problem, ahead of time.
 
     The live phrasing path with the clock removed (HintGenerator.prewrite):
@@ -285,13 +288,29 @@ def prewrite_hints(db, gen, entries: dict, workers: int = 6) -> int:
     serves model-written lines at template price, and so every line can be
     READ before a student hears one (they print below). Idempotent: rows
     that already exist are kept; editing a problem's steps clears its rows
-    (see presolve) and this refills them.
+    (see presolve) and this refills them. `rewrite` drops the selected
+    problems' rows first, for when the written ladder itself is the thing
+    that went wrong.
+
+    One problem's lines are written IN ORDER, each seeing the ones before
+    it, because a hint ladder is a sequence and lines written in parallel
+    cannot avoid each other. Problem 12 shipped with steps 2 and 3 asking
+    the same "두 묶음을 비교해 볼까요" and an L2 that taught step 1's
+    division at step 4. Different problems still run concurrently.
     """
     from tutor.vision.recognizer import Recognition
 
     jobs = []          # (key, rec, reference, step_idx, level) — one per line
     targets = {}       # key → every variant pid the line is stored under
-    for key in sorted(k for k in entries if k != "hint_templates"):
+    selected = sorted(
+        k for k in entries
+        if k != "hint_templates" and (only is None or k in only)
+    )
+    if only:
+        missing = [k for k in only if k not in entries]
+        if missing:
+            say(f"  ? no presolve entry for {missing}; skipped")
+    for key in selected:
         spec = entries[key]
         pids = [
             f"presolved-{key}" if i == 0 else f"presolved-{key}-v{i}"
@@ -305,6 +324,10 @@ def prewrite_hints(db, gen, entries: dict, workers: int = 6) -> int:
             say(f"  ? {key}: not stored yet (run --solve first), skipped")
             continue
         targets[key] = (problem, pids)
+        if rewrite:
+            for pid in pids:
+                db.clear_prewritten_hints(pid)
+            say(f"  - {key}: cleared {len(pids)} problem row set(s) for a rewrite")
         rec = Recognition(
             problem_text=spec["problem_text"], equations=spec["equations"][0],
             problem_type=spec.get("problem_type", "unknown"),
@@ -321,29 +344,54 @@ def prewrite_hints(db, gen, entries: dict, workers: int = 6) -> int:
         return 0
     say(f"writing {len(jobs)} step hint(s)...")
 
-    def one(job):
-        key, rec, reference, step_idx, level = job
-        problem, _pids = targets[key]
-        try:
-            return job, gen.prewrite(
-                problem=problem, reference=reference, rec=rec,
-                step_idx=step_idx, level=level,
-            )
-        except Exception as e:  # noqa: BLE001 — one bad line is not the run
-            say(f"  ! {key} step{step_idx} L{level}: {e}")
-            return job, None
+    by_key: dict[str, list] = {}
+    for job in jobs:
+        by_key.setdefault(job[0], []).append(job)
+
+    def one_problem(key: str) -> list[tuple]:
+        """Every line for one problem, in step/level order, each seeing the
+        ones already written — the ladder is a sequence, not a set."""
+        problem, pids = targets[key]
+        reference = by_key[key][0][2]
+        # Lines that already exist — hand-written, or kept from an earlier
+        # run — are part of this ladder too, so a gap-filling run writes
+        # around them instead of over them.
+        siblings = [
+            f"{step.idx}단계 L{level}: {row}"
+            for step in reference.steps
+            for level in (1, 2)
+            for row in [db.prewritten_hint(pids[0], step.idx, level)]
+            if row
+        ]
+        written = []
+        for _key, rec, reference, step_idx, level in sorted(
+            by_key[key], key=lambda j: (j[3], j[4])
+        ):
+            try:
+                line = gen.prewrite(
+                    problem=problem, reference=reference, rec=rec,
+                    step_idx=step_idx, level=level, siblings=siblings,
+                )
+            except Exception as e:  # noqa: BLE001 — one bad line is not the run
+                say(f"  ! {key} step{step_idx} L{level}: {e}")
+                line = None
+            if line:
+                siblings.append(f"{step_idx}단계 L{level}: {line}")
+            written.append((key, step_idx, level, line))
+        return written
 
     n = 0
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for (key, _rec, _reference, step_idx, level), line in pool.map(one, jobs):
-            if not line:
-                say(f"  ! {key} step{step_idx} L{level}: screened out, ladder covers it")
-                continue
-            _problem, pids = targets[key]
-            for pid in pids:
-                db.save_prewritten_hint(pid, step_idx, level, line)
-            n += 1
-            say(f"  + {key} step{step_idx} L{level}: {line}")
+        for problem_lines in pool.map(one_problem, sorted(by_key)):
+            for key, step_idx, level, line in problem_lines:
+                if not line:
+                    say(f"  ! {key} step{step_idx} L{level}: screened out, ladder covers it")
+                    continue
+                _problem, pids = targets[key]
+                for pid in pids:
+                    db.save_prewritten_hint(pid, step_idx, level, line)
+                n += 1
+                say(f"  + {key} step{step_idx} L{level}: {line}")
     say(f"prewritten hints: {n} written")
     return n
 
@@ -405,9 +453,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--concepts", nargs="*", default=None,
                     help="concept ids to write lines for (default: the common "
                          "set; pass with no ids to skip)")
-    ap.add_argument("--hints", action="store_true",
-                    help="pre-write L1/L2 lines for every stored presolve "
-                         "problem step (spends API; idempotent)")
+    ap.add_argument("--hints", nargs="*", default=None, metavar="KEY",
+                    help="pre-write L1/L2 lines for stored presolve problem "
+                         "steps (spends API; idempotent). No KEY = every "
+                         "problem; '--hints 12' = just that one")
+    ap.add_argument("--rewrite", action="store_true",
+                    help="with --hints: drop the selected problems' existing "
+                         "lines first and write the whole ladder again")
     args = ap.parse_args(argv)
 
     settings = load_settings()
@@ -419,7 +471,7 @@ def main(argv: list[str] | None = None) -> int:
         say("echo mode: no API key loaded, nothing to warm")
         return 1
 
-    if curated_only and args.concepts == [] and not args.hints:
+    if curated_only and args.concepts == [] and args.hints is None:
         # nothing here needs a model or a voice: skip the whole server build
         db, llm, gen, speaker = KnowledgeDB(settings.db_path), None, None, None
     else:
@@ -438,8 +490,10 @@ def main(argv: list[str] | None = None) -> int:
                 f"presolved-{key}-v{i}"
                 for i in range(1, len(entries[key]["equations"]))
             )
-    if args.hints and gen is not None:
-        prewrite_hints(db, gen, entries)
+    if args.hints is not None and gen is not None:
+        prewrite_hints(
+            db, gen, entries, only=args.hints or None, rewrite=args.rewrite
+        )
     extend_semantic_index(db, stored)
     say(f"knowledge DB: {settings.db_path}")
     return 0
