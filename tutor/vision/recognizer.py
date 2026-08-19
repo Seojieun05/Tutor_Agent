@@ -69,6 +69,9 @@ reference and fill `state_estimate`.
   are genuinely visible in the photo.
 - `last_correct_step` is the largest N for which reference steps 1..N are all
   accounted for. A later correct line does not bridge a missing earlier step.
+  A step counts only when its RESULT is visible on the page or in the quoted
+  speech — a line one operation short of a step's result leaves that step
+  unfinished.
 - A previous state is context, not evidence. Diagnose the CURRENT photo.
 - Use CORRECT only when everything shown is sound; otherwise choose the most
   specific status. Use UNCERTAIN rather than guessing about illegible work.

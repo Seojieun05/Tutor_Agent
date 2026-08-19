@@ -75,6 +75,60 @@ class TestProgressDoesNotRewindOnACorrectCrop:
         assert state.last_correct_step == 2
 
 
+class TestAFrontierResultMustBeWritten:
+    """Live on problem 12: the page showed
+    "2*(a_1+a_4+a_7) = r**3*(a_1+a_4+a_7)" — one division short of r³ = 2 —
+    the diagnosis credited the r³ step as done, and the tutor asked for a_1
+    while r³ was still unwritten. A route may replace a step's DERIVATION,
+    never its RESULT: an unevidenced frontier retreats one step, and the
+    replaced derivations beneath it stay credited."""
+
+    GEO_REF = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="첫 묶음을 a_1로 나타내기",
+                         expression="2*a_1*(1 + r**3 + r**6) = 6, a_1*(1 + r**3 + r**6) = 3"),
+            SolutionStep(idx=2, description="둘째 묶음을 같은 꼴로 나타내기",
+                         expression="a_1*r**3*(1 + r**3 + r**6) = 6"),
+            SolutionStep(idx=3, description="두 식을 나눠 r³ 구하기",
+                         expression="r**3 = 2"),
+            SolutionStep(idx=4, description="첫 식에 대입해 a_1 구하기",
+                         expression="a_1*(1 + 2 + 4) = 3, a_1 = 3/7"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="24/7"),
+        concepts=["geometric_sequence"], verified=True, origin="db",
+    )
+    LINE = "2*(a_1 + a_4 + a_7) = r**3*(a_1 + a_4 + a_7)"
+
+    def estimated(self, db, work, transcript=None, prev=None):
+        llm = EchoLLMClient({"estimate": [{
+            "current_step": "공비 관계 파악", "last_correct_step": 3,
+            "status": "CORRECT", "misconception": None,
+        }]})
+        est = StudentStateEstimator(llm, db)
+        return est.estimate(
+            rec=Recognition(problem_text="p", student_work=work, confidence=0.95),
+            reference=self.GEO_REF, prev_state=prev, prev_work=None,
+            history=[], transcript=transcript,
+        )
+
+    def test_the_setup_line_alone_keeps_the_result_step_open(self, db):
+        state = self.estimated(db, [self.LINE], transcript="이거 맞아요?")
+        assert state.last_correct_step == 2   # steps 1-2: route-replaced, kept
+
+    def test_the_written_result_keeps_the_credit(self, db):
+        state = self.estimated(db, [self.LINE, "r**3 = 2"])
+        assert state.last_correct_step == 3
+
+    def test_the_spoken_result_keeps_the_credit(self, db):
+        state = self.estimated(db, [self.LINE], transcript="r 세제곱은 2예요")
+        assert state.last_correct_step == 3
+
+    def test_an_already_proven_frontier_is_not_reopened(self, db):
+        prev = StudentState(status="CORRECT", last_correct_step=3)
+        state = self.estimated(db, [self.LINE], prev=prev)
+        assert state.last_correct_step == 3
+
+
 class TestUncertainEcho:
     """A model shown a previous UNCERTAIN tends to answer UNCERTAIN. Live,
     one blurry photo early in a problem turned every later work check into

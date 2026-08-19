@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from tutor.knowledge import mathnorm
 from tutor.knowledge.db import KnowledgeDB
@@ -34,9 +35,12 @@ Rules:
   even when the handwritten work is empty or unchanged.
 - last_correct_step: the largest N such that reference steps 1..N are ALL accounted
   for — written on the page, said aloud, or made unnecessary by the student's own
-  valid route. A later step done while an earlier one is still missing does NOT
-  raise it: report the unbroken prefix, and name the missing step in current_step.
-  (0 = none.)
+  valid route. A route can replace a step's DERIVATION, never its RESULT: when a
+  step's result (a value or equation such as "r**3 = 2") appears nowhere on the
+  page or in the quoted speech, that step is NOT accounted for — even if the line
+  that would produce it is one operation away. A later step done while an earlier
+  one is still missing does NOT raise it: report the unbroken prefix, and name the
+  missing step in current_step. (0 = none.)
 - status: CORRECT | CALCULATION_ERROR | CONCEPT_ERROR | PROCEDURAL_ERROR | MISREAD | STUCK | UNCERTAIN.
 - misconception: prefer an id from the provided misconception list when the student's
   error matches its indicators; otherwise a short free-text description or null.
@@ -84,7 +88,7 @@ class StudentStateEstimator:
 
         quick = self._rule_based_progress(rec, reference, prev_state)
         if quick is not None:
-            return self._post_rules(quick, reference, prev_state, rec)
+            return self._post_rules(quick, reference, prev_state, rec, transcript)
 
         # complete_json, deliberately not run_with_tools: everything the
         # diagnosis may consult — the reference, the work, the misconception
@@ -134,7 +138,7 @@ class StudentStateEstimator:
                 user=self._build_context(rec, reference, None, [], transcript),
                 schema=StudentState,
             )
-        return self._post_rules(state, reference, prev_state, rec)
+        return self._post_rules(state, reference, prev_state, rec, transcript)
 
     def vision_context(
         self,
@@ -211,7 +215,7 @@ class StudentStateEstimator:
             return pre
         quick = self._rule_based_progress(rec, reference, prev_state)
         if quick is not None:
-            return self._post_rules(quick, reference, prev_state, rec)
+            return self._post_rules(quick, reference, prev_state, rec, transcript)
         if state is None:
             return None
         if (
@@ -237,7 +241,7 @@ class StudentStateEstimator:
                 "using dedicated estimate"
             )
             return None
-        return self._post_rules(state, reference, prev_state, rec)
+        return self._post_rules(state, reference, prev_state, rec, transcript)
 
     # --- deterministic pre-checks: no LLM call -------------------------------
 
@@ -437,6 +441,7 @@ class StudentStateEstimator:
         reference: ReferenceSolution,
         prev_state: StudentState | None,
         rec: Recognition | None = None,
+        transcript: str | None = None,
     ) -> StudentState:
         state = self._arithmetic_check(state, reference, rec)
         max_step = len(reference.steps)
@@ -454,6 +459,13 @@ class StudentStateEstimator:
                 prev_state.last_correct_step, clamped,
             )
             clamped = min(prev_state.last_correct_step, max_step)
+        if state.status == "CORRECT":
+            # Only a confirming diagnosis moves the lesson forward on the
+            # spot — that is the claim worth auditing. An error diagnosis
+            # already keeps the tutor engaged with the same ground.
+            clamped = self._frontier_result_check(
+                clamped, reference, prev_state, rec, transcript
+            )
         attempts = 1
         if prev_state is not None and clamped == prev_state.last_correct_step:
             attempts = prev_state.attempt_count + 1
@@ -467,6 +479,57 @@ class StudentStateEstimator:
                 "previous_hint_effective": effective,
             }
         )
+
+    @staticmethod
+    def _frontier_result_check(
+        lcs: int,
+        reference: ReferenceSolution,
+        prev_state: StudentState | None,
+        rec: Recognition | None,
+        transcript: str | None,
+    ) -> int:
+        """A route may replace a step's DERIVATION, never its RESULT.
+
+        Live on problem 12 the page showed
+        "2*(a_1+a_4+a_7) = r**3*(a_1+a_4+a_7)" — one division short of
+        r³ = 2 — the diagnosis credited the r³ step as done, and the tutor
+        asked for a_1 while r³ was still unwritten. When the NEWLY credited
+        frontier step's own final claim is on no written line and its value
+        was not just spoken, the frontier retreats exactly one step. The
+        steps beneath stay credited: the student's route replaced their
+        derivations, and that allowance is the judge's to give.
+        """
+        proven = prev_state.last_correct_step if prev_state is not None else 0
+        if rec is None or not rec.student_work or lcs <= proven:
+            return lcs
+        step = next((s for s in reference.steps if s.idx == lcs), None)
+        claim = (step.expression if step is not None else "").split(",")[-1].strip()
+        if "=" not in claim:
+            return lcs                     # nothing checkable: trust the judge
+        # Written evidence is judged by the same standards the rule-based
+        # fast path credits with: plain equivalence, or the reference's
+        # symbolic derivative already substituted from the problem's own
+        # definitions.
+        if any(
+            mathnorm.equations_equivalent(line, claim)
+            or mathnorm.equations_same_form_with_derivatives(
+                line, claim, rec.equations
+            )
+            for line in rec.student_work
+        ):
+            return lcs
+        # The result may have been SAID instead: presence of the claim's
+        # numeric tail in the transcript is enough to stand aside — leniency
+        # here only prevents a false retreat.
+        tail = claim.split("=")[-1].strip()
+        spoken = re.sub(r"마이너스\s*", "-", transcript or "")
+        if tail and re.search(rf"(?<![\d.]){re.escape(tail)}(?![\d.])", spoken):
+            return lcs
+        log.info(
+            "frontier result %r is on no written line: step %d stays open",
+            claim, lcs,
+        )
+        return lcs - 1
 
     @staticmethod
     def _arithmetic_check(
