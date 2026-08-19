@@ -205,23 +205,35 @@ def _spoken_fingerprint(text: str) -> str:
 def _protected_parts(step_expression: str) -> list[str]:
     """The pieces of a step whose VALUE is the thing the student must produce.
 
-    Both sides of what the step claims, and every parenthesised factor inside
-    it — "(3*x**2 - 2)*f(x) + …" is a product rule whose first factor is the
-    derivative being asked for, and handing that over is handing over the
-    step. A part with no operation in it ("g'(x)", "y") names something
-    instead of valuing it, so it is not protected.
+    A composite step is a comma-separated argument — "-2*x - 4 = -4*x + 10,
+    x = 7" sets two lines equal and then solves. Its LAST claim is the result;
+    the ones before it are the setup, which is exactly what an L2 tells the
+    student to write down, so protecting those would gag the hint instead of
+    the answer.
+
+    Every parenthesised factor is protected too: "(3*x**2 - 2)*f(x) + …" is a
+    product rule whose first factor is the derivative being asked for, and
+    handing that over is handing over the step. A part that names something
+    without valuing it ("g'(x)", "y") is not protected.
     """
+    claims = [c.strip() for c in (step_expression or "").split(",") if c.strip()]
     parts, stack = [], []
     for i, ch in enumerate(step_expression or ""):
         if ch == "(":
             stack.append(i)
         elif ch == ")" and stack:
             parts.append(step_expression[stack.pop() + 1 : i])
-    parts.extend(step_expression.split("="))
+    if claims:
+        result = claims[-1]
+        parts.append(result)
+        # and its right-hand side on its own, for a hint that states the value
+        # without writing the name in front of it
+        parts.extend(p for p in result.split("=")[1:])
     return [
         p.strip() for p in parts
-        if p.strip() and re.search(r"[*/+^]|(?<![a-zA-Z])-|\d\s*[a-zA-Z]", p)
+        if p.strip() and re.search(r"[*/+^=]|(?<![a-zA-Z])-|\d\s*[a-zA-Z]", p)
     ]
+
 
 
 def states_step_result(
@@ -265,8 +277,11 @@ def states_step_result(
         if squeezed in visible or squeezed in re.sub(r"\s+", "", earlier):
             continue                      # theirs already: the page, or a done step
         phrase = _spoken_fingerprint(part)
-        if len(phrase) < 4:
-            continue                      # too short to be a claim of its own
+        # A part that CLAIMS something ("x = 7") is specific however short it
+        # reads; a bare value is not, and a three-letter fingerprint would
+        # match half the sentences in the lesson.
+        if "=" not in part and len(phrase) < 4:
+            continue
         if phrase in spoken_visible:
             continue
         if squeezed in said_ascii or phrase in said_spoken:

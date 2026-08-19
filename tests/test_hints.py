@@ -1643,3 +1643,48 @@ class TestTheStepsOwnResultIsNotAHint:
     def test_l4_is_still_allowed_to_say_its_step(self, db):
         out = self.generated(db, level=4)
         assert "3 x 제곱 빼기 2" in str(out)
+
+
+class TestACompositeStepHidesItsResultNotItsSetup:
+    """"-2*x - 4 = -4*x + 10, x = 7" is a step that sets two lines equal and
+    then solves. The setup is what the L2 asks the student to write down, so
+    gagging it would gag the hint; the LAST claim is the answer to the step
+    and stays hidden. A claim also stays hidden however short it reads —
+    "x = 7" spoken is three syllables, and the length rule was letting it
+    through."""
+
+    REF = ReferenceSolution(
+        steps=[
+            SolutionStep(idx=1, description="l의 방정식", expression="l: y = -2*x - 4"),
+            SolutionStep(idx=2, description="m의 방정식", expression="m: y = -4*x + 10"),
+            SolutionStep(idx=3, description="두 직선의 교점의 x좌표 구하기",
+                         expression="-2*x - 4 = -4*x + 10, x = 7"),
+        ],
+        final_answer=Answer(kind="SCALAR", value="49"),
+        concepts=["derivative_applications"], verified=True, origin="db",
+    )
+    SEEN = ["13. 두 접선", "f(x) = x**2 - 4*x - 3"]
+
+    def guard(self, text, step=3):
+        from tutor.hints.guard import states_step_result
+        return states_step_result(text, self.REF, step, self.SEEN)
+
+    def test_the_setup_may_be_written(self):
+        assert not self.guard("-2*x - 4 = -4*x + 10")
+
+    def test_the_result_may_not(self):
+        assert self.guard("x = 7")
+
+    def test_the_result_spoken_may_not_either(self):
+        assert self.guard("x는 7이에요")
+
+    def test_the_invitation_passes(self):
+        assert not self.guard("두 식을 같다고 놓고 x의 값을 구해 볼까요?")
+
+    def test_a_board_carrying_the_result_is_refused(self):
+        from tutor.hints.generator import _screen_board, BoardLine
+        rec = Recognition(problem_text="13. 두 접선", equations=self.SEEN[1:])
+        setup = (BoardLine(expr="-2*x - 4 = -4*x + 10", note=""),)
+        answer = (BoardLine(expr="-2*x - 4 = -4*x + 10, x = 7", note=""),)
+        assert _screen_board(setup, self.REF, 3, rec) == setup
+        assert _screen_board(answer, self.REF, 3, rec) == ()
