@@ -135,6 +135,11 @@
   .mathrun {
     display:inline-block; max-width:100%; vertical-align:bottom;
     overflow-x:auto; overflow-y:hidden;
+    /* KaTeX widths are fractional em; scrollWidth rounds up, clientWidth
+       down, and on Windows the resulting phantom overflow drew a full
+       arrow scrollbar under a two-glyph a_n. The padding absorbs the
+       rounding; a genuinely long formula still overflows past it. */
+    padding-right:2px; scrollbar-width:thin;
   }
   body {
     margin:0; min-height:100dvh; display:flex; flex-direction:column;
