@@ -59,11 +59,13 @@ from tutor.knowledge.models import (
     SolutionStep,
 )
 
+# 수업 전에 미리 풀어 둘 문제 목록 파일.
 PRESOLVE_PATH = PROJECT_ROOT / "data" / "presolve.json"
 
 # The high-school and 수능 range: what a demo or a study session actually
 # lands on. Grade-school concepts stay unwarmed — the tutor writes their line
 # the first time it meets one, which is the mechanism working as designed.
+# 미리 문장을 써 둘 흔한 개념들.
 COMMON_CONCEPTS = [
     # 수열
     "sequence", "arithmetic_sequence", "geometric_sequence", "sequence_sum",
@@ -94,6 +96,7 @@ COMMON_CONCEPTS = [
     "set", "set_operations", "proposition", "necessary_sufficient_condition",
 ]
 
+# presolve.json 읽기.
 def load_presolve() -> dict:
     """The lesson material, from beside the DB it fills. Missing file → {}."""
     if not PRESOLVE_PATH.exists():
@@ -102,6 +105,7 @@ def load_presolve() -> dict:
     return data if isinstance(data, dict) else {}
 
 
+# 워밍에 필요한 부품(DB·모델·힌트 생성기·스피커)을 만든다.
 def build(settings):
     from tutor.hints.generator import HintGenerator
     from tutor.server.app import build_shared, wrap_with_cache
@@ -117,6 +121,7 @@ def build(settings):
     return db, shared.solve_llm, HintGenerator(shared.hint_llm, db), speaker
 
 
+# 개념별 사전 안내 문장을 미리 써서 DB에 넣고, 그 음성까지 미리 합성해 둔다.
 def warm_concepts(db, gen, speaker, concept_ids: list[str], workers: int = 5) -> list[str]:
     todo = []
     for cid in concept_ids:
@@ -133,6 +138,7 @@ def warm_concepts(db, gen, speaker, concept_ids: list[str], workers: int = 5) ->
     say(f"writing {len(todo)} concept lines...")
     written: list[str] = []
 
+    # 개념 하나 처리.
     def one(item):
         cid, name = item
         try:
@@ -157,6 +163,7 @@ def warm_concepts(db, gen, speaker, concept_ids: list[str], workers: int = 5) ->
     return written
 
 
+# 문제 하나를 미리 풀어 검증된 형태로 저장한다 — 수업 중에는 EXACT로 바로 매칭된다.
 def presolve(db, llm, key: str, entries: dict) -> bool:
     from tutor.knowledge.matching import problem_hash
     from tutor.vision.recognizer import Recognition
@@ -249,6 +256,7 @@ def presolve(db, llm, key: str, entries: dict) -> bool:
     return True
 
 
+# 그 문제에 필요한 힌트 템플릿을 함께 심는다.
 def seed_hint_templates(db, entries: dict) -> int:
     """Concept-level hint lines from the presolve file, idempotently.
 
@@ -277,6 +285,7 @@ def seed_hint_templates(db, entries: dict) -> int:
     return n
 
 
+# 문제·단계·레벨별 힌트 문장을 수업 전에 미리 써 둔다(실시간과 같은 프롬프트·검열).
 def prewrite_hints(
     db, gen, entries: dict, workers: int = 6,
     only: list[str] | None = None, rewrite: bool = False,
@@ -348,6 +357,7 @@ def prewrite_hints(
     for job in jobs:
         by_key.setdefault(job[0], []).append(job)
 
+    # 문제 하나의 사다리 전체를 미리 쓴다.
     def one_problem(key: str) -> list[tuple]:
         """Every line for one problem, in step/level order, each seeing the
         ones already written — the ladder is a sequence, not a set."""
@@ -396,6 +406,7 @@ def prewrite_hints(
     return n
 
 
+# 새로 저장한 문제들을 임베딩 인덱스에 덧붙인다.
 def extend_semantic_index(db, stored_ids: list[str]) -> None:
     """Append the newly stored problems to the embedding index, if it exists.
 
@@ -442,6 +453,7 @@ def extend_semantic_index(db, stored_ids: list[str]) -> None:
     say(f"  semantic index: +{len(todo)} → {len(ids) + len(todo)} passages")
 
 
+# 커맨드라인 진입점: 어떤 워밍을 할지 옵션으로 고른다.
 def main(argv: list[str] | None = None) -> int:
     soften_stdout()
     entries = load_presolve()

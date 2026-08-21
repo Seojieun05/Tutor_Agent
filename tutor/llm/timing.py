@@ -31,10 +31,12 @@ _turn: contextvars.ContextVar[list | None] = contextvars.ContextVar("turn", defa
 _calls = 0
 
 
+# 이 프로세스가 지금까지 한 모델 호출 수.
 def model_calls() -> int:
     return _calls
 
 
+# 한 구간의 소요 시간을 로그로 남기고, 턴이 측정 중이면 거기에도 더한다.
 def record(label: str, seconds: float, detail: str = "") -> None:
     """Log one stage, and add it to the turn if one is being timed."""
     log.info("%-9s %5.1fs  %s", label, seconds, detail)
@@ -43,6 +45,7 @@ def record(label: str, seconds: float, detail: str = "") -> None:
         entries.append((label, seconds))
 
 
+# with 블록의 소요 시간을 재는 구간.
 @contextmanager
 def stage(label: str, detail: str = ""):
     """Time a block whether or not it succeeds — a slow failure is still slow."""
@@ -53,6 +56,7 @@ def stage(label: str, detail: str = ""):
         record(label, time.perf_counter() - started, detail)
 
 
+# 학생 발화 하나가 만든 모든 호출을 묶어 총합까지 로그로 남긴다.
 @contextmanager
 def turn(name: str):
     """Group the stages of one student utterance and log what they add up to."""
@@ -75,6 +79,7 @@ def turn(name: str):
         )
 
 
+# 로그에 찍을 모델 이름을 클라이언트에서 캐낸다.
 def model_name(client) -> str:
     """What this client will ACTUALLY call.
 
@@ -92,6 +97,7 @@ def model_name(client) -> str:
     return model_name(primary) if primary is not None else "?"
 
 
+# 어떤 LLM 클라이언트든 감싸서, 호출마다 시간 로그를 남기게 만든다.
 def timed(client, _unused: str = ""):
     """Wrap an LLM client so every call it serves is recorded.
 
@@ -105,18 +111,22 @@ def timed(client, _unused: str = ""):
 
     model = model_name(client)
 
+    # 시간 측정만 얹은 얇은 래퍼.
     class Timed:
         _timed = True
 
+        # 감싸지 않은 속성은 원래 객체로 그대로 넘긴다.
         def __getattr__(self, name):  # keep .llm, .settings and friends reachable
             return getattr(client, name)
 
+        # 시간을 재며 단순 호출.
         def complete_json(self, *, purpose, **kwargs):
             global _calls
             _calls += 1
             with stage(purpose, model):
                 return client.complete_json(purpose=purpose, **kwargs)
 
+        # 시간을 재며 툴 호출.
         def run_with_tools(self, *, purpose, **kwargs):
             global _calls
             _calls += 1

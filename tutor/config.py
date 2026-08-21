@@ -11,11 +11,16 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+# 서버 전체 설정 묶음. 여기 적힌 값이 기본값이고, load_settings()가 .env로 덮어쓴다.
+# *_provider 필드가 단계별로 따로 있는 이유: 인식 / 힌트 / 채점 / 진단 / 풀이 / 삽화 /
+# 의도분류를 각각 다른 모델(grok · gemini)에 따로 붙일 수 있게 하려고.
 @dataclass
 class Settings:
+    # --- xAI(Grok) 접속 정보. 키가 비어 있으면 echo 모드(오프라인)로 동작한다. ---
     xai_api_key: str = ""
     xai_base_url: str = "https://api.x.ai/v1"
     chat_model: str = "grok-4.5"
+    # --- 단계별 모델 배정: 어느 작업을 어느 provider/모델에 맡길지 ---
     # Reading the worksheet is the one job that can be moved to another model
     # without touching the pedagogy: "grok" (default) or "gemini".
     vision_provider: str = "grok"
@@ -83,6 +88,7 @@ class Settings:
     # narrow classification the illustrator runs on flash-lite in 1.3s.
     intent_provider: str = "grok"
     gemini_intent_model: str = "gemini-3.5-flash-lite"
+    # --- 음성 합성(TTS) 출력 설정 ---
     tts_voice: str = "eve"
     # "ws" holds one bidirectional TTS socket open and reuses it per utterance
     # (~0.3s to first audio instead of ~1.3s per-request HTTP). Any websocket
@@ -92,6 +98,7 @@ class Settings:
     # time-to-first-audio. 2 is the documented aggressive/lowest-latency mode;
     # it affects only the streaming transport and leaves HTTP unchanged.
     tts_streaming_latency: int = 2
+    # --- 디바이스 WebSocket 리스너 주소/포트 ---
     ws_host: str = "0.0.0.0"
     ws_port: int = 8765
     # HTTPS/WSS, for the phone camera only. getUserMedia runs in a secure
@@ -102,6 +109,7 @@ class Settings:
     tls_cert: Path | None = None
     tls_key: Path | None = None
     tls_port: int = 0  # 0 → ws_port + 1
+    # --- 도메인 지식 DB 위치와 튜터 언어 ---
     db_path: Path = field(default_factory=lambda: PROJECT_ROOT / "data" / "knowledge.db")
     tutor_language: str = "ko"
     recog_conf_threshold: float = 0.6
@@ -137,10 +145,12 @@ class Settings:
     worksheet_roi: tuple[float, float, float, float] | None = None
     auto_crop: bool = True
     crop_target_px: int = 1024
+    # --- 마이크 입력 샘플레이트 ---
     audio_sample_rate: int = 16000
     # Reasoning effort for the conversational LLM calls (see llm.client
     # FAST_PURPOSES). Empty string = the model's default.
     llm_reasoning_effort: str = "low"
+    # --- 핸즈프리 턴 전환(VAD) 파라미터: 언제 말이 시작/끝났다고 볼지 ---
     # Hands-free turn taking (laptop mic; see tutor/speech/turn.py)
     vad_threshold: float = 0.5
     vad_prefix_ms: int = 300
@@ -154,19 +164,23 @@ class Settings:
     barge_in: bool = True
     barge_in_frames: int = 8
 
+    # API 키가 없으면 echo 모드 — 외부 호출 없이 정해진 한국어 응답으로만 돈다.
     @property
     def echo_mode(self) -> bool:
         return not self.xai_api_key
 
+    # 인증서와 키가 둘 다 있을 때만 HTTPS/WSS 리스너를 연다(폰 카메라 전용).
     @property
     def tls_enabled(self) -> bool:
         return self.tls_cert is not None and self.tls_key is not None
 
+    # TLS 포트 기본값: 따로 지정하지 않으면 평문 포트 + 1.
     @property
     def tls_listen_port(self) -> int:
         return self.tls_port or self.ws_port + 1
 
 
+# .env를 읽어 Settings를 채운다. 환경변수 → 설정 필드 매핑이 전부 이 함수 한 곳에 모여 있다.
 def load_settings(env_file: Path | None = None) -> Settings:
     load_dotenv(env_file or PROJECT_ROOT / ".env")
     s = Settings()

@@ -13,6 +13,7 @@ from pydantic import BaseModel, ValidationError
 
 from tutor.protocol.frames import ProtocolError
 
+# 디바이스 → 서버로 올라오는 이벤트 이름 목록(허용 목록).
 DEVICE_EVENTS = {
     "hello",
     "hint_request",
@@ -21,6 +22,7 @@ DEVICE_EVENTS = {
     "playback_done",
     "error",
 }
+# 서버 → 디바이스로 내려보내는 이벤트 이름 목록(허용 목록).
 SERVER_EVENTS = {
     "hello_ack",
     "capture_request",
@@ -43,6 +45,7 @@ SERVER_EVENTS = {
 }
 
 
+# EVENT 텍스트 프레임의 공통 봉투 구조.
 class Event(BaseModel):
     type: str = "EVENT"
     event: str
@@ -50,10 +53,12 @@ class Event(BaseModel):
     ts: int = 0
 
 
+# 이벤트 이름 + 데이터를 타임스탬프까지 붙여 JSON 문자열로 만든다.
 def make_event(event: str, data: dict[str, Any] | None = None) -> str:
     return Event(event=event, data=data or {}, ts=int(time.time() * 1000)).model_dump_json()
 
 
+# 받은 텍스트 프레임을 Event로 검증·파싱한다(형식이 어긋나면 ProtocolError).
 def parse_event(text: str) -> Event:
     try:
         ev = Event.model_validate(json.loads(text))

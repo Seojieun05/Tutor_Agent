@@ -24,12 +24,15 @@ import time
 
 log = logging.getLogger(__name__)
 
+# 기본 모델이 죽었을 때, 다시 시도하기 전 예비 모델로 버티는 시간.
 COOLDOWN_S = 60.0
 
 
+# 원하는 모델을 먼저 쓰되, 실패하면 조용히 예비 모델로 넘어가는 래퍼.
 class FallbackLLM:
     """LLMClient that prefers one model and survives it being unavailable."""
 
+    # 기본 모델 · 예비 모델 · 로그 이름 · 쿨다운을 받는다.
     def __init__(self, primary, standby, label: str = "llm", cooldown_s: float = COOLDOWN_S):
         self.primary = primary
         self.standby = standby
@@ -38,17 +41,21 @@ class FallbackLLM:
         self._blocked_until = 0.0
         self._failures = 0
 
+    # 단순 호출을 폴백 경로로 넘긴다.
     def complete_json(self, **kwargs):
         return self._call("complete_json", kwargs)
 
+    # 툴 호출을 폴백 경로로 넘긴다.
     def run_with_tools(self, **kwargs):
         return self._call("run_with_tools", kwargs)
 
+    # 스트리밍 호출을 폴백 경로로 넘긴다.
     def complete_json_stream(self, **kwargs):
         return self._call("complete_json_stream", kwargs)
 
     # --- internals ------------------------------------------------------------
 
+    # 실제 분기: 쿨다운 중이면 예비 모델, 아니면 기본 모델을 시도하고 실패 시 예비로.
     def _call(self, method: str, kwargs):
         if time.monotonic() < self._blocked_until:
             return getattr(self.standby, method)(**kwargs)
@@ -60,6 +67,7 @@ class FallbackLLM:
         self._failures = 0
         return result
 
+    # 실패를 기록하고 쿨다운을 건다. 로그는 한 번만 크게 남긴다.
     def _trip(self, error: Exception) -> None:
         self._failures += 1
         self._blocked_until = time.monotonic() + self.cooldown_s

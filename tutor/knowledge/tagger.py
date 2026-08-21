@@ -27,11 +27,14 @@ from tutor.llm.client import LLMClient
 log = logging.getLogger(__name__)
 
 
+# 분류 결과: 큰 유형 하나 + 개념 몇 개.
 class ProblemTags(BaseModel):
     problem_type: str = UNKNOWN_PROBLEM_TYPE
     concepts: list[str] = []
 
 
+# [프롬프트] 문제 분류용. 두 화이트리스트를 메뉴로 보여 주고 그 안에서만 고르게 한다.
+# (실시간 경로에서는 인식 호출이 이 일을 겸하고, 이 클래스는 오프라인·재현용으로 남아 있다.)
 def _system_prompt() -> str:
     return f"""You classify a Korean K-12 math problem for a tutoring system.
 
@@ -63,10 +66,13 @@ Example — "GOOD와 2002를 문자와 숫자가 번갈아 오도록 배열하�
 Return ONLY the JSON object."""
 
 
+# 문제 텍스트만으로 유형·개념을 붙이는 분류기(이미지 없이 동작).
 class ConceptTagger:
+    # 분류에 쓸 모델을 받는다.
     def __init__(self, llm: LLMClient):
         self.llm = llm
 
+    # 인식 결과를 분류하고, 파이썬에서 화이트리스트를 다시 강제한다.
     def tag(self, rec) -> ProblemTags:
         """rec: tutor.vision.recognizer.Recognition (kept untyped to avoid a
         knowledge → vision import cycle)."""
@@ -86,6 +92,7 @@ class ConceptTagger:
         )
         return tags
 
+    # 모델이 준 id를 절대 그대로 믿지 않고 화이트리스트로 걸러 낸다.
     @staticmethod
     def validate(raw: ProblemTags) -> ProblemTags:
         """Whitelist enforcement in Python — never trust the model's ids."""
@@ -94,6 +101,7 @@ class ConceptTagger:
             concepts=normalize_concepts(raw.concepts),
         )
 
+    # 분류용 입력 조립. 학생 풀이는 일부러 뺀다 — 태그는 문제의 성질이라 흔들리면 안 된다.
     @staticmethod
     def _context(rec) -> str:
         parts = [f"문제: {rec.problem_text}"]

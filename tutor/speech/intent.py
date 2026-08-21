@@ -35,8 +35,11 @@ from tutor.speech.stt import wants_hint
 
 log = logging.getLogger(__name__)
 
+# 발화가 요구하는 턴 네 가지. 이 중 카메라를 켜는 것은 HINT_REQUEST와 WORK_CHECK 둘뿐이다.
 Intent = Literal["HINT_REQUEST", "WORK_CHECK", "ANSWER", "NONE"]
 
+# 작업 확인으로 인정하려면 두 조건이 다 필요하다: 쓴 것을 이름으로 부르고(_WORK_WORDS),
+# 그것을 봐 달라고 요청할 것(_CHECK_WORDS). 한쪽만으로는 일상적인 말이라 사진을 찍지 않는다.
 # "지금 내가 쓴 걸 봐 달라" — and ONLY that, named out loud.
 #
 # A work check costs a photo and a VLM run, so it requires BOTH halves: the
@@ -56,12 +59,14 @@ _WORK_WORDS = (
     "플이",                                    # 내 풀이 → 네플이 / 내플이
     "푸리", "풀리",
 )
+# 판단을 요청하는 말들.
 _CHECK_WORDS = ("맞", "봐", "보", "확인", "틀", "어때")
 
 
 # "어디가 틀렸어?" / "왜 그게 안 돼?" — a question ABOUT a verdict already
 # given, not a request for a new one. It presupposes the error the tutor just
 # reported, so the answer is an explanation, not another photo of the same page.
+# 방금 판정에 대해 되묻는 말(어디가 · 왜 …).
 _ABOUT_THE_VERDICT = ("어디가", "어디서", "어느 부분", "왜 ", "왜냐", "무엇이 잘못", "뭐가 잘못")
 
 # "…대입하면 되니까, 음, 뭐지?" — the sentence walks through a step and DIES on a
@@ -72,6 +77,7 @@ _ABOUT_THE_VERDICT = ("어디가", "어디서", "어느 부분", "왜 ", "왜냐
 # moment a person would have leaned in — a live session did, and the student's
 # next words were about the tutor, not the maths. Trailing position only:
 # "이게 뭐지 싶었는데 알았어요" sails past, because the sentence recovers.
+# 생각하다 길을 잃고 끝난 말투("어떻게 하더라?", "음, 뭐지?").
 _LOST_TRAILING = re.compile(
     r"(뭐지|뭐더라|뭐였지|뭐였더라|뭘까|어떻게 하더라|어떻게 했더라|어떻게 하지|"
     r"어떻게 되더라|기억이 안\s*나)\s*[?.!…~요]*$"
@@ -82,17 +88,21 @@ _LOST_TRAILING = re.compile(
 # already armed `_continue_from`, so HINT_REQUEST goes straight to the next
 # diagnosed step without another photo.  The broad `has_pending -> ANSWER`
 # fallback used to swallow this exact live utterance.
+# 다음 단계로 넘어가자는 표현.
 _NEXT_STEP = re.compile(r"(?:이\s*다음|그\s*다음|다음(?:\s*단계)?|이제|이어서)")
+# 다음을 도와 달라는 표현.
 _NEXT_HELP = re.compile(
     r"(?:어떻게|뭘|무엇|뭐(?:를)?|어느\s*걸|알려|도와|할까)"
 )
 
 
+# 말끝이 길을 잃고 흐려졌는지 = 학생이 막혀서 기다리는 중인지.
 def trails_off_lost(text: str) -> bool:
     """Did the utterance end on a lost self-question and then stop?"""
     return bool(_LOST_TRAILING.search(text.strip()))
 
 
+# 다음 단계를 물어보는 말인지.
 def asks_for_next_step(text: str) -> bool:
     """"응, 이 다음엔 어떻게 해야 돼?" — continue, do not grade."""
     stripped = text.strip()
@@ -105,10 +115,12 @@ def asks_for_next_step(text: str) -> bool:
     return bool(_NEXT_HELP.search(tail) or tail.rstrip().endswith("?"))
 
 
+# 방금 판정에 대해 되묻는 말인지.
 def asks_about_the_verdict(text: str) -> bool:
     return _has(text, _ABOUT_THE_VERDICT)
 
 
+# 자기가 쓴 풀이를 명시적으로 가리키는지. 카메라를 켜는 문은 이것 하나뿐이다.
 def refers_to_work(text: str) -> bool:
     """Did they explicitly name their written work AND ask for it to be looked
     at? This is the ONLY door to the camera outside a hint request — the LLM
@@ -118,16 +130,20 @@ def refers_to_work(text: str) -> bool:
     return _has(text, _WORK_WORDS) and _has(text, _CHECK_WORDS)
 
 # "5예요"는 네 토큰을 넘지 않는다. 길이가 내용만큼 중요한 이유는 아래 주석 참고.
+# 답변 꼴로 인정할 최대 토큰 수.
 _MAX_ANSWER_TOKENS = 4
 # a lone latin letter is a variable ("x는 2요"); "help" is not
 _VARIABLE_RE = re.compile(r"(?<![A-Za-z])[A-Za-z](?![A-Za-z])")
 
 
+# 모델이 돌려주는 의도 추측(라벨 + 이유).
 class IntentGuess(BaseModel):
     intent: Intent
     reason: str = ""
 
 
+# [프롬프트] 발화 의도 분류용. 네 가지 라벨의 뜻과, 사진 촬영은 비싸다는 사실을 알려 준다.
+# 규칙으로 확실히 갈리는 발화는 여기까지 오지 않는다 — 애매한 것만 이 작은 모델이 본다.
 _SYSTEM = """You decide what a Korean student's spoken utterance is FOR during a
 math tutoring session. The tutor has a camera pointed at the student's worksheet;
 taking a photo costs time, so only ask for one when the answer depends on what is
@@ -169,11 +185,13 @@ student who is working correctly is worse than staying silent.
 Return ONLY the JSON object."""
 
 
+# 키워드 중 하나라도 들어 있는지.
 def _has(text: str, keywords: tuple[str, ...]) -> bool:
     lowered = text.lower()
     return any(k in lowered for k in keywords)
 
 
+# 짧고 숫자·변수를 담은 = 답변 꼴 발화인지. 길이도 내용만큼 중요하다.
 def _answer_shaped(text: str) -> bool:
     """"5예요", "마이너스 3이요", "x는 2요" — a value, not a request.
 
@@ -186,6 +204,7 @@ def _answer_shaped(text: str) -> bool:
     return any(ch.isdigit() for ch in text) or bool(_VARIABLE_RE.search(text))
 
 
+# 규칙만으로 확실한 경우를 즉시 판정한다(비용 0). None이면 모델에게 물어본다.
 def rule_intent(text: str, *, has_problem: bool, has_pending: bool) -> Intent | None:
     """The confident cases, decided without an LLM. None means "ask the model"."""
     if has_pending and trails_off_lost(text):
@@ -225,6 +244,7 @@ def rule_intent(text: str, *, has_problem: bool, has_pending: bool) -> Intent | 
     return None
 
 
+# 의도 분류 진입점: 규칙 → (필요할 때만) 모델 → 결과를 다시 규칙으로 검증.
 def classify(
     text: str, *, has_problem: bool, has_pending: bool, llm=None
 ) -> Intent:
@@ -256,6 +276,7 @@ def classify(
     return intent
 
 
+# 세션이 실행할 수 없는 의도는 모델이 골라도 허용하지 않는다(대기 질문 없이 ANSWER 등).
 def _enforce(intent: Intent, *, has_problem: bool, has_pending: bool) -> Intent:
     """The model may not pick an intent the session cannot carry out."""
     if intent == "WORK_CHECK":
@@ -270,6 +291,7 @@ def _enforce(intent: Intent, *, has_problem: bool, has_pending: bool) -> Intent:
     return intent
 
 
+# 의도 분류기를 다른 단계처럼 의존성으로 감싼 것. 모델이 없어도(에코 모드) 규칙만으로 동작한다.
 class IntentClassifier:
     """The classifier as a dependency, like every other stage of the pipeline.
 
@@ -278,15 +300,18 @@ class IntentClassifier:
     around, and everything else stays quiet.
     """
 
+    # 분류에 쓸 모델(없어도 됨).
     def __init__(self, llm=None):
         self.llm = llm
 
+    # 규칙 + 모델로 의도를 정한다.
     def classify(self, text: str, *, has_problem: bool, has_pending: bool) -> Intent:
         return classify(
             text, has_problem=has_problem, has_pending=has_pending, llm=self.llm
         )
 
 
+# 모델에게 줄 맥락: 방금 한 말과, 문제가 있는지·대기 중인 질문이 있는지 두 가지 사실.
 def _context(text: str, has_problem: bool, has_pending: bool) -> str:
     yes_no = lambda flag: "예" if flag else "아니오"  # noqa: E731
     return "\n".join(

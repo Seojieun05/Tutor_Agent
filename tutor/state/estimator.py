@@ -20,6 +20,9 @@ from tutor.vision.recognizer import Recognition
 
 log = logging.getLogger(__name__)
 
+# [프롬프트] 학생 진단용 시스템 프롬프트. 손글씨 풀이를 기준 풀이와 대조해
+# last_correct_step(어디까지 맞았는지) · status · misconception · current_step을 뽑게 한다.
+# 핵심 지침: 기준 풀이는 하나의 정답 경로일 뿐이며, 확신이 없으면 UNCERTAIN을 쓰라는 것.
 _SYSTEM = """You diagnose where a student is stuck by comparing their handwritten work
 to a reference solution. Be conservative: use "UNCERTAIN" when unsure, never guess.
 
@@ -49,6 +52,7 @@ Rules:
 Return ONLY the JSON object."""
 
 
+# 힌트가 통했는지 판정: 단계가 나아갔거나, 오개념이 풀렸거나, 상태 등급이 올랐으면 효과 있음.
 def hint_was_effective(prev: StudentState, new: StudentState) -> bool:
     """Effective = step progress OR misconception resolved OR status improved."""
     if new.last_correct_step < prev.last_correct_step:
@@ -60,12 +64,15 @@ def hint_was_effective(prev: StudentState, new: StudentState) -> bool:
     return progress or resolved or improved
 
 
+# 학생 상태 추정기. 상태를 만들어 돌려줄 뿐이고, 저장은 세션(오케스트레이터)이 한다.
 class StudentStateEstimator:
+    # 진단 모델, 지식 DB, 사진 신뢰도 임계값을 받는다.
     def __init__(self, llm: LLMClient, db: KnowledgeDB, conf_threshold: float = 0.6):
         self.llm = llm
         self.db = db
         self.conf_threshold = conf_threshold
 
+    # 진단 본체: 결정론적 사전 검사 → 기호 계산 빠른 경로 → LLM 진단 → 결정론적 사후 규칙.
     def estimate(
         self,
         *,
@@ -140,6 +147,7 @@ class StudentStateEstimator:
             )
         return self._post_rules(state, reference, prev_state, rec, transcript)
 
+    # 사진 인식과 진단을 한 번의 호출로 합칠 때 넘기는 맥락(기준 풀이·오개념 목록·직전 상태·힌트 이력).
     def vision_context(
         self,
         *,
@@ -193,6 +201,7 @@ class StudentStateEstimator:
             parts.append(f"학생이 직전에 말한 내용: {transcript}")
         return "\n\n".join(parts)
 
+    # 인식 호출에 딸려 온 진단을 받아들일지 검사. 미심쩍으면 None을 돌려 별도 진단을 다시 돌린다.
     def accept_vision_estimate(
         self,
         state: StudentState | None,
@@ -245,6 +254,7 @@ class StudentStateEstimator:
 
     # --- deterministic pre-checks: no LLM call -------------------------------
 
+    # 기준 풀이 없이도 판단되는 것들만 보는 사전 검사(사진이 안 읽힘, 빈 종이 등).
     def precheck(
         self,
         *,
@@ -261,6 +271,7 @@ class StudentStateEstimator:
         than in a confident hint about garbage."""
         return self._pre_check(rec, prev_state, prev_work, history, transcript)
 
+    # 사전 검사 본체. 여기서 상태가 정해지면 LLM은 아예 부르지 않는다.
     def _pre_check(
         self,
         rec: Recognition,
@@ -299,6 +310,7 @@ class StudentStateEstimator:
             )
         return None
 
+    # 기호 계산 빠른 경로: 마지막 줄이 기준 단계와 같은 꼴이면 LLM 없이 진도를 확정한다.
     def _rule_based_progress(
         self,
         rec: Recognition,
@@ -313,6 +325,7 @@ class StudentStateEstimator:
         if not rec.student_work:
             return None
 
+        # 두 식이 같은 꼴인지(문제의 정의로 도함수를 대입한 경우까지 포함).
         def same(a: str, b: str) -> bool:
             # A reference may leave f'(x) symbolic while the student has
             # already inserted the derivative obtained from the problem's
@@ -377,10 +390,12 @@ class StudentStateEstimator:
             )
         return None
 
+    # 아직 답을 못 받은 힌트가 남아 있는지.
     @staticmethod
     def _hint_pending(history: list[HintRecord]) -> bool:
         return any(h.level >= 1 and h.effective is None for h in history)
 
+    # 마지막 풀이 줄이 흐릿해서 못 읽은 영역에 걸쳐 있는지.
     @staticmethod
     def _last_line_illegible(rec: Recognition) -> bool:
         if not rec.uncertain_regions or not rec.student_work:
@@ -390,6 +405,7 @@ class StudentStateEstimator:
 
     # --- LLM context (state/history prefetched by the orchestrator) ----------
 
+    # 진단 모델에 넘길 사용자 메시지 조립(문제·학생 풀이·기준 풀이·오개념 목록·직전 상태·발화).
     def _build_context(
         self,
         rec: Recognition,
@@ -435,6 +451,7 @@ class StudentStateEstimator:
 
     # --- deterministic post-rules --------------------------------------------
 
+    # 사후 규칙: 모델 판정 위에 결정론적 검사(경계 결과 확인, 산술 검사)를 덧씌운다.
     def _post_rules(
         self,
         state: StudentState,
@@ -480,6 +497,7 @@ class StudentStateEstimator:
             }
         )
 
+    # 새로 인정한 단계의 결과가 종이에도 말에도 없으면, 진도를 한 칸 되돌린다.
     @staticmethod
     def _frontier_result_check(
         lcs: int,
@@ -531,6 +549,7 @@ class StudentStateEstimator:
         )
         return lcs - 1
 
+    # 숫자가 틀렸으면 관대한 모델 판정보다 우선한다 — sympy로 값을 대조해 계산 오류로 못 박는다.
     @staticmethod
     def _arithmetic_check(
         state: StudentState,

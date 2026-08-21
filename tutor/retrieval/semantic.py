@@ -6,17 +6,22 @@ from sentence_transformers import SentenceTransformer
 
 from tutor.knowledge.db import KnowledgeDB
 
+# 임베딩 모델은 한 번만 로드해 재사용.
 @lru_cache(maxsize=1)
 def get_embedding_model(model_name: str) -> SentenceTransformer:
     return SentenceTransformer(model_name, device="cpu")
 
+# 다국어 문장 임베딩 모델.
 MODEL_NAME = "intfloat/multilingual-e5-small"
 
 ROOT = Path(__file__).resolve().parents[2]
+# 미리 만들어 둔 문제 임베딩 인덱스 파일.
 DEFAULT_INDEX_PATH = ROOT / "data" / "problem_embeddings.npz"
 
 
+# 문장 임베딩으로 비슷한 문제를 찾는 검색기(SEMANTIC 등급 매칭과 KB 툴이 함께 쓴다).
 class SemanticRetriever:
+    # 인덱스를 읽고 모델을 올린 뒤, DB 문제를 id로 바로 찾을 수 있게 담아 둔다.
     def __init__(
         self,
         db: KnowledgeDB,
@@ -37,6 +42,7 @@ class SemanticRetriever:
             for p in db.all_problems()
         }
 
+    # 질의문과 가장 가까운 문제들을 (문제, 유사도) 목록으로 돌려준다.
     def search(
         self,
         query: str,

@@ -13,6 +13,8 @@ from typing import Any, Callable, Sequence
 
 from pydantic import BaseModel
 
+# echo 모드용 가짜 학생 풀이 진행 단계. 사진이 바뀔 때마다 한 칸씩 나아가서
+# 오프라인에서도 힌트 상승·완화 시연이 된다.
 # each DISTINCT image seen by `recognize` advances one stage of this scripted
 # worksheet, so the h → n → h demo shows escalation AND fading offline
 _WORK_STAGES = [
@@ -21,6 +23,7 @@ _WORK_STAGES = [
     ["3*x = 15", "x = 5"],  # solved
 ]
 
+# 용도별 기본 응답. API 키 없이도 전체 파이프라인이 돌게 해 주는 미리 정해진 답들.
 _DEFAULTS: dict[str, dict[str, Any]] = {
     "recognize": {
         "problem_text": "다음 일차방정식을 푸시오: 3x + 5 = 20",
@@ -73,7 +76,9 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
 }
 
 
+# 실제 모델 대신 정해진 답을 돌려주는 클라이언트(오프라인 시연·테스트용).
 class EchoLLMClient:
+    # 테스트가 지정한 응답 큐를 받고, 호출된 용도 순서를 기록해 둔다.
     def __init__(self, responses: dict[str, list[BaseModel | dict[str, Any]]] | None = None):
         self._queues = {k: list(v) for k, v in (responses or {}).items()}
         self._image_stage: dict[str, int] = {}  # image hash → progress stage
@@ -83,6 +88,7 @@ class EchoLLMClient:
         # blind to the rest of its ladder is testable here without a model.
         self.prompts: list[str] = []
 
+    # 그 용도로 실제 어떤 프롬프트가 갔는지(테스트 검증용).
     def prompts_for(self, purpose: str) -> list[str]:
         """Every user message sent for one purpose, in order."""
         return [
@@ -90,6 +96,7 @@ class EchoLLMClient:
             if called == purpose
         ]
 
+    # 다음 응답 하나 꺼내기(큐가 비면 기본값, recognize는 사진에 따라 단계 진행).
     def _next(
         self, purpose: str, schema: type[BaseModel], images: Sequence[bytes] = ()
     ) -> BaseModel:
@@ -112,6 +119,7 @@ class EchoLLMClient:
             return schema.model_validate(_DEFAULTS[purpose])
         raise KeyError(f"EchoLLMClient has no canned response for purpose {purpose!r}")
 
+    # 정해진 답을 스키마에 맞춰 돌려준다.
     def complete_json(
         self,
         *,
@@ -124,6 +132,7 @@ class EchoLLMClient:
         self.prompts.append(user)
         return self._next(purpose, schema, images)
 
+    # 툴 호출 없이 같은 방식으로 응답.
     def run_with_tools(
         self,
         *,
@@ -137,6 +146,7 @@ class EchoLLMClient:
         self.prompts.append(user)
         return self._next(purpose, schema, images)
 
+    # 완성된 문장을 한 번에 흘려보내 스트리밍 경로도 그대로 테스트되게 한다.
     def complete_json_stream(
         self,
         *,

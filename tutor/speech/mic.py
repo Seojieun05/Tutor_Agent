@@ -17,15 +17,18 @@ from typing import AsyncIterator
 
 log = logging.getLogger(__name__)
 
+# sounddevice가 없을 때 보여 줄 안내.
 INSTALL_HINT = (
     'microphone capture needs sounddevice — pip install -e ".[voice]" '
     "(and the PortAudio system library, e.g. apt install libportaudio2)"
 )
 
 
+# 로컬 마이크에서 고정 크기 PCM 프레임을 뽑아 주는 스트림.
 class MicStream:
     """Async iterator over fixed-size int16 mono PCM frames."""
 
+    # 샘플레이트·프레임 크기·장치를 잡고 입력 스트림을 연다.
     def __init__(
         self,
         sample_rate: int = 16000,
@@ -42,6 +45,7 @@ class MicStream:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stream = None
 
+    # 프레임 하나의 바이트 수.
     @property
     def frame_bytes(self) -> int:
         return self.frame_samples * 2
@@ -79,6 +83,7 @@ class MicStream:
         if self.dropped:
             log.warning("dropped %d mic frame(s): consumer could not keep up", self.dropped)
 
+    # 사운드 장치 콜백: 들어온 오디오를 버퍼에 넣는다.
     def _on_audio(self, indata, frames, time_info, status) -> None:
         # PortAudio thread: hand off, never block.
         if status:
@@ -87,6 +92,7 @@ class MicStream:
         if self._loop is not None:
             self._loop.call_soon_threadsafe(self._push, data)
 
+    # 프레임 크기에 맞춰 잘라 큐에 넣는다.
     def _push(self, data: bytes) -> None:
         assert self._queue is not None
         try:

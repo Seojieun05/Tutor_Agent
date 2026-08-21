@@ -22,6 +22,8 @@ from tutor.knowledge.models import (
     Template,
 )
 
+# SQLite 스키마 전체. 개념 · 템플릿 · 문제 · 풀이 · 오개념 · 힌트 템플릿 ·
+# 개념별 사전 안내 문장 · 미리 써 둔 힌트 테이블.
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS concepts (id TEXT PRIMARY KEY, name TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS templates (id TEXT PRIMARY KEY, body TEXT NOT NULL);
@@ -62,12 +64,14 @@ CREATE TABLE IF NOT EXISTS prewritten_hints (
 """
 
 
+# 미리 써 둔 힌트에 딸린 칠판 한 줄.
 @dataclass(frozen=True)
 class StoredBoardLine:
     expr: str
     note: str = ""
 
 
+# 미리 써 둔 힌트 하나: 말할 문장 + 함께 쓸 칠판 줄.
 @dataclass(frozen=True)
 class PrewrittenHint:
     """A reviewed hint artifact: what is said and what is written."""
@@ -76,7 +80,9 @@ class PrewrittenHint:
     board: tuple[StoredBoardLine, ...] = ()
 
 
+# 도메인 지식 DB 접근 계층. 검증된 지식을 먼저 쓰기 위한 모든 조회가 여기 모여 있다.
 class KnowledgeDB:
+    # DB 파일을 열고 스키마를 만들고 마이그레이션을 돌린다.
     def __init__(self, path: str | Path = ":memory:"):
         if path != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -85,6 +91,7 @@ class KnowledgeDB:
         self._conn.commit()
         self._migrate()
 
+    # 예전 DB에 없던 컬럼·인덱스를 채워 넣는다(수식 서명, 칠판 JSON).
     def _migrate(self) -> None:
         """Backfill equations_sig for DBs written before it existed.
 
@@ -121,10 +128,12 @@ class KnowledgeDB:
 
     # --- inserts (used by the seeder and the solver candidate store) ---------
 
+    # 개념 id → 한국어 이름 등록.
     def insert_concept(self, concept_id: str, name: str) -> None:
         self._conn.execute("INSERT OR REPLACE INTO concepts VALUES (?, ?)", (concept_id, name))
         self._conn.commit()
 
+    # 풀이 템플릿 저장.
     def insert_template(self, template: Template) -> None:
         self._conn.execute(
             "INSERT OR REPLACE INTO templates VALUES (?, ?)",
@@ -132,6 +141,7 @@ class KnowledgeDB:
         )
         self._conn.commit()
 
+    # 문제 저장(정규화 텍스트·해시·수식 서명까지 함께 넣어 매칭에 쓴다).
     def insert_problem(
         self, problem: Problem, normalized_text: str, text_hash: str, verified: bool
     ) -> None:
@@ -158,6 +168,7 @@ class KnowledgeDB:
             self._conn.execute("INSERT INTO problem_concepts VALUES (?, ?)", (problem.id, c))
         self._conn.commit()
 
+    # 문제에 대한 기준 풀이 저장.
     def insert_solution(
         self, problem_id: str, solution: ReferenceSolution, verified: bool
     ) -> None:
@@ -167,9 +178,11 @@ class KnowledgeDB:
         )
         self._conn.commit()
 
+    # 모델이 만든 풀이를 미검증 상태로 저장(나중에 사람이 검토).
     def insert_unverified_solution(self, problem_id: str, solution: ReferenceSolution) -> None:
         self.insert_solution(problem_id, solution.model_copy(update={"verified": False}), False)
 
+    # 오개념 등록.
     def insert_misconception(self, m: Misconception) -> None:
         self._conn.execute(
             "INSERT OR REPLACE INTO misconceptions VALUES (?, ?, ?)",
@@ -177,6 +190,7 @@ class KnowledgeDB:
         )
         self._conn.commit()
 
+    # 힌트 템플릿 등록.
     def insert_hint_template(self, h: HintTemplate) -> None:
         self._conn.execute(
             "INSERT OR REPLACE INTO hint_templates VALUES (?, ?, ?, ?, ?)",
@@ -186,15 +200,18 @@ class KnowledgeDB:
 
     # --- queries -------------------------------------------------------------
 
+    # 전체 개념 목록(id → 이름).
     def concepts(self) -> dict[str, str]:
         return dict(self._conn.execute("SELECT id, name FROM concepts"))
 
+    # 개념 id의 한국어 이름.
     def concept_name(self, concept_id: str) -> str | None:
         row = self._conn.execute(
             "SELECT name FROM concepts WHERE id = ?", (concept_id,)
         ).fetchone()
         return row[0] if row else None
 
+    # 그 개념의 사전 안내 문장(있으면).
     def preflight_line(self, concept_id: str) -> str | None:
         """The "이런 문제군요, 이것부터 보셨나요?" line for this concept."""
         row = self._conn.execute(
@@ -202,6 +219,7 @@ class KnowledgeDB:
         ).fetchone()
         return row[0] if row else None
 
+    # 사전 안내 문장 저장 — 다음 같은 유형 문제부터 공짜로 쓰인다.
     def save_preflight_line(self, concept_id: str, line: str) -> None:
         self._conn.execute(
             "INSERT OR REPLACE INTO concept_preflight VALUES (?, ?)",
@@ -209,11 +227,13 @@ class KnowledgeDB:
         )
         self._conn.commit()
 
+    # 이 문제·단계·레벨에 미리 써 둔 힌트 문장.
     def prewritten_hint(self, problem_id: str, step: int, level: int) -> str | None:
         """The line written for exactly this problem, step and level — if any."""
         artifact = self.prewritten_hint_artifact(problem_id, step, level)
         return artifact.text if artifact is not None else None
 
+    # 미리 써 둔 힌트를 칠판 줄까지 포함해 가져온다.
     def prewritten_hint_artifact(
         self, problem_id: str, step: int, level: int
     ) -> PrewrittenHint | None:
@@ -241,6 +261,7 @@ class KnowledgeDB:
             board = ()
         return PrewrittenHint(text=row[0], board=board)
 
+    # 미리 쓴 힌트 저장(문제·단계·레벨이 키).
     def save_prewritten_hint(
         self, problem_id: str, step: int, level: int, text: str,
         board=(),
@@ -262,6 +283,7 @@ class KnowledgeDB:
         )
         self._conn.commit()
 
+    # 한 문제의 미리 쓴 힌트를 모두 지운다(다시 쓸 때).
     def clear_prewritten_hints(self, problem_id: str) -> None:
         """Steps changed → every line written against them is stale."""
         self._conn.execute(
@@ -269,12 +291,14 @@ class KnowledgeDB:
         )
         self._conn.commit()
 
+    # 정규화 텍스트 해시로 문제를 찾는다(EXACT 매칭의 첫 관문).
     def find_by_text_hash(self, text_hash: str) -> Problem | None:
         row = self._conn.execute(
             "SELECT body FROM problems WHERE text_hash = ? AND verified = 1", (text_hash,)
         ).fetchone()
         return Problem.model_validate_json(row[0]) if row else None
 
+    # 정규화 텍스트로 후보 문제들을 찾는다.
     def find_by_normalized_text(self, normalized: str, limit: int = 5) -> list[Problem]:
         """Verified problems whose stored prose equals this normalized text.
 
@@ -290,10 +314,12 @@ class KnowledgeDB:
         )
         return [Problem.model_validate_json(r[0]) for r in rows]
 
+    # 문제 전체 목록(기본은 검증된 것만).
     def all_problems(self, verified_only: bool = True) -> list[Problem]:
         q = "SELECT body FROM problems" + (" WHERE verified = 1" if verified_only else "")
         return [Problem.model_validate_json(r[0]) for r in self._conn.execute(q)]
 
+    # 수식 서명이 같은 문제 후보들(같은 문제의 다른 표기 잡기).
     def problems_by_signature(self, signature: str, limit: int = 20) -> list[Problem]:
         """Verified problems whose equations use the same numbers/variables.
 
@@ -308,24 +334,28 @@ class KnowledgeDB:
         )
         return [Problem.model_validate_json(r[0]) for r in rows]
 
+    # 힌트 템플릿이 하나라도 있는지 — 없으면 서버가 기동할 때 시드를 넣는다.
     def has_pedagogy(self) -> bool:
         """Does the DB carry the hint templates the tutor speaks from?"""
         return bool(
             self._conn.execute("SELECT 1 FROM hint_templates LIMIT 1").fetchone()
         )
 
+    # 템플릿 전체.
     def templates(self) -> list[Template]:
         return [
             Template.model_validate_json(r[0])
             for r in self._conn.execute("SELECT body FROM templates")
         ]
 
+    # id로 템플릿 하나.
     def get_template(self, template_id: str) -> Template | None:
         row = self._conn.execute(
             "SELECT body FROM templates WHERE id = ?", (template_id,)
         ).fetchone()
         return Template.model_validate_json(row[0]) if row else None
 
+    # 그 문제의 검증된 기준 풀이(없으면 None).
     def verified_solution(self, problem_id: str) -> ReferenceSolution | None:
         row = self._conn.execute(
             "SELECT body FROM solutions WHERE problem_id = ? AND verified = 1 LIMIT 1",
@@ -333,18 +363,21 @@ class KnowledgeDB:
         ).fetchone()
         return ReferenceSolution.model_validate_json(row[0]) if row else None
 
+    # 해당 개념들에 딸린 오개념 목록.
     def misconceptions_for(self, concepts: list[str]) -> list[Misconception]:
         if not concepts:
             return []
         q = f"SELECT body FROM misconceptions WHERE concept_id IN ({','.join('?' * len(concepts))})"
         return [Misconception.model_validate_json(r[0]) for r in self._conn.execute(q, concepts)]
 
+    # id로 오개념 하나.
     def get_misconception(self, misconception_id: str) -> Misconception | None:
         row = self._conn.execute(
             "SELECT body FROM misconceptions WHERE id = ?", (misconception_id,)
         ).fetchone()
         return Misconception.model_validate_json(row[0]) if row else None
 
+    # 개념·오개념·레벨에 맞는 힌트 템플릿을 우선순위대로 돌려준다.
     def hint_templates_for(
         self,
         concepts: list[str],
@@ -371,8 +404,10 @@ class KnowledgeDB:
         ]
         return matched + generic
 
+    # 문제 유형까지 같으면 얹어 주는 점수.
     PROBLEM_TYPE_BONUS = 0.1
 
+    # 개념이 겹치는 문제들을 겹침 정도 순으로(CONCEPT 등급 매칭용).
     def problems_by_concepts(
         self, concepts: set[str], limit: int = 50, problem_type: str | None = None
     ) -> list[tuple[Problem, float]]:
@@ -412,10 +447,12 @@ class KnowledgeDB:
             scored.append((problem, score))
         return sorted(scored, key=lambda t: -t[1])
 
+    # 연결 닫기.
     def close(self) -> None:
         self._conn.close()
 
 
+# 정답 객체를 저장용 JSON 문자열로.
 def answer_to_json(answer: Answer) -> str:
     return json.dumps(answer.model_dump())
 

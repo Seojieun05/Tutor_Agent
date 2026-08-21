@@ -43,13 +43,16 @@ log = logging.getLogger(__name__)
 
 M = TypeVar("M", bound=BaseModel)
 
+# 모델을 지정하지 않았을 때 쓰는 기본 Gemini 모델.
 DEFAULT_MODEL = "gemini-3.6-flash"
 
 
+# Grok과 똑같은 인터페이스를 가진 Gemini 클라이언트. 파이프라인은 누가 답했는지 알지 못한다.
 class GeminiClient:
     """An LLMClient backed by one Gemini model. Import is lazy so a missing
     google-genai costs nothing until someone actually asks for this provider."""
 
+    # 역할(role)·모델 이름·툴 레지스트리를 받아 접속을 준비한다.
     def __init__(
         self,
         settings: Settings,
@@ -72,6 +75,7 @@ class GeminiClient:
         self._client = self._connect(settings, role)
         log.info("%s: gemini %s via %s", role, self.model, self.backend)
 
+    # AI Studio 키 또는 Vertex(ADC) 중 가능한 경로로 붙는다.
     def _connect(self, settings: Settings, role: str):
         """Vertex AI if a project is configured, the AI Studio key otherwise.
 
@@ -101,6 +105,7 @@ class GeminiClient:
         self.backend = "ai studio"
         return genai.Client(api_key=settings.google_api_key)
 
+    # 한 번 호출해 JSON 하나를 받는다(이미지 첨부 가능).
     def complete_json(self, *, purpose, system, user, images=(), schema: type[M]) -> M:
         from google.genai import types
 
@@ -135,6 +140,7 @@ class GeminiClient:
         except Exception as e:  # noqa: BLE001 — same seam
             raise LLMError(f"{purpose}: gemini output failed validation: {e}") from e
 
+    # 지정한 문자열 필드를 오는 대로 흘려보내면서, 전체 JSON은 따로 검증한다.
     def complete_json_stream(
         self,
         *,
@@ -183,6 +189,7 @@ class GeminiClient:
         except Exception as e:  # noqa: BLE001
             raise LLMError(f"{purpose}: gemini streamed output failed validation: {e}") from e
 
+    # 툴이 붙어 있는 용도(evaluate 등)만 실제 함수 호출 루프를 돈다. 나머지는 단순 호출로 내려간다.
     def run_with_tools(
         self,
         *,

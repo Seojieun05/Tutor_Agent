@@ -26,6 +26,7 @@ from tutor.vision.recognizer import Recognition
 
 log = logging.getLogger(__name__)
 
+# 한국어 문장 종결 어미 판별. 문장으로 끝나는 단계 설명은 조사를 붙일 수 없어 템플릿 {step} 자리에 못 쓴다.
 # The verbal endings a Korean sentence closes on. A step description carrying
 # one cannot take a particle, so it may not fill a hint template's {step} —
 # and the same rule guards every other place a step description is glued into
@@ -39,6 +40,7 @@ SENTENCE_STEP_RE = re.compile(
     r"(?:어요|아요|여요|해요|예요|에요|돼요|네요|세요|하죠|이죠|죠|다)$"
 )
 
+# "~할 차례예요" 같은 진행 안내 말투를 잡아낸다. L1에서만 금지.
 # L1 is an invitation to think, not a progress announcer.  The latter sounds
 # like a navigation system ("곱의 미분법으로 g'(x) 쓰기 차례예요") and, more
 # importantly, hands the method to the student before asking anything.  L2-L4
@@ -49,23 +51,29 @@ STEP_ANNOUNCEMENT_RE = re.compile(
 )
 
 
+# 이 문장이 단계를 선언하고 있는지.
 def announces_step(text: str) -> bool:
     return bool(STEP_ANNOUNCEMENT_RE.search(text or ""))
 
 
+# 단계 비교에서 빼는 흔한 말들(구하기·이제·다음 …).
 _STEP_TOKEN_STOP = {
     "구하기", "쓰기", "해보기", "해볼까", "어떻게", "우선", "이제", "다음",
     "사용", "생각", "좋을까", "차례", "단계",
 }
+# x, y처럼 어느 단계에나 나오는 약한 토큰.
 _WEAK_FUTURE_TOKENS = {"x", "y"}
+# 뒷 단계를 특정할 만큼 뚜렷한 과제 명사.
 _FUTURE_TASK_TOKENS = {
     "방정식", "미분법", "미분계수", "교점", "좌표", "넓이", "절편",
 }
+# 토큰 끝에서 떼어낼 조사 목록.
 _JOSA = ("으로", "에서", "까지", "부터", "처럼", "보다", "하고", "이며",
          "에게", "한테", "께서", "과", "와", "을", "를", "이", "가", "은",
          "는", "의", "에", "로")
 
 
+# 단계 설명·힌트 문장을 비교용 토큰 집합으로 바꾼다(조사 제거 포함).
 def _step_tokens(text: str) -> set[str]:
     raw = re.findall(
         r"[a-z](?:['′]?\([^)]*\))?|[가-힣]{2,}|\d+(?:\.\d+)?",
@@ -83,6 +91,7 @@ def _step_tokens(text: str) -> set[str]:
     return out
 
 
+# 힌트가 목표보다 뒤 단계의 과제를 요구하는지 검사한다(결과가 아니라 할 일의 선행 누설).
 def mentions_future_step(
     text: str, reference: ReferenceSolution | None, target_step: int
 ) -> bool:
@@ -144,6 +153,7 @@ def mentions_future_step(
     return False
 
 
+# 명사 뒤에 을/를을 소리 기준으로 붙인다(f prime 1 → 을, x → 를).
 def _object(noun: str) -> str:
     """Attach 을/를 well enough for short Korean step descriptions.
 
@@ -169,6 +179,7 @@ def _object(noun: str) -> str:
     return noun + "을"
 
 
+# 이미 조사·연결어미로 끝나 동사로 바로 이어지는 어미들. 여기에 을/를을 또 붙이면 안 된다.
 # A step phrase that already ENDS on a connective or an adverbial particle
 # flows straight into the verb — "극댓값을 a로" + "나타내 볼까요?" — and gluing
 # another 을/를 onto it is how "밑 3으로 바꿔를" got spoken. Curated step
@@ -177,9 +188,11 @@ _FLOWING_TAILS = ("으로", "로", "에", "에서", "까지", "부터", "와", "
                   "처럼", "하고", "인지", "은지", "는지", "게")
 # narrow on purpose: 서/고/며/와 are also common noun finals (순서, 사고),
 # and a curated step is likelier to end on a noun than on those connectives
+# 연결형으로 끝나는 종성 글자들.
 _CONNECTIVE_FINAL = set("아어여해워줘봐꿔둬내")
 
 
+# 이 구절이 동사로 자연스럽게 이어지는지 = 조사를 덧붙이면 안 되는지.
 def _flows(phrase: str) -> bool:
     phrase = phrase.strip()
     if not phrase or not ("가" <= phrase[-1] <= "힣"):
@@ -187,6 +200,7 @@ def _flows(phrase: str) -> bool:
     return phrase.endswith(_FLOWING_TAILS) or phrase[-1] in _CONNECTIVE_FINAL
 
 
+# DB의 단계 라벨을 선언이 아니라 초대하는 질문으로 바꾼다. L1 기본형이자 안전 대체문.
 def guided_step_question(description: str, step_index: int) -> str:
     """Turn a DB step label into a warm invitation instead of an announcement.
 
@@ -249,6 +263,7 @@ def guided_step_question(description: str, step_index: int) -> str:
     return f"{lead} {_object(name)} 해 볼까요?"
 
 
+# 복합 단계에서 앞부분만 맞춘 학생에게 남은 뒷부분만 묻는, 모델 없이 만드는 후속 질문.
 def partial_continuation_question(
     reference: ReferenceSolution | None,
     target_step: int,
@@ -281,6 +296,7 @@ def partial_continuation_question(
     subject = f"접선 {tangent.group(1)}의 기울기" if tangent else "그 점에서의 기울기"
     return f"이제 구한 {function}'(x)를 이용해 {_object(subject)} 구해 볼까요?"
 
+# 다시 보여 달라는 말은 사진이 어디서 오는지(업로드/카메라)에 따라 달라야 한다.
 # "Show me again" means different things depending on where the picture comes
 # from, and telling a student to hold a worksheet up to a camera that is not
 # there is worse than saying nothing.
@@ -288,14 +304,19 @@ RECAPTURE_TEXTS: dict[str, str] = {
     "upload": "문제와 지금까지 쓴 풀이가 잘 보이게 사진을 다시 올려 줄래요?",
     "camera": "문제와 지금까지 쓴 풀이가 잘 보이게 카메라에 다시 보여 줄래요?",
 }
+# 입력 방식 기본값.
 DEFAULT_INPUT_MODE = "upload"
 
+# 모델을 부르지 않고 그대로 쓰는 고정 대사(재촬영 요청 · 되묻기 · 침묵).
 FIXED_ACTIONS: dict[Action, str] = {
     Action.ASK_RECAPTURE: RECAPTURE_TEXTS[DEFAULT_INPUT_MODE],
     Action.PROBE: "방금 쓴 줄을 소리 내어 읽어 줄래요? 어떻게 생각했는지 듣고 싶어요.",
     Action.WAIT: "",
 }
 
+# [프롬프트] 힌트 문장을 쓰게 하는 시스템 프롬프트.
+# 페르소나 → 레벨별 임무(L1~L4) → 말투·표기 규칙 → 칠판 규칙 → 가르치는 법 → 금지 사항 순.
+# 레벨을 고르는 것은 정책 엔진의 몫이고, 이 프롬프트는 고른 레벨을 문장으로 옮기기만 한다.
 # Written on Google's LearnLM prompt guide (PARTS: Persona, Act, Recipient,
 # Theme, Structure) and its five learning-science principles. The guide's own
 # math-coach exemplar is "use one step per turn, encourage them to explain their
@@ -440,6 +461,7 @@ NEVER
 
 Return ONLY JSON: {"hint": "...", "board": [{"expr": "...", "note": "..."}]}"""
 
+# [프롬프트] 개념 카테고리 한 줄(프리플라이트) 작성용. 특정 숫자·조건 없이 두 문장만.
 _PREFLIGHT_SYSTEM = """PERSONA
 You are a warm math tutor speaking Korean out loud to one student who has just
 shown you a problem.
@@ -466,6 +488,7 @@ sentences.
 
 Return ONLY JSON: {"hint": "..."}"""
 
+# [프롬프트] 학생이 왜 그렇게 하냐고 물었을 때의 설명용. 이유만 말하고 결과는 말하지 않는다.
 _EXPLAIN_SYSTEM = """PERSONA
 You are a warm math tutor speaking Korean out loud to one student.
 
@@ -495,6 +518,7 @@ HOW TO TEACH
 
 Return ONLY JSON: {"hint": "..."}"""
 
+# 턴당 맞장구는 한 번. 힌트가 또 "네,"로 시작하지 않도록 앞머리를 떼어낸다.
 # One acknowledgement per turn. The evaluator already reacted ("맞아요, 그렇게
 # 하면 돼요!"), so a hint that opens with its own "네," produces the doubled
 # "맞아요, 그렇게 하면 돼요! 네, 그렇게 하면 돼요." Prompts alone do not hold
@@ -504,9 +528,11 @@ _ACK_WORDS = (
     r"훌륭해요|훌륭합니다|잘했어요|잘하셨어요|정확해요|정확합니다|음+|아+|오+|와+"
 )
 # Punctuation after the word is required, so "네 번째", "아래", "오른쪽" survive.
+# 문장 맨 앞의 맞장구 + 구두점을 잡는 정규식.
 _ACK_PREFIX_RE = re.compile(rf"^\s*(?:{_ACK_WORDS})\s*[,!.…~·]+\s*")
 
 
+# 문장 앞의 맞장구를 떼어낸다 — 그 말은 이미 리액션에서 했다.
 def strip_leading_acknowledgement(text: str, rounds: int = 2) -> str:
     """Drop a leading '네,' / '맞아요!' — someone else already said it."""
     out = text
@@ -518,6 +544,7 @@ def strip_leading_acknowledgement(text: str, rounds: int = 2) -> str:
     return out or text
 
 
+# 칠판 한 줄: 수식(expr)과 그 옆에 적는 짧은 한국어 메모(note).
 class BoardLine(BaseModel):
     """One thing written on the board: the mathematics, and the few words a
     tutor writes beside it. The note is what makes a board look like a person
@@ -528,6 +555,7 @@ class BoardLine(BaseModel):
     note: str = ""
 
 
+# 힌트 생성 모델이 돌려주는 JSON 스키마: 말할 문장 + 칠판 줄 + (선택) 그릴 함수.
 class PhrasedHint(BaseModel):
     hint: str
     # what the tutor writes while saying it: 0-2 lines, screened by the same
@@ -538,6 +566,7 @@ class PhrasedHint(BaseModel):
     # hint is being SPOKEN and can therefore read it. Two deciders would draw
     # two different pictures for one sentence.
 
+    # 모델이 문자열 배열로만 답해도 칠판 줄로 받아 준다.
     @field_validator("board", mode="before")
     @classmethod
     def _accept_bare_expressions(cls, value):
@@ -550,15 +579,19 @@ class PhrasedHint(BaseModel):
     graph: list[str] = []
 
 
+# 한글 포함 여부. 칠판 수식에 한글이 섞이면 안 된다.
 _HANGUL = re.compile(r"[가-힣]")
+# 칠판에 쓸 값어치가 있는 식인지: 연산자나 등호가 최소 하나는 있어야 한다.
 # a board EXPRESSION is a piece of MATHEMATICS: something related or operated
 # on. A bare term ("a_1") says nothing, and Korean belongs in the note.
 _BOARD_WORTHY = re.compile(r"[=<>+\-*/^]")
+# 메모 길이 상한. 이보다 길면 라벨이 아니라 문장이다.
 # A note is a label, not a sentence. Past this it is the hint said twice, and
 # the board turns back into a transcript.
 NOTE_MAX = 28
 
 
+# 칠판 줄 정리: 한글 섞인 식·맨 항 제거, 너무 긴 메모 삭제, 최대 두 줄.
 def _clean_board(board: tuple["BoardLine", ...]) -> tuple["BoardLine", ...]:
     lines = []
     for item in board:
@@ -573,6 +606,7 @@ def _clean_board(board: tuple["BoardLine", ...]) -> tuple["BoardLine", ...]:
     return tuple(lines[:2])
 
 
+# 힌트 문자열 + 함께 만들어진 칠판 줄을 들고 다니는 str 서브클래스.
 class SpokenHint(str):
     """The hint text, carrying the board it was phrased with.
 
@@ -586,12 +620,14 @@ class SpokenHint(str):
     board: tuple["BoardLine", ...] = ()
 
 
+# 텍스트에 칠판 줄을 붙여 SpokenHint로 만든다.
 def _with_board(text: str, board: tuple["BoardLine", ...]) -> "SpokenHint":
     out = SpokenHint(text)
     out.board = board
     return out
 
 
+# 학생 눈앞 종이에 이미 적혀 있는 것들. 누설 판정에서 이미 아는 값의 기준이 된다.
 def visible_to_student(rec: Recognition | None) -> list[str]:
     """What is printed on the page in front of them.
 
@@ -605,6 +641,7 @@ def visible_to_student(rec: Recognition | None) -> list[str]:
     return [rec.problem_text, *rec.equations, *rec.choices, *rec.diagram_conditions]
 
 
+# 칠판 검열: 학생이 쓴 줄 베끼기 금지, 정답·앞선 결과가 섞이면 칠판 전체를 비운다.
 def _screen_board(
     board: tuple[BoardLine, ...],
     reference: ReferenceSolution | None,
@@ -636,6 +673,7 @@ def _screen_board(
     return board
 
 
+# 스트리밍 힌트 안전장치: 단어 몇 개를 물고 있다가 누설이 없다고 확인된 것만 내보낸다.
 class SafeWordEmitter:
     """Commit only answer-screened Korean word units to a live consumer.
 
@@ -646,7 +684,9 @@ class SafeWordEmitter:
     is closed with a generic Socratic question.
     """
 
+    # 검사용으로 붙잡아 두는 단어 수.
     HOLD_WORDS = 4
+    # 도중에 끊겼을 때, 이미 나간 문장을 학생에게 자연스럽게 넘겨주는 마무리 문구.
     # The closure has to CONTINUE the amputated sentence, not change the
     # subject: words already spoken cannot be unsaid, so a blocked stream
     # left "기울기가 k이고 한 점을 지나는 직선은 y …" dangling and then
@@ -655,8 +695,10 @@ class SafeWordEmitter:
     # and IS the cloze prompt a tutor would use there.
     CONTINUE = "이 다음은 직접 이어서 완성해 볼까요?"
     # blocked before anything left: no sentence to hand over, so open one
+    # 한 단어도 나가기 전에 막혔을 때 새로 여는 문장.
     FRESH = "이건 직접 찾아보는 게 좋겠어요. 지금 단계에서 무엇부터 확인하면 좋을까요?"
 
+    # 스트림 상태 초기화. 무엇을 금지할지(단계 선언 · 앞선 단계 · 단계 결과)를 플래그로 받는다.
     def __init__(
         self,
         emit: Callable[[str], None],
@@ -681,6 +723,7 @@ class SafeWordEmitter:
         self.forbid_future_step = forbid_future_step
         self.forbid_step_result = forbid_step_result
 
+    # 지금까지 만들어진 문장이 금지 규칙 중 하나라도 어기는지.
     def _unsafe(self, text: str) -> bool:
         if self.forbid_step_announcement and announces_step(text):
             return True
@@ -698,12 +741,14 @@ class SafeWordEmitter:
             text, self.reference, self.target_step, self.given
         )
 
+    # 검사를 통과한 조각을 실제로 밖으로 내보낸다.
     def _release(self, text: str) -> None:
         if not text:
             return
         self.emit(text)
         self.committed += text
 
+    # 모델이 흘려보낸 조각을 단어 단위로 끊어 검사하고, 안전한 것부터 순서대로 내보낸다.
     def feed(self, delta: str) -> None:
         if not delta:
             return
@@ -728,6 +773,7 @@ class SafeWordEmitter:
             while len(self.pending) > self.HOLD_WORDS:
                 self._release(self.pending.pop(0))
 
+    # 마무리: 남은 꼬리를 내보내거나, 막혔다면 안전한 마무리 문장으로 문장을 닫는다.
     def finish(self, full_text: str) -> tuple[str, bool]:
         """Flush a clean tail, or safely close a stream whose tail was blocked."""
         full_text = full_text.strip()
@@ -755,7 +801,9 @@ class SafeWordEmitter:
         return full_text, False
 
 
+# 힌트 생성기. 고정 대사 → 미리 쓴 문장 → 단계 초대 질문 → DB 템플릿 → 모델 생성 순으로 내려간다.
 class HintGenerator:
+    # 입력 방식에 맞는 재촬영 문구를 골라 두고 LLM·지식 DB를 붙인다.
     def __init__(self, llm: LLMClient, db: KnowledgeDB, input_mode: str = DEFAULT_INPUT_MODE):
         self.llm = llm
         self.db = db
@@ -764,6 +812,7 @@ class HintGenerator:
             input_mode, FIXED_ACTIONS[Action.ASK_RECAPTURE]
         )
 
+    # 힌트 한 문장 생성. 검증된 지식을 먼저 쓰고, 마지막에 반드시 정답 누설 검사를 통과시킨다.
     def generate(
         self,
         decision: Decision,
@@ -1018,6 +1067,7 @@ class HintGenerator:
         # Below L4 the step's OWN result is off limits too — L4 is the level
         # that exists to say it. Live, a correcting L2 for g'(x) handed over
         # "첫 번째 괄호를 3 x 제곱 빼기 2로 고쳐서", which is the step.
+        # 이 문장이 정답이나 현재 단계의 결과를 말하는지(L4 미만은 단계 결과도 금지).
         def unsafe(candidate: str) -> bool:
             return leaks_answer(candidate, reference, decision.target_step, seen) or (
                 decision.level < 4
@@ -1053,6 +1103,7 @@ class HintGenerator:
                               may_state_step=decision.level >= 4)
         return _with_board(text, board)
 
+    # 알려진 문제의 특정 단계 L1/L2 문장을 수업 전에 미리 써 둔다. 실시간 경로와 같은 프롬프트·검열.
     def prewrite(
         self,
         *,
@@ -1090,6 +1141,7 @@ class HintGenerator:
         slots = self._slots(decision, match, reference)
         seen = visible_to_student(rec)
 
+        # 미리 쓴 문장이 모든 검열을 통과하는지. 통과 못 하면 None.
         def screened(text: str) -> str | None:
             # a phrasing model sometimes wraps math in TeX dollars ("$x$의
             # 범위"), which the page would show literally
@@ -1119,6 +1171,7 @@ class HintGenerator:
             line = screened(text)
         return line
 
+    # DB에 없는 개념의 카테고리 문장을 한 번 만들어 돌려준다(저장은 호출한 쪽에서).
     def write_preflight(self, concept_name: str) -> str:
         """The category line for a concept the DB has never described.
 
@@ -1135,6 +1188,7 @@ class HintGenerator:
         )
         return " ".join(result.hint.split())
 
+    # 학생의 질문에 답하는 설명 생성. 단계의 이유는 말하되 결과·정답은 말하지 않는다.
     def explain(
         self,
         *,
@@ -1214,6 +1268,7 @@ class HintGenerator:
             )
         return text
 
+    # 템플릿 치환용 슬롯 수집: 문제 파라미터, 매칭 바인딩, 목표 단계 설명.
     def _slots(
         self,
         decision: Decision,
@@ -1237,6 +1292,7 @@ class HintGenerator:
                 slots.setdefault("step", target.description)
         return slots
 
+    # 문장 생성 모델 호출부. 무엇을 보여줄지를 여기서 고른다 — 정답과 뒷 단계는 애초에 넣지 않는다.
     def _phrase(
         self,
         decision: Decision,
@@ -1434,12 +1490,14 @@ class HintGenerator:
         board = tuple(b for b in result.board if b.expr and b.expr.strip())
         return result.hint.strip(), board
 
+    # 이 문제의 화이트리스트 개념 목록(태거 결과 우선, 매칭 결과 차선).
     def _concepts_for(self, match: MatchResult, rec: Recognition | None) -> list[str]:
         """Whitelisted concepts of the problem, tagger first, matcher second."""
         if rec is not None and rec.concepts:
             return rec.concepts
         return match.concepts
 
+    # 모든 경로가 막혔을 때 쓰는 최후의 문장(레벨별 범용 템플릿).
     def _generic_fallback(self, decision: Decision, slots: dict[str, str]) -> str:
         for template in self.db.hint_templates_for([], None, decision.level):
             if template.concept_id is None and template.misconception_id is None:

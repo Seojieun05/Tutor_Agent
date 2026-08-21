@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+# 학생 상태 판정값. 맞음 / 계산 오류 / 개념 오류 / 절차 오류 / 잘못 읽음 / 막힘 / 판단 불가.
 Status = Literal[
     "CORRECT",
     "CALCULATION_ERROR",
@@ -30,6 +31,7 @@ STATUS_RANK: dict[str, int] = {
 }
 
 
+# 학생 상태 한 장: 지금 단계, 맞게 끝낸 마지막 단계, 판정, 오개념, 시도 횟수, 직전 힌트 효과.
 class StudentState(BaseModel):
     current_step: str = ""
     last_correct_step: int = 0

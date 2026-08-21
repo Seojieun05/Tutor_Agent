@@ -18,11 +18,14 @@ import numpy as np
 log = logging.getLogger(__name__)
 
 # Frame sizes Silero accepts, by sample rate.
+# Silero가 요구하는 샘플레이트별 프레임 크기.
 FRAME_SAMPLES = {16000: 512, 8000: 256}
 
+# 패키지가 없을 때 보여 줄 안내.
 INSTALL_HINT = 'Silero VAD not installed — pip install -e ".[voice]"'
 
 
+# 이 샘플레이트에서 프레임 하나의 샘플 수.
 def frame_samples(sample_rate: int) -> int:
     try:
         return FRAME_SAMPLES[sample_rate]
@@ -32,10 +35,12 @@ def frame_samples(sample_rate: int) -> int:
         ) from None
 
 
+# Silero 음성 검출기 래퍼. 프레임 하나가 말소리인지 확률로 답한다.
 class SileroVAD:
     """Speech/no-speech per frame, with the same ``is_speech`` shape webrtcvad
     has — the TurnDetector only needs that much and stays swappable."""
 
+    # 모델을 올리고 문턱값을 잡는다.
     def __init__(self, threshold: float = 0.5, sample_rate: int = 16000):
         self.threshold = threshold
         self.sample_rate = sample_rate
@@ -54,6 +59,7 @@ class SileroVAD:
             threshold,
         )
 
+    # 이 프레임이 말소리일 확률.
     def speech_prob(self, frame: bytes) -> float:
         expected = self.frame_samples * 2
         if len(frame) != expected:
@@ -65,8 +71,10 @@ class SileroVAD:
         with self._torch.no_grad():
             return float(self._model(self._torch.from_numpy(audio), self.sample_rate).item())
 
+    # 확률이 문턱을 넘는지.
     def is_speech(self, frame: bytes, sample_rate: int | None = None) -> bool:
         return self.speech_prob(frame) >= self.threshold
 
+    # 내부 RNN 상태 초기화(발화가 바뀔 때).
     def reset(self) -> None:
         self._model.reset_states()

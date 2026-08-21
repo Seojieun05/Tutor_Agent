@@ -31,10 +31,12 @@ import sympy
 from tutor.knowledge import mathnorm
 from tutor.knowledge.models import ReferenceSolution
 
+# 문장에서 값을 실어 나를 수 있는 조각들을 잡는 정규식(숫자 · 대입식 · 일반 식).
 _NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 _ASSIGN_RE = re.compile(r"[a-zA-Z]\s*=\s*([-\d./*+^() a-zA-Z]+)")
 _EXPR_RE = re.compile(r"[-\d./*+^() a-zA-Z_]{3,}")
 
+# "답은 N" 처럼 숫자를 정답으로 제시하는 말투. 문제지에 이미 보이는 숫자라도 이렇게 말하면 누설이다.
 # "the answer is N", in the forms a Korean tutor actually says it. A number in
 # any of these is being presented as the result, whether or not it is visible
 # in the problem.
@@ -45,6 +47,8 @@ _ANNOUNCE_RES = (
 )
 
 
+# 문장에서 찾아낸 값 후보들을 '어떻게 말했는지'로 나눠 담는다.
+# 그냥 언급 / 계산해서 / 식으로 / 대입해서 / 정답이라고 선언해서.
 @dataclass
 class _Candidates:
     bare: list[str] = field(default_factory=list)      # plain literals in prose
@@ -54,6 +58,7 @@ class _Candidates:
     announced: list[str] = field(default_factory=list) # stated as the answer
 
 
+# 문장을 훑어 값 후보를 종류별로 모은다.
 def _candidates(text: str) -> _Candidates:
     """Everything in the hint that could carry a value, sorted by how it says it."""
     found = _Candidates()
@@ -77,6 +82,7 @@ def _candidates(text: str) -> _Candidates:
     return found
 
 
+# 학생이 이미 종이에서 볼 수 있는 숫자들(이건 말해도 누설이 아니다).
 def _visible_numbers(given: Iterable[str]) -> list[str]:
     """The numbers the student can read off the problem in front of them."""
     numbers: list[str] = []
@@ -87,6 +93,7 @@ def _visible_numbers(given: Iterable[str]) -> list[str]:
     return numbers
 
 
+# 두 값이 수치적으로 같은지.
 def _numeric_equal(a: str, b: str) -> bool:
     try:
         return sympy.simplify(sympy.sympify(a) - sympy.sympify(b)) == 0
@@ -94,6 +101,7 @@ def _numeric_equal(a: str, b: str) -> bool:
         return False
 
 
+# 이 문장을 말하면 정답이 새는가? 최종 정답과 목표 단계보다 뒤 단계의 결과를 막는다.
 def leaks_answer(
     text: str,
     reference: ReferenceSolution,
@@ -112,6 +120,7 @@ def leaks_answer(
     found = _candidates(text)
     visible = _visible_numbers(given)
 
+    # 그 값을 '정답으로' 말했는지 · 계산해서 냈는지 · 식으로 썼는지.
     def says_the_value(value: str) -> bool:
         # Presented as the result, computed, or written as an expression:
         # all leaks regardless of what is printed on the worksheet.
@@ -157,6 +166,7 @@ def leaks_answer(
         if piece.strip()
     ]
 
+    # 그 조각이 이미 학생 종이에 있는 것인지(있으면 말해도 된다).
     def already_theirs(piece: str) -> bool:
         return any(
             mathnorm.expressions_equivalent(piece, reached)
@@ -193,15 +203,18 @@ def leaks_answer(
 # The multiplication a tutor never says out loud: "3 x 제곱" and "3 곱하기 x
 # 제곱" are the same phrase, and a hint that hands over a result writes it
 # either way. Spaces go too, so 띄어쓰기 cannot hide a leak.
+# 곱하기·띄어쓰기 차이로 누설을 숨기지 못하게, 비교 전에 지우는 것들.
 _SPOKEN_NOISE = re.compile(r"곱하기|\s+")
 
 
+# 말한 형태로 바꿔 공백·곱하기를 지운 비교용 지문.
 def _spoken_fingerprint(text: str) -> str:
     from tutor.speech.mathspeak import speakable
 
     return _SPOKEN_NOISE.sub("", speakable(text or ""))
 
 
+# 한 단계에서 '학생이 직접 만들어 내야 하는 값'에 해당하는 조각들.
 def _protected_parts(step_expression: str) -> list[str]:
     """The pieces of a step whose VALUE is the thing the student must produce.
 
@@ -236,6 +249,7 @@ def _protected_parts(step_expression: str) -> list[str]:
 
 
 
+# 지금 겨냥한 단계의 결과 자체를 말해 버렸는가? L4만 그래도 되고, 그 아래는 금지.
 def states_step_result(
     text: str,
     reference: ReferenceSolution,

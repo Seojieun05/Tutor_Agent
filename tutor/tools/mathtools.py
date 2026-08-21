@@ -18,6 +18,7 @@ import sympy
 from tutor.knowledge import mathnorm
 
 
+# sympy로 식 하나를 계산한다(모델이 스스로 검산할 때 쓰는 툴).
 def compute(expression: str) -> dict[str, Any]:
     """Simplify a bare expression, or solve a one-variable equation.
 
@@ -44,6 +45,7 @@ def compute(expression: str) -> dict[str, Any]:
         return {"error": f"compute failed: {e}"}
 
 
+# 두 식이 수학적으로 같은지 판정한다(말로 한 답 채점의 핵심 툴).
 def check_equivalence(a: str, b: str) -> dict[str, Any]:
     """Are two equations (or two bare expressions) the same mathematical claim?
 

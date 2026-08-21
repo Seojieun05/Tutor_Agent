@@ -17,23 +17,31 @@ from sympy.parsing.sympy_parser import (
     standard_transformations,
 )
 
+# sympy 파서 옵션: 생략된 곱셈(2x)과 ^ 거듭제곱을 받아들인다.
 _TRANSFORMS = standard_transformations + (implicit_multiplication_application, convert_xor)
 
+# d/dx( … ) 표기를 잡는 정규식.
 _DERIV_PREFIX = re.compile(r"d\s*/\s*d([a-zA-Z])\s*\(")
+# f'(1) 같은 프라임 호출 표기.
 _PRIME_CALL = re.compile(
     r"\b([A-Za-z][A-Za-z0-9_]*)\s*(['′]+)\s*\(\s*([A-Za-z0-9_.+-]+)\s*\)"
 )
+# f(x) = … 함수 정의.
 _FUNCTION_DEFINITION = re.compile(
     r"^\s*([A-Za-z][A-Za-z0-9_]*)\s*\(\s*([A-Za-z])\s*\)\s*=\s*(.+?)\s*$"
 )
+# 함수 호출 꼴.
 _FUNCTION_CALL = re.compile(r"\b[A-Za-z][A-Za-z0-9_]*\s*\(")
+# 유니코드 수학 기호 → ASCII 대응표.
 _UNICODE_MATH = {"×": "*", "÷": "/", "−": "-", "²": "**2", "³": "**3", "√": "sqrt"}
 
 
+# 식을 파싱하지 못했을 때.
 class ParseError(Exception):
     pass
 
 
+# 텍스트 정규화. 저장된 text_hash가 여기서 나오므로 결과가 절대 바뀌면 안 된다.
 def normalize_text(s: str) -> str:
     # map math glyphs BEFORE NFKC — NFKC folds '²' to a plain '2'
     for k, v in _UNICODE_MATH.items():
@@ -47,10 +55,12 @@ def normalize_text(s: str) -> str:
 # VLM transcribes printed AB-with-a-bar this way, a stored equation writes the
 # bare length, and left alone SymPy reads a function call — every equivalence
 # against the stored form then silently fails.
+# overline(AB) 표기.
 _OVERLINE_CALL = re.compile(r"\boverline\s*\(\s*([A-Za-z][A-Za-z0-9_]*)\s*\)")
 
 # Superscript POWERS a printed page uses and NFKC folds flat: aˣ must read
 # a^x, not ax — the bare fold loses the power and with it the problem's shape.
+# 위첨자 숫자 → ** 표기.
 _SUPERSCRIPT_POWERS = {
     "ˣ": "^x", "ʸ": "^y", "ⁿ": "^n",
     "⁰": "^0", "¹": "^1", "²": "^2", "³": "^3", "⁴": "^4",
@@ -58,6 +68,7 @@ _SUPERSCRIPT_POWERS = {
 }
 
 
+# 표기 방식에 무관한 본문 동일성 키. 같은 인쇄물을 다르게 읽어도 같은 문자열이 되게 한다.
 def identity_text(s: str) -> str:
     """Rendering-blind prose identity: the same printed problem, however read.
 
@@ -76,6 +87,7 @@ def identity_text(s: str) -> str:
     return re.sub(r"\s+", "", s)
 
 
+# 한글 한두 글자 오인식은 눈감아 주는 본문 동일 판정(숫자·기호·길이는 정확히 같아야 한다).
 def texts_identical_enough(a: str, b: str, max_hangul_substitutions: int = 2) -> bool:
     """identity_text equality, forgiving OCR-grade syllable slips.
 
@@ -103,6 +115,7 @@ def texts_identical_enough(a: str, b: str, max_hangul_substitutions: int = 2) ->
     return True
 
 
+# d/dx(...)를 sympy의 Derivative(..., x)로 바꾼다(괄호 짝을 세면서).
 def _rewrite_derivatives(s: str) -> str:
     """d/dx(...) → Derivative(..., x), with balanced-paren scanning so trailing
     text like 'd/dx(x^3) + d/dx(2x)' is not swallowed by a greedy match."""
@@ -123,6 +136,7 @@ def _rewrite_derivatives(s: str) -> str:
         s = f"{s[:m.start()]}Derivative({inner}, {m.group(1)}){s[i:]}"
 
 
+# f'(1) 같은 표기를 sympy가 이해하는 형태로 바꾼다.
 def _rewrite_prime_calls(s: str) -> str:
     """Turn schoolbook ``f'(x)`` into a parseable atomic symbol.
 
@@ -143,6 +157,7 @@ def _rewrite_prime_calls(s: str) -> str:
     return _PRIME_CALL.sub(replacement, s)
 
 
+# 파싱 전 공통 전처리(유니코드 정리 + 도함수·프라임 표기 변환).
 def _preprocess(s: str) -> str:
     for k, v in _UNICODE_MATH.items():
         s = s.replace(k, v)
@@ -150,6 +165,7 @@ def _preprocess(s: str) -> str:
     return _rewrite_prime_calls(_rewrite_derivatives(s)).strip()
 
 
+# 문자열을 sympy 식으로. 실패하면 ParseError.
 def parse_expression(s: str) -> sympy.Expr:
     try:
         expr = parse_expr(_preprocess(s), transformations=_TRANSFORMS)
@@ -164,9 +180,11 @@ def parse_expression(s: str) -> sympy.Expr:
 # number on the left, e.g. "x", "f'(1)", "g(2)". "3*x" is not a claim — it is
 # an equation still being solved, and comparing it to the final answer would
 # flag every correct intermediate step.
+# 값을 '주장하는' 좌변 꼴(x, f'(1), g(2)). 3*x 같은 건 아직 푸는 중이라 주장이 아니다.
 _CLAIM_LHS = re.compile(r"^[A-Za-z][A-Za-z0-9_]*\s*['′]*\s*(?:\(\s*-?\d+(?:\.\d+)?\s*\))?$")
 
 
+# 이 줄이 주장하는 숫자를 뽑는다. 모델 판단이 아니라 산술로 오답을 잡는 근거.
 def numeric_claim(line: str) -> float | None:
     """The number this work line claims, when it makes an arithmetic claim.
 
@@ -197,6 +215,7 @@ def numeric_claim(line: str) -> float | None:
         return None
 
 
+# 등식을 (좌변-우변, 등식여부)로 바꾼다.
 def parse_equation(s: str) -> tuple[sympy.Expr, bool]:
     """Return (residual expression, is_equation). For 'lhs = rhs' the residual is lhs - rhs."""
     s = _preprocess(s)
@@ -208,6 +227,7 @@ def parse_equation(s: str) -> tuple[sympy.Expr, bool]:
     return parse_expression(s), False
 
 
+# 변수 이름을 표준화해 3*y+5와 3*x+5를 같게 본다.
 def _canonical(expr: sympy.Expr) -> sympy.Expr:
     """Rename free symbols to a canonical sequence so 3*y+5 == 3*x+5."""
     symbols = sorted(expr.free_symbols, key=lambda s: s.name)
@@ -216,6 +236,7 @@ def _canonical(expr: sympy.Expr) -> sympy.Expr:
     )
 
 
+# 콤마로 이어진 여러 식을 각각 (잔차식, 등식여부) 쌍으로.
 def _residual_pairs(s: str) -> list[tuple[sympy.Expr, bool]]:
     """One (residual, is_equation) per claim in the string.
 
@@ -234,6 +255,7 @@ def _residual_pairs(s: str) -> list[tuple[sympy.Expr, bool]]:
     return [(x - y, True) for x, y in zip(exprs, exprs[1:])]
 
 
+# 두 잔차식이 같은지(배수 허용 여부는 인자로).
 def _residuals_equivalent(
     ra: sympy.Expr, rb: sympy.Expr, is_eq: bool, allow_scale: bool
 ) -> bool:
@@ -251,6 +273,7 @@ def _residuals_equivalent(
     return False
 
 
+# 공백·곱셈기호만 지운 값싼 비교용 문자열. 같은 줄을 다르게 쓴 것인지 볼 때 쓴다.
 def compact(s: str) -> str:
     """Whitespace and multiplication signs removed — enough to tell "the same
     line, rewritten" from "a different claim", at none of the cost or reach of
@@ -260,6 +283,7 @@ def compact(s: str) -> str:
     return re.sub(r"[\s·*]", "", s)
 
 
+# 이 줄을 기계적으로 비교할 수 있는지. 다른 문제라는 증거와 비교 실패를 구분하려고 쓴다.
 def parseable_claims(s: str) -> bool:
     """Can this line be compared mechanically at all? The session uses this to
     tell "the equations DISAGREE" (positive evidence of a different problem)
@@ -271,6 +295,7 @@ def parseable_claims(s: str) -> bool:
         return False
 
 
+# 두 식이 수학적으로 같은지. allow_scale=False면 배수까지는 인정하지 않는다(EXACT 등급용).
 def equations_equivalent(a: str, b: str, allow_scale: bool = True) -> bool:
     """allow_scale=True treats scalar multiples (6x+10=40 vs 3x+5=20) as
     equivalent. allow_scale=False accepts only the same equation (side swap
@@ -289,9 +314,11 @@ def equations_equivalent(a: str, b: str, allow_scale: bool = True) -> bool:
     )
 
 
+# 숫자 토큰.
 _NUMBER_TOKEN_RE = re.compile(r"\d+(?:\.\d+)?")
 
 
+# 값싼 인덱스 키: 식을 이루는 숫자와 변수들. EXACT 후보를 좁힐 때 쓴다.
 def equations_signature(equations: list[str]) -> str:
     """Cheap index key: the numbers and variables an equation is made of.
 
@@ -312,6 +339,7 @@ def equations_signature(equations: list[str]) -> str:
     return "|".join(parts)
 
 
+# '쓰인 모양'이 같은지. 3*x+5=20과 3*x=15는 수학적으로 같아도 다른 교육 단계라 구분한다.
 def equations_same_form(a: str, b: str) -> bool:
     """Same WRITTEN equation, up to per-side simplification and side swap.
 
@@ -339,6 +367,7 @@ def equations_same_form(a: str, b: str) -> bool:
         return False
 
 
+# 문제에 적힌 함수 정의로부터 안전하게 유도되는 f'(x) 치환 목록.
 def derivative_substitutions(equations: list[str]) -> dict[tuple[str, str], str]:
     """Derive safe ``f'(x)`` substitutions from explicit function definitions.
 
@@ -364,6 +393,7 @@ def derivative_substitutions(equations: list[str]) -> dict[tuple[str, str], str]
     return substitutions
 
 
+# 문제가 증명해 주는 도함수 치환까지 적용한 뒤의 같은 모양 판정.
 def equations_same_form_with_derivatives(
     a: str, b: str, definitions: list[str]
 ) -> bool:
@@ -413,6 +443,7 @@ def equations_same_form_with_derivatives(
     return equations_same_form(apply(a), apply(b))
 
 
+# 등식을 좌변·우변 문자열로 쪼갠다.
 def _split_sides(s: str) -> tuple[str, str] | None:
     s = _preprocess(s)
     if "=" not in s:
@@ -421,6 +452,7 @@ def _split_sides(s: str) -> tuple[str, str] | None:
     return lhs, rhs
 
 
+# 식이 템플릿 패턴에 맞는지 보고, 맞으면 파라미터 바인딩을 돌려준다.
 def match_template(equation: str, pattern: str, params: list[str]) -> dict[str, str] | None:
     """Match a recognized equation against a parameterized pattern (e.g. 'a*x + b = c').
 
@@ -478,12 +510,14 @@ def match_template(equation: str, pattern: str, params: list[str]) -> dict[str, 
         return None
 
 
+# 바인딩 값을 문자열로.
 def _stringify(bindings: dict | None) -> dict[str, str] | None:
     if bindings is None:
         return None
     return {k: str(v) for k, v in bindings.items()}
 
 
+# 템플릿 문자열에 바인딩을 대입해 실제 식으로.
 def instantiate(template_str: str, bindings: dict[str, str]) -> str:
     """Substitute numeric bindings into an expression/equation template string."""
     subs = {sympy.Symbol(k): sympy.sympify(v) for k, v in bindings.items()}
@@ -497,6 +531,7 @@ def instantiate(template_str: str, bindings: dict[str, str]) -> str:
     return f"{one(sides[0])} = {one(sides[1])}"
 
 
+# 식에 변수가 정확히 하나면 그 변수를.
 def _single_var(expr: sympy.Expr) -> sympy.Symbol:
     symbols = expr.free_symbols
     if len(symbols) != 1:
@@ -504,6 +539,7 @@ def _single_var(expr: sympy.Expr) -> sympy.Symbol:
     return next(iter(symbols))
 
 
+# 식을 풀어 정답 값을 계산한다(종류에 따라 값/근의 집합/식).
 def compute_answer(equation: str, kind: str) -> str | list[str]:
     """Compute the answer of an instantiated equation for the given answer kind."""
     residual, is_eq = parse_equation(equation)
@@ -522,6 +558,7 @@ def compute_answer(equation: str, kind: str) -> str | list[str]:
     raise ParseError(f"unknown answer kind {kind!r}")
 
 
+# 주어진 답이 실제로 식을 만족하는지 sympy로 검산. 저장 여부를 가르는 마지막 관문.
 def verify_answer(equations: list[str], kind: str, value: str | list[str]) -> bool:
     """Check a claimed answer against the problem's equations with sympy."""
     try:
@@ -565,6 +602,7 @@ def verify_answer(equations: list[str], kind: str, value: str | list[str]) -> bo
         return False
 
 
+# 등호 없는 두 식이 같은지.
 def expressions_equivalent(a: str, b: str) -> bool:
     try:
         ea, eb = parse_expression(a), parse_expression(b)

@@ -1193,6 +1193,7 @@
 const $ = (id) => document.getElementById(id);
 const setStatus = (m) => { $("status").textContent = m; };
 
+// --- 상수와 상태: 샘플레이트, 프레임 타입, 현재 턴 상태 ---
 const SAMPLE_RATE = 16000;
 const FRAME_SAMPLES = 512;          // Silero's window at 16 kHz (32 ms)
 
@@ -1217,6 +1218,7 @@ const micOpen = () =>
 const STILL = window.matchMedia("(prefers-reduced-motion: reduce)");
 
 // --- the project's binary framing, in ~15 lines ----------------------------
+// 바이너리 프레임 만들기: [타입 1B][헤더 길이 4B][JSON 헤더][페이로드].
 function encodeFrame(type, header, payload) {
   const head = new TextEncoder().encode(JSON.stringify(header));
   const out = new Uint8Array(5 + head.length + payload.length);
@@ -1227,6 +1229,7 @@ function encodeFrame(type, header, payload) {
   return out;
 }
 
+// 받은 바이너리 프레임을 타입·헤더·페이로드로 분해.
 function decodeFrame(buffer) {
   const bytes = new Uint8Array(buffer);
   const headLen = new DataView(buffer).getUint32(1, false);
@@ -1237,6 +1240,7 @@ function decodeFrame(buffer) {
   };
 }
 
+// EVENT(JSON 텍스트) 한 건 전송.
 const sendEvent = (event, data = {}) => {
   if (ws && ws.readyState === WebSocket.OPEN)
     ws.send(JSON.stringify({ type: "EVENT", event, data, ts: Date.now() }));
@@ -1268,6 +1272,7 @@ const MATH_SIGNAL = new RegExp(
   "[=^²³√·′]|[" + SUB_CHARS + SUP_CHARS + "]|\\w\\/\\w|[A-Za-z]['_]|"
   + "\\b(?:log|sqrt|sin|cos|tan)\\b");
 
+// 서버가 보낸 표시용 표기(x² · √ · a₁₀)를 KaTeX가 읽는 TeX로 바꾼다.
 function toTex(s) {
   // function names first: "log₃" has no word boundary before the subscript
   s = s.replace(/\b(log|sin|cos|tan)(?![A-Za-z])/g, "\\$1");
@@ -1284,6 +1289,7 @@ function toTex(s) {
 }
 
 /** text → { frag, hasMath }: math runs typeset, everything else plain text. */
+// 한국어 문장 속 수식 구간만 찾아 KaTeX로 조판한다. KaTeX가 없으면 원문 그대로 둔다.
 function mathify(text) {
   const frag = document.createDocumentFragment();
   if (!window.katex) { frag.append(text); return { frag, hasMath: false }; }
@@ -1319,6 +1325,7 @@ let micStream = null, audioCtx = null;
 // double click opening two microphones instead.
 let starting = false;
 
+// 시작 버튼: 마이크를 연다(중복 실행 방지).
 async function start() {
   if (starting || micStream) return;
   starting = true;
@@ -1329,6 +1336,7 @@ async function start() {
   }
 }
 
+// 마이크 권한 → 16 kHz AudioContext → 워크릿 연결 → 스피커 잠금 해제 → 서버 접속.
 async function openMic() {
   let stream;
   try {
@@ -1399,6 +1407,8 @@ function hangUp() {
 }
 
 let pending = new Float32Array(0);
+// 워크릿에서 온 샘플을 512개 단위로 모아 int16 PCM으로 바꿔 AUDIO 프레임으로 보낸다.
+// 튜터가 생각·발화 중일 때는 보내지 않는다(바지인이 켜져 있으면 발화 중에도 보냄).
 function onSamples(block) {
   if (!micOpen()) return;               // muted while the tutor thinks or speaks
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -1424,6 +1434,7 @@ function onSamples(block) {
 }
 
 // --- 2. one socket, both directions ---------------------------------------
+// /browser 경로로 WebSocket 접속. 텍스트는 onEvent, 바이너리는 onBinary로.
 function connect() {
   const scheme = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${scheme}://${location.host}/browser`);
@@ -1437,12 +1448,14 @@ function connect() {
   ws.onmessage = (e) => (typeof e.data === "string" ? onEvent(JSON.parse(e.data)) : onBinary(e.data));
 }
 
+// 연결 상태 표시.
 function setConn(text, cls) {
   const conn = $("conn");
   conn.textContent = text;
   conn.className = cls || "";
 }
 
+// 서버 이벤트 분배: 턴 상태 · 전사 · 튜터 발화(스트리밍 포함) · 칠판 · 그림 · 진행 표시 · 촬영 요청.
 function onEvent(msg) {
   const d = msg.data || {};
   switch (msg.event) {
@@ -1472,6 +1485,7 @@ function onEvent(msg) {
   }
 }
 
+// 바이너리 프레임: 지금은 TTS 오디오뿐.
 function onBinary(buffer) {
   const { type, header, payload } = decodeFrame(buffer);
   if (type === TTS_FRAME) onTts(header, payload);
@@ -1506,18 +1520,21 @@ const pf = {
   pos: { x: -999, y: -999 },
 };
 
+// 마스코트 연출용 타이머 도우미.
 const wait = (ms, fn) => pf.timers.push(setTimeout(fn, ms));
 function clearPfTimers() {
   pf.timers.forEach(clearTimeout);
   pf.timers = [];
 }
 
+// 요소의 화면상 중심 좌표.
 const centerOf = (el) => {
   const r = el.getBoundingClientRect();
   return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
 };
 
 /** Put the character's centre on a point, now or on the CSS transition. */
+// 마스코트의 중심을 특정 좌표로 옮긴다(즉시 또는 CSS 전환으로).
 function placeAt(cx, cy, deg = 0, ms = 0) {
   const w = tutor.offsetWidth, h = tutor.offsetHeight;
   tutor.style.setProperty("--fly", (STILL.matches ? 0 : ms) + "ms");
@@ -1531,6 +1548,7 @@ function placeAt(cx, cy, deg = 0, ms = 0) {
  *  animation is dropped: a filled animation is layered over the inline style,
  *  so cancelling one without writing the current matrix first snaps the
  *  character back to wherever the inline style last said. */
+// 진행 중인 이동을 현재 위치에서 멈춘다(멈추기 전에 현재 변환을 넘겨받아 순간이동 방지).
 function haltFlight() {
   if (!pf.flight) return;
   const t = getComputedStyle(tutor).transform;
@@ -1557,6 +1575,7 @@ function haltFlight() {
  *  not a slide. The heading is the path's tangent clamped to a lean (a fish
  *  banks, it does not somersault), and it levels out to land.
  */
+// 목표 요소까지 완만한 곡선으로 헤엄쳐 간다(물고기가 도는 방식으로 기울기까지).
 function swim(toEl, { ms = 680, faceRight = false, done = null } = {}) {
   haltFlight();
   const to = centerOf(toEl);
@@ -1631,6 +1650,7 @@ function swim(toEl, { ms = 680, faceRight = false, done = null } = {}) {
 // --- the choreography -------------------------------------------------------
 
 /** "어? 질문했구나!" — the student stopped talking: puff up, then go read. */
+// 생각 시작: 놀란 표정 → 잠깐 뒤 칠판 쪽으로 헤엄쳐 가 기다린다.
 function alertThenGo() {
   // no theatre under reduced motion — and none in a hidden tab, where the
   // animations that would carry it home are frozen until the tab returns
@@ -1665,6 +1685,7 @@ function alertThenGo() {
 /** The turn's last word is ready: freeze — eyes — hop — one proud puff —
  *  and dart home. `release` fires when it lands (or straight away when
  *  there is no trip to make); the held line and audio wait on it. */
+// 답이 준비됨: 멈칫 → 아! → 집으로 돌아온다. 도착하면 release()가 불려 잡아 둔 말과 소리가 나간다.
 function answerReady(release) {
   stopMuse();
   if (STILL.matches || document.hidden ||
@@ -1705,6 +1726,7 @@ function answerReady(release) {
 }
 
 /** Back to the nest — the quiet way, for turn ends and interruptions. */
+// 조용히 제자리로(턴 종료·끼어들기).
 function settleHome(instant = false) {
   clearPfTimers();
   stopMuse();
@@ -1724,6 +1746,7 @@ function settleHome(instant = false) {
   }});
 }
 
+// 집 위치에 내려놓는다.
 function landHome(ms = 0) {
   pf.target = $("pufferHome");
   const c = centerOf(pf.target);
@@ -1731,6 +1754,7 @@ function landHome(ms = 0) {
 }
 
 // --- what it says without speaking -----------------------------------------
+// 말풍선 대신 띄우는 작은 기호 하나.
 function spawnMark(cls, text, x, y, life) {
   const marks = $("pfMarks");
   const el = document.createElement("span");
@@ -1744,6 +1768,7 @@ function spawnMark(cls, text, x, y, life) {
   setTimeout(gone, life + 400);               // backstop: a paused tab still cleans up
 }
 
+// 놀람 표시(!) 몇 개.
 function spawnBangs() {
   if (STILL.matches) return;
   [[-34, -46, 0], [10, -60, 80], [40, -38, 160]].forEach(([x, y, delay]) =>
@@ -1751,6 +1776,7 @@ function spawnBangs() {
 }
 
 const MUSE_GLYPHS = ["?", "x", "√", "π", "+"];
+// 생각 중 표시를 주기적으로 띄운다.
 function startMuse() {
   stopMuse();
   const drop = () => {
@@ -1768,6 +1794,7 @@ function startMuse() {
   drop();
   pf.museTimer = setInterval(drop, 1700);
 }
+// 생각 중 표시 중단.
 function stopMuse() {
   if (pf.museTimer) { clearInterval(pf.museTimer); pf.museTimer = null; }
 }
@@ -1777,6 +1804,7 @@ function stopMuse() {
 // to place it again. The ResizeObserver fires every time a chat line is
 // appended, so noise is told from a real move by whether the DESTINATION has
 // actually moved.
+// 창 크기가 바뀌면 앉아 있던 자리를 다시 계산.
 function reperch() {
   const el = pf.target && pf.target.isConnected ? pf.target : $("pufferHome");
   const now = centerOf(el);
@@ -1807,6 +1835,7 @@ const HEADER_WORDS = {
   AGENT_SPEAKING: ["설명하고 있어요", true],
 };
 
+// 턴 상태 변화 처리: 상태 칩·문구 갱신, 생각 시작이면 마스코트 연출, 듣기로 돌아오면 정리.
 function setState(s) {
   const prev = turnState;
   if (s === prev) return;
@@ -1843,6 +1872,7 @@ function setState(s) {
 // doing something right now), the DOTS breathe on their own clock — one at a
 // time up to three, then one at a time back down.
 let stageTimer = null, dotTimer = null, dotN = 1, dotDir = 1;
+// 상단 진행 문구를 한 글자씩 타이핑해 보여 준다.
 function setStage(text, busy = true) {
   if (!text) return;
   const el = $("stageWord");
@@ -1860,6 +1890,7 @@ function setStage(text, busy = true) {
   }
   setDots(busy);
 }
+// 진행 중임을 알리는 점(...)의 호흡.
 function setDots(on) {
   const el = $("stageDots");
   if (!on) {
@@ -1887,6 +1918,7 @@ function setDots(on) {
 // — typed one character every 200 ms, deliberately slower than the header's
 // copy: the header answers a glance, this one keeps the wait feeling alive.
 let echoTimer = null;
+// 같은 진행 문구를 대화창 아래쪽에도 더 느리게 타이핑한다(기다림이 살아 있게).
 function echoStage(text) {
   if (!text) return;
   const chat = $("chat");
@@ -1914,6 +1946,7 @@ function echoStage(text) {
   }, 200);
   scrollChat();
 }
+// 대화창의 진행 문구 제거.
 function clearStageEcho() {
   clearInterval(echoTimer);
   echoTimer = null;
@@ -1921,12 +1954,14 @@ function clearStageEcho() {
   if (el) el.remove();
 }
 // a new bubble must not land BELOW the stage line — the line rides the bottom
+// 새 말풍선이 생겨도 진행 문구가 항상 맨 아래에 오게 한다.
 function keepEchoBelow() {
   const el = $("stageEcho");
   if (el && el.isConnected) $("chat").appendChild(el);
 }
 
 // --- the problem card and the board ----------------------------------------
+// 서버가 읽어 낸 문제를 문제 카드에 표시.
 function showProblem(d) {
   const text = (d.text || "").trim();
   const eqs = d.equations || [];
@@ -1955,6 +1990,7 @@ function showProblem(d) {
 let currentDialogue = [];              // {kind, text} since the last problem event
 let problemTitle = "";
 
+// 다 푼 문제를 해결 목록으로 옮긴다.
 function addSolved(title) {
   console.info("solved: %s (%d turns)", title || problemTitle, currentDialogue.length);
   currentDialogue = [];
@@ -1962,6 +1998,7 @@ function addSolved(title) {
 
 let boardSeen = new Set();             // one problem's writing, no duplicates
 
+// 칠판 비우기.
 function boardClear() {
   boardSeen = new Set();
   const lines = $("boardLines");
@@ -1978,6 +2015,7 @@ function boardClear() {
     scene each turn — a curve that has served its purpose is simply absent
     from the next one — so the picture must CHANGE rather than a second
     picture appearing beneath it. */
+// 서버가 보낸 SVG 그림을 칠판에 붙인다(같은 문제면 자리에서 교체).
 function boardDraw(d) {
   const svg = d && d.svg;
   if (!svg) return;
@@ -2055,6 +2093,7 @@ function boardDraw(d) {
  *  owns the samples, moves the window and sends the true render back. The
  *  drag previews locally so the hand feels the picture move at once.
  */
+// 그림 확대·이동·리셋 버튼. 누르면 서버에 요청해 같은 장면을 새 창으로 다시 받는다.
 function figureControls(box, body) {
   box.tabIndex = 0;
   box.setAttribute("role", "group");
@@ -2120,6 +2159,7 @@ const LAY_LATEST = 620;
 let layTimers = [];
 let burstAt = 0, layFloor = 0;
 
+// 칠판에 쓴 줄이 잉크가 마르듯 자리 잡는 연출.
 function lay(line) {
   if (STILL.matches) return;             // no wipe: the line is plain and visible
   const now = performance.now();
@@ -2151,6 +2191,7 @@ function lay(line) {
 
 /** Whatever is mid-wipe is simply shown. For the moments no wipe may be
  *  trusted to finish: a backgrounded tab, a motion-preference flip, a stop. */
+// 쓰는 중이던 줄을 즉시 다 마른 상태로(끼어들기 등).
 function dryBoard() {
   layTimers.forEach(clearTimeout);
   layTimers = [];
@@ -2170,6 +2211,7 @@ function dryBoard() {
  *  holds still whenever the thing that changed can already be seen, and
  *  otherwise moves the shortest distance that shows it.
  */
+// 방금 쓴 줄이 보이도록 칠판을 스크롤.
 function revealInBoard(el, alignTop = false) {
   const lines = $("boardLines");
   if (!lines || !el || !el.isConnected) return;
@@ -2196,6 +2238,7 @@ function revealInBoard(el, alignTop = false) {
   else lines.scrollTo({ top, behavior: "smooth" });
 }
 
+// 칠판 한 줄 쓰기: 수식과 옆 메모.
 function boardWrite(item) {
   // {expr, note} from the server; a bare string still works
   const expr = ((typeof item === "string" ? item : item && item.expr) || "").trim();
@@ -2239,6 +2282,7 @@ const SILENCE =
   "gICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg" +
   "ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIA=";
 
+// 브라우저 자동재생 잠금 해제(사용자 클릭 안에서 무음을 한 번 재생).
 async function unlockAudio() {
   const player = $("player");
   try {
@@ -2271,6 +2315,7 @@ let audioHold = false;
 const ttsStreams = new Map();            // utterance_id → in-flight stream
 const MSE_OK = window.MediaSource && MediaSource.isTypeSupported("audio/mpeg");
 
+// TTS 오디오 프레임 수신. 한 발화가 여러 조각으로 오므로 utterance_id로 묶고 seq 순으로 잇는다.
 function onTts(header, bytes) {
   const id = header.utterance_id || "solo";
   // A stream begins at seq 0. A mid-stream chunk with no stream behind it is
@@ -2300,6 +2345,7 @@ function onTts(header, bytes) {
   feedStream(st);
 }
 
+// 도착한 조각을 MediaSource 버퍼에 하나씩 넣고, 다 오면 스트림을 닫는다.
 function feedStream(st) {
   // append exactly one pending chunk per updateend; close when drained
   if (!st.sb || st.url !== playingUrl || st.sb.updating) return;
@@ -2310,6 +2356,7 @@ function feedStream(st) {
   }
 }
 
+// 재생 큐에서 다음 것을 꺼내 재생. 끝나면 서버에 playback_done을 보내 마이크를 다시 열게 한다.
 function playNext() {
   if (audioHold) return;                 // the fish is carrying this one home
   const item = audioQueue.shift();
@@ -2359,6 +2406,7 @@ function playNext() {
 const HELD_MS = 1900;
 let heldSay = null, heldTimer = null;
 
+// 튜터의 완성된 한 줄. 턴을 끝맺는 줄이면 마스코트가 돌아올 때까지 잠깐 붙잡아 둔다.
 function onTutorSays(d) {
   const away = pf.state === "board" || pf.state === "toBoard" || pf.state === "alert";
   if (d.final && !STILL.matches && away && !heldSay) {
@@ -2371,6 +2419,7 @@ function onTutorSays(d) {
   addTurn("tutor", d.text, { final: !!d.final });
 }
 
+// 붙잡아 둔 마지막 줄과 오디오를 내보낸다.
 function flushHeld() {
   if (heldTimer) { clearTimeout(heldTimer); heldTimer = null; }
   const held = heldSay;
@@ -2385,6 +2434,7 @@ function flushHeld() {
 /** The student cut in. Stop mid-word and drop everything not yet played.
     `announce` is false when the page itself is stopping (연결 종료), because
     "끼어들기" is a report about the student and they did not do it. */
+// 학생이 끼어들었을 때: 재생을 끊고 대기 중이던 오디오를 버린다. 이미 말한 것은 기록에 남긴다.
 function stopSpeaking(announce = true) {
   // whatever was being carried home is shown, silently — the words were said
   // to be coming, and a barge-in must not disappear them from the record
@@ -2423,6 +2473,7 @@ function stopSpeaking(announce = true) {
 // Three ways in, because the one that fits the moment is the one that gets
 // used: choosing a file, dragging it, or pasting a screenshot straight from
 // the clipboard — which is how most photos actually arrive on a laptop.
+// 문제지 사진 받기(파일 선택·드래그·붙여넣기). 받은 사진은 썸네일로 되돌려 보여 준다.
 async function useWorksheet(file) {
   // In camera mode the box is hidden, but Ctrl+V still reaches the document:
   // accepting a paste there would stash a photo nobody can see and nothing
@@ -2468,6 +2519,7 @@ document.addEventListener("paste", (e) => {
   }
 });
 
+// 서버의 촬영 요청에 응답: 가진 사진을 IMAGE 프레임으로 보내거나 실패를 알린다.
 function sendWorksheet(captureId) {
   if (!worksheet) {
     // Nothing to read HERE. In camera mode that is the normal answer, not a
@@ -2481,6 +2533,7 @@ function sendWorksheet(captureId) {
 }
 
 // --- 5. the conversation ---------------------------------------------------
+// 대화창을 맨 아래로.
 function scrollChat() {
   const chat = $("chat");
   chat.scrollTop = chat.scrollHeight;
@@ -2568,9 +2621,11 @@ const reveal = {
 // of a stack of fragments.
 let openTutor = null;                    // {msg, bubble} of the turn's bubble
 
+// 말풍선의 대기 점 제거.
 function dropDots() {
   for (const el of document.querySelectorAll("#chat .more")) el.remove();
 }
+// 말풍선에 대기 점 표시.
 function holdDots() {
   if (!openTutor || !openTutor.msg.isConnected) return;
   dropDots();
@@ -2579,11 +2634,13 @@ function holdDots() {
   more.innerHTML = "<i>.</i><i>.</i><i>.</i>";
   openTutor.bubble.appendChild(more);
 }
+// 튜터 말풍선 닫기(턴 종료).
 function closeTutorBubble() {
   dropDots();
   openTutor = null;
 }
 
+// 대화 한 줄 추가(학생·튜터·오류). 튜터 문장은 읽는 속도로 드러내고 수식은 통째로 조판한다.
 function addTurn(kind, text, opts = {}) {
   const chat = $("chat");
   if (kind !== "tutor") closeTutorBubble();   // the turn is over either way
@@ -2628,6 +2685,7 @@ function addTurn(kind, text, opts = {}) {
 // replace it once with the fully validated/math-normalized line on done.
 const tutorStreams = new Map();
 
+// 스트리밍 발화 시작: 빈 말풍선 하나를 열어 둔다.
 function startTutorStream(d) {
   reveal.finish();
   dropDots();
@@ -2654,6 +2712,7 @@ function startTutorStream(d) {
   scrollChat();
 }
 
+// 스트리밍 조각을 그 말풍선에 이어 붙인다.
 function appendTutorStream(d) {
   const st = tutorStreams.get(d.stream_id);
   if (!st) return;                       // tail of a cancelled/barge-in stream
@@ -2662,6 +2721,7 @@ function appendTutorStream(d) {
   scrollChat();
 }
 
+// 스트리밍 종료: 최종 문장으로 확정하고 조판한다.
 function finishTutorStream(d) {
   const st = tutorStreams.get(d.stream_id);
   if (!st) return;
@@ -2676,6 +2736,7 @@ function finishTutorStream(d) {
   scrollChat();
 }
 
+// 시스템 메모 한 줄(힌트 레벨 표시 등).
 function note(text) {
   const turns = $("chat").querySelectorAll(".msg");
   const last = turns[turns.length - 1];

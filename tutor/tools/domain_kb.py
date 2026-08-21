@@ -14,9 +14,11 @@ from tutor.knowledge.db import KnowledgeDB
 
 log = logging.getLogger(__name__)
 
+# 검색 가능한 지식 종류.
 KB_KINDS = ("problems", "solutions", "concepts", "misconceptions", "hint_templates")
 
 
+# 임베딩 검색기를 로드한다(인덱스나 패키지가 없으면 조용히 None).
 def load_semantic_retriever(db: KnowledgeDB):
     """Semantic search if this machine has it, None if it does not.
 
@@ -41,6 +43,7 @@ def load_semantic_retriever(db: KnowledgeDB):
     return None
 
 
+# 임베딩 모델을 백그라운드에서 올려 두는 지연 로더. 서버 기동이 이것 때문에 늦지 않게 한다.
 class LazySemantic:
     """The embedding index, loaded off the startup path.
 
@@ -58,6 +61,7 @@ class LazySemantic:
     blocks nothing else.
     """
 
+    # 백그라운드 로딩 시작.
     def __init__(self, db: KnowledgeDB, timeout_s: float = 90.0):
         self.timeout_s = timeout_s
         self._ready = threading.Event()
@@ -67,6 +71,7 @@ class LazySemantic:
             target=self._load, args=(db,), name="semantic-index", daemon=True
         ).start()
 
+    # 실제 로딩(실패해도 검색만 비활성화된다).
     def _load(self, db: KnowledgeDB) -> None:
         try:
             self._inner = load_semantic_retriever(db)
@@ -77,6 +82,7 @@ class LazySemantic:
                     "semantic index ready after %.1fs", time.monotonic() - self._started
                 )
 
+    # 로딩이 끝났으면 검색, 아니면 빈 결과.
     def search(self, *args, **kwargs):
         if not self._ready.is_set():
             waited = time.monotonic() - self._started
@@ -88,13 +94,16 @@ class LazySemantic:
         return self._inner.search(*args, **kwargs) if self._inner is not None else []
 
 
+# 모델에게 열어 주는 지식 DB 검색 툴(search_domain_kb).
 class DomainKBTool:
+    # DB를 받고, 임베딩 인덱스는 백그라운드에서 올린다.
     def __init__(self, db: KnowledgeDB, semantic_in_background: bool = True):
         self.db = db
         self.semantic = (
             LazySemantic(db) if semantic_in_background else load_semantic_retriever(db)
         )
 
+    # 종류를 지정해 지식을 찾아 준다. 호출한 용도에 허용된 종류만 넘어온다.
     def search(
         self,
         kind: str,

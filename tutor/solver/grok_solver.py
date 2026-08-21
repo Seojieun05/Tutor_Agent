@@ -28,6 +28,9 @@ from tutor.vision.recognizer import Recognition
 
 log = logging.getLogger(__name__)
 
+# [프롬프트] 기준 풀이 작성용 시스템 프롬프트. 한 단계에 한 가지 연산, 설명은 한국어,
+# 4점 문제는 보통 8~12단계로 쪼개게 한다(힌트 사다리가 이 단계들을 하나씩 밟기 때문).
+# 검산은 마지막에 compute 한 번만 — 단계마다 검산하면 왕복이 늘어 배경 풀이가 통째로 실패했다.
 _SYSTEM = """You are a careful math solver. Solve the given problem step by step.
 
 Rules:
@@ -50,11 +53,15 @@ Rules:
 Return ONLY the JSON object."""
 
 
+# DB에 없는 문제(CONCEPT/NEW)일 때만 부르는 풀이 생성기.
 class GrokSolver:
+    # 풀이 모델과 지식 DB를 받는다.
     def __init__(self, llm: LLMClient, db: KnowledgeDB):
         self.llm = llm
         self.db = db
 
+    # 문제를 풀어 기준 풀이를 만든다. 모델이 뭐라 하든 verified=False로 못 박고,
+    # sympy 기계 검산을 통과한 것만 미검증 상태로 DB에 저장한다.
     def solve(self, rec: Recognition, problem_key: str) -> ReferenceSolution:
         user = (
             f"문제: {rec.problem_text}\n"

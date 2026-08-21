@@ -34,6 +34,7 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
+# 생각하는 동안 재생할 기본 필러 문장들. 전부 캐시된 TTS라 길어도 지연이 되지 않는다.
 # Progressive, not clipped: "~하고 있어요" says the tutor is DOING something,
 # where a bare "어디 보자" just trails off. These play during a 5-15s think, so
 # a full sentence is not added latency — it is the wait, narrated. They stay
@@ -49,6 +50,7 @@ FILLER_PHRASES: tuple[str, ...] = (
 # stage events ("쓴 풀이를 읽고 있어요") carry this progress now, and the voice
 # keeps to one filler per turn. Kept registered and pre-rendered so putting a
 # line back is a one-line session change, not a TTS round trip.
+# 작업 확인 대기 중 내레이션(지금은 기본적으로 말하지 않고 화면 표시로 대체).
 WORK_CHECK_NARRATIONS: tuple[str, ...] = (
     "풀이를 다 읽었어요. 한 줄씩 맞는지 보고 있어요.",
     "쓴 풀이가 잘 보여요. 차근차근 따라가 보고 있어요.",
@@ -59,6 +61,7 @@ WORK_CHECK_NARRATIONS: tuple[str, ...] = (
 # How a teacher receives an answer: the value back, then what they are doing
 # with it. Every frame is particle-safe (nothing needing 이/가 or 라/이라 after
 # the value), because a wrong particle reads as broken while a pause never does.
+# 학생이 말한 값을 되받아 주는 틀("{v}인지 보고 있어요").
 ECHO_FRAMES: tuple[str, ...] = (
     "{v}… 확인하고 있어요.",
     "{v}인지 보고 있어요.",
@@ -67,9 +70,11 @@ ECHO_FRAMES: tuple[str, ...] = (
 )
 
 
+# 필러 문장 고르는 곳. 같은 문장이 연달아 나오지 않게 돌려 쓴다.
 class FillerBank:
     """Which phrase to say next."""
 
+    # 문장 풀과 난수기를 받는다.
     def __init__(self, phrases: tuple[str, ...] = FILLER_PHRASES, rng=None):
         self.phrases = tuple(p for p in phrases if p.strip())
         self._rng = rng or random.Random()
@@ -77,6 +82,7 @@ class FillerBank:
         # filler sound canned, and each pool rotates independently
         self._last: dict[str, str] = {}
 
+    # 같은 풀에서 직전과 다른 문장을 하나 고른다.
     def rotate(self, pool: tuple[str, ...], key: str) -> str:
         """A phrase from `pool`, never the same one twice in a row per `key` —
         callers with their own fixed pools (the work-check openers) use this
@@ -87,13 +93,16 @@ class FillerBank:
         self._last[key] = self._rng.choice(choices)
         return self._last[key]
 
+    # 기본 필러 하나.
     def pick(self) -> str:
         return self.rotate(self.phrases, "filler")
 
+    # 작업 확인용 내레이션 하나.
     def work_note(self) -> str:
         """The work-check wait narrated: the page was read, the check is on."""
         return self.rotate(WORK_CHECK_NARRATIONS, "work")
 
+    # 학생이 말한 값을 되받는 문장을 만든다 — 이 되받음 자체가 잘 들었다는 신호가 된다.
     def echo(self, core: str) -> str:
         """The student's answer received back, in a frame that rotates.
 
@@ -111,6 +120,7 @@ class FillerBank:
         return self.rotate(ECHO_FRAMES, "echo").format(v=spell_numbers(core))
 
 
+# 반복되는 고정 대사를 기억하는 스피커 래퍼. 두 발화 경로(서버 재생·브라우저 전송)가 함께 이득을 본다.
 class CachedSpeech:
     """A speaker that remembers the phrases it says over and over.
 
@@ -120,6 +130,7 @@ class CachedSpeech:
     without either of them knowing it exists.
     """
 
+    # 감쌀 스피커, 캐시할 문장 목록, 캐시 폴더, 목소리 이름을 받는다.
     def __init__(self, speaker, cacheable=(), cache_dir: Path | None = None, voice: str = ""):
         self.speaker = speaker
         self.cache_dir = cache_dir
@@ -134,6 +145,7 @@ class CachedSpeech:
 
     # --- the speaker interface ----------------------------------------------
 
+    # 문장을 음성 바이트로. 캐시에 있으면 합성하지 않는다.
     def synthesize(self, text: str) -> bytes | None:
         if not text:
             return None
@@ -165,6 +177,7 @@ class CachedSpeech:
             self._write(path, audio)
         return audio
 
+    # 스트리밍 합성(캐시된 문장은 통째로 한 번에 내보낸다).
     def synthesize_stream(self, text: str):
         """Chunks as they exist: a cached phrase is one instant chunk, an
         uncached line streams from the real speaker if it can."""
@@ -183,6 +196,7 @@ class CachedSpeech:
         if audio:
             yield audio
 
+    # 텍스트가 조각조각 올 때의 스트리밍 합성.
     def synthesize_text_stream(self, chunks):
         """Live generated text is never cacheable; pass it straight through."""
         inner = getattr(self.speaker, "synthesize_text_stream", None)
@@ -191,6 +205,7 @@ class CachedSpeech:
             return
         yield from self.synthesize_stream("".join(chunks))
 
+    # 말하기. 캐시 대상 문장이면 캐시된 오디오를 재생한다.
     def speak(self, text: str) -> None:
         if not text or text not in self._cacheable:
             self.speaker.speak(text)
@@ -202,6 +217,7 @@ class CachedSpeech:
         else:  # a speaker that cannot play bytes (echo mode) still says it
             self.speaker.speak(text)
 
+    # 오디오 바이트를 그대로 재생.
     def play(self, audio: bytes) -> None:
         play = getattr(self.speaker, "play", None)
         if callable(play):
@@ -209,6 +225,7 @@ class CachedSpeech:
 
     # --- warming -------------------------------------------------------------
 
+    # 서버 기동 때 고정 대사를 미리 다 합성해 둔다(첫 학생이 느리지 않게).
     def warm(self, phrases=()) -> int:
         """Render everything up front so the first turn is not the slow one.
 
@@ -224,11 +241,13 @@ class CachedSpeech:
                 log.warning("could not pre-render %r: %s", text, e)
         return ready
 
+    # 캐시 대상 문장을 추가로 등록.
     def register(self, *phrases: str) -> None:
         self._cacheable.update(p for p in phrases if p)
 
     # --- disk ----------------------------------------------------------------
 
+    # 디스크 캐시 파일 경로. 목소리 이름도 키에 넣어 목소리를 바꾸면 다시 합성되게 한다.
     def _path(self, text: str) -> Path | None:
         if self.cache_dir is None:
             return None
@@ -237,6 +256,7 @@ class CachedSpeech:
         key = hashlib.sha1(f"{self.voice}\x00{text}".encode()).hexdigest()[:16]
         return self.cache_dir / f"{key}.{self.audio_format}"
 
+    # 합성 결과를 디스크에 저장(실패해도 무시).
     def _write(self, path: Path | None, audio: bytes) -> None:
         if path is None:
             return

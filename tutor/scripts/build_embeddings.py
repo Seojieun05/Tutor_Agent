@@ -6,6 +6,7 @@ from sentence_transformers import SentenceTransformer
 from tutor.knowledge.db import KnowledgeDB
 
 
+# 임베딩 모델과 입출력 경로.
 MODEL_NAME = "intfloat/multilingual-e5-small"
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -13,6 +14,7 @@ DB_PATH = ROOT / "data" / "knowledge.db"
 OUT_PATH = ROOT / "data" / "problem_embeddings.npz"
 
 
+# DB의 모든 문제를 임베딩해 검색용 인덱스(.npz)로 저장한다.
 def main():
     db = KnowledgeDB(DB_PATH)
     problems = db.all_problems()

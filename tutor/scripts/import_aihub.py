@@ -49,21 +49,26 @@ from tutor.vision.recognizer import Recognition
 
 log = logging.getLogger(__name__)
 
+# 출처 표기와, 이미지로 인정할 확장자.
 AIHUB_SOURCE = "AIHub 수학 교과 문제 풀이과정 데이터"
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 
 # AI Hub ships human-labelled answers/explanations, so the corpus itself is the
 # trust anchor here; SymPy is only a secondary audit signal (see module docstring).
+# AI Hub는 공식 라벨링 자료라 verified=True로 넣는다(다만 sympy 검산 결과는 따로 기록).
 AIHUB_TRUSTED = True
 
+# sympy 검산 결과 표기: 통과 / 실패 / 검사 불가.
 SYMPY_VERIFIED = "VERIFIED"  # mathnorm proved the answer against an equation
 SYMPY_FAILED = "FAILED"  # mathnorm had something to check and it did not hold
 SYMPY_UNCHECKED = "UNCHECKED"  # nothing machine-checkable (text/choice answer, no equation)
 
+# 원본 JSON에서 문제·정답·해설에 해당하는 라벨 이름들.
 PROBLEM_CLASSES = {"문항(텍스트)", "문항(이미지)"}
 ANSWER_CLASSES = {"정답(텍스트)", "정답(이미지)"}
 SOLUTION_CLASSES = {"해설(텍스트)", "해설(이미지)"}
 
+# 성취기준 코드·LaTeX·ASCII 수식을 뽑아내는 정규식들.
 _ACHIEVEMENT_RE = re.compile(r"^\s*\[([^\]]+)\]\s*(.*)$")
 _LATEX_SPAN_RE = re.compile(r"\$(.+?)\$", re.DOTALL)
 _ASCII_MATH_RE = re.compile(
@@ -71,21 +76,25 @@ _ASCII_MATH_RE = re.compile(
 )
 
 
+# 교육과정 성취기준 하나(코드 → 개념 id·이름).
 @dataclass(frozen=True)
 class AchievementStandard:
     year: str
     code: str
     description: str
 
+    # 개념 id로 쓸 값.
     @property
     def concept_id(self) -> str:
         return f"curriculum:{self.year}:{self.code}"
 
+    # 개념의 한국어 이름.
     @property
     def concept_name(self) -> str:
         return f"[{self.code}] {self.description}".strip()
 
 
+# 정답 분석 결과: 형태와 값, 기계 검산 가능 여부.
 @dataclass
 class AnswerAnalysis:
     """The Answer to store plus the outcome of the secondary SymPy audit."""
@@ -95,6 +104,7 @@ class AnswerAnalysis:
     sympy_check: str
 
 
+# 변환된 문제 한 건(문제·풀이·개념).
 @dataclass
 class ConvertedItem:
     problem: Problem
@@ -105,6 +115,7 @@ class ConvertedItem:
     image_path: Path | None
 
 
+# 가져오기 통계.
 @dataclass
 class ImportStats:
     scanned: int = 0
@@ -119,12 +130,14 @@ class ImportStats:
     sympy_unchecked: int = 0
 
 
+# 공백 정리.
 def _clean(text: object) -> str:
     if text is None:
         return ""
     return re.sub(r"\s+", " ", str(text)).strip()
 
 
+# 지정한 라벨 종류의 텍스트만 골라 낸다.
 def _descriptions(payload: dict, class_names: set[str]) -> list[str]:
     """Return deduplicated text_description values in source order."""
     out: list[str] = []
@@ -140,6 +153,7 @@ def _descriptions(payload: dict, class_names: set[str]) -> list[str]:
     return out
 
 
+# 성취기준 목록 추출.
 def _achievement_standards(payload: dict) -> list[AchievementStandard]:
     src = payload.get("source_data_info") or {}
     out: list[AchievementStandard] = []
@@ -166,6 +180,7 @@ def _achievement_standards(payload: dict) -> list[AchievementStandard]:
     return out
 
 
+# 성취기준과 문제 문장으로 큰 유형을 추정한다.
 def _infer_problem_type(problem_text: str, standards: list[AchievementStandard]) -> str:
     text = " ".join([problem_text, *(s.description for s in standards)])
     rules = (
@@ -194,6 +209,7 @@ def _infer_problem_type(problem_text: str, standards: list[AchievementStandard])
     return UNKNOWN_PROBLEM_TYPE
 
 
+# 간단한 LaTeX 분수를 ASCII로.
 def _replace_simple_latex_fraction(text: str) -> str:
     # Repeatedly handle simple/non-nested \frac{a}{b}; nested cases simply remain
     # unparsed and therefore stay unverified rather than being guessed.
@@ -205,6 +221,7 @@ def _replace_simple_latex_fraction(text: str) -> str:
     return text
 
 
+# LaTeX 조각을 sympy가 읽을 수 있는 ASCII 수식으로.
 def _latex_to_ascii(span: str) -> str:
     s = span.strip()
     s = s.replace("\\left", "").replace("\\right", "")
@@ -231,6 +248,7 @@ def _latex_to_ascii(span: str) -> str:
     return s
 
 
+# 본문에서 수식일 법한 문자열들을 뽑는다.
 def _candidate_math_strings(text: str) -> list[str]:
     candidates: list[str] = []
 
@@ -270,6 +288,7 @@ def _candidate_math_strings(text: str) -> list[str]:
     return out
 
 
+# 정답 문장에서 숫자 값을 뽑아낸다.
 def _numeric_literal(answer_text: str) -> str | None:
     """Return a conservative scalar literal, never evaluate a worked expression.
 
@@ -303,10 +322,12 @@ def _numeric_literal(answer_text: str) -> str | None:
     return None
 
 
+# 비교용으로 표기를 정규화.
 def _normalized_literal(text: str) -> str:
     return re.sub(r"[\s()]", "", text)
 
 
+# 기계로 검사할 수 있는 등식만 남긴다.
 def _auditable_equations(equations: list[str]) -> list[str]:
     """Relations SymPy can actually solve for the answer (one unknown, one '=')."""
     out: list[str] = []
@@ -322,6 +343,7 @@ def _auditable_equations(equations: list[str]) -> list[str]:
     return out
 
 
+# 검사 가능한 식들을 모은다.
 def _auditable_expressions(
     equations: list[str], answer_value: str
 ) -> tuple[list[int], bool]:
@@ -356,6 +378,7 @@ def _auditable_expressions(
     return out, restated
 
 
+# 정답을 분석해 종류·값·검산 가능 여부를 정한다.
 def _analyze_answer(equations: list[str], answer_text: str) -> AnswerAnalysis:
     """Build the Answer model and run the secondary SymPy audit where possible.
 
@@ -401,6 +424,7 @@ def _analyze_answer(equations: list[str], answer_text: str) -> AnswerAnalysis:
     )
 
 
+# 해설 문단들을 풀이 단계 목록으로 바꾼다.
 def _solution_steps(explanations: list[str]) -> list[SolutionStep]:
     steps: list[SolutionStep] = []
     seen_exprs: set[str] = set()
@@ -429,6 +453,7 @@ def _solution_steps(explanations: list[str]) -> list[SolutionStep]:
     return steps
 
 
+# 이미지 파일을 id로 찾을 수 있게 색인.
 def _index_images(images_dir: Path | None) -> dict[str, Path]:
     if images_dir is None:
         return {}
@@ -441,6 +466,7 @@ def _index_images(images_dir: Path | None) -> dict[str, Path]:
     return out
 
 
+# 출처 문자열 구성(검산 결과까지 포함해 나중에 감사할 수 있게).
 def _source_string(
     payload: dict,
     source_name: str,
@@ -472,6 +498,7 @@ def _source_string(
     return "|".join(parts)
 
 
+# 원본 JSON 한 건을 Tutor_Agent의 문제·풀이 모델로 변환한다.
 def convert_json(
     payload: dict, *, image_map: dict[str, Path], images_dir: Path | None = None
 ) -> ConvertedItem:
@@ -533,6 +560,7 @@ def convert_json(
     )
 
 
+# 같은 문제의 기존 풀이를 교체한다.
 def _replace_db_solution(
     db: KnowledgeDB, problem_id: str, solution: ReferenceSolution, verified: bool
 ) -> None:
@@ -550,6 +578,7 @@ def _replace_db_solution(
     db.insert_solution(problem_id, solution, verified=verified)
 
 
+# 가져오기 본체: 라벨 폴더를 훑어 변환하고 DB에 넣으며 통계를 모은다.
 def import_aihub(
     *,
     labels_dir: Path,
@@ -649,6 +678,7 @@ def import_aihub(
     return stats
 
 
+# 커맨드라인 옵션 정의.
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Import AI Hub math curriculum problems into KnowledgeDB")
     p.add_argument("--labels", type=Path, required=True, help="TL directory containing JSON labels")
@@ -666,6 +696,7 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
+# 커맨드라인 진입점.
 def main(argv: Iterable[str] | None = None) -> None:
     args = _parser().parse_args(list(argv) if argv is not None else None)
     logging.basicConfig(

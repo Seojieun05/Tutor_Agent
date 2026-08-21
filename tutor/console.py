@@ -14,6 +14,7 @@ from __future__ import annotations
 import sys
 
 
+# 콘솔 인코딩이 좁아도(cp949 등) 출력이 죽지 않게 한다 — 배너 때문에 서버가 못 뜨면 안 되니까.
 def soften_stdout() -> None:
     """Let this process print characters the console cannot encode.
 
@@ -29,6 +30,7 @@ def soften_stdout() -> None:
             pass  # not a TextIOWrapper (pytest capture, a pipe wrapper)
 
 
+# 사람에게 보여 줄 한 줄 출력. 인코딩 문제로 예외가 나지 않게 감싼다.
 def say(line: str, stream=None) -> None:
     """Print a line, replacing whatever the console cannot encode.
 

@@ -21,6 +21,7 @@ from tutor.knowledge.db import KnowledgeDB
 from tutor.scripts.gen_assets import ASSETS_DIR
 
 
+# 폰이 접속할 수 있는 이 컴퓨터의 LAN IP.
 def lan_ip() -> str:
     """The address other devices on the Wi-Fi can reach.
 
@@ -35,6 +36,7 @@ def lan_ip() -> str:
             return socket.gethostbyname(socket.gethostname())
 
 
+# 방화벽 때문에 접속이 안 될 때 보여 줄 안내.
 def firewall_hint(port: int) -> str:
     """Inbound is blocked by default on Windows, which is where the phone fails."""
     if platform.system() == "Windows":
@@ -49,6 +51,7 @@ def firewall_hint(port: int) -> str:
     )
 
 
+# 시연 전 점검: 키·DB·오디오·주소가 준비됐는지 한 번에 확인한다.
 def main() -> None:
     soften_stdout()  # a cp949 console cannot encode this preflight's punctuation
     settings = load_settings()

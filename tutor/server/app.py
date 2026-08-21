@@ -46,7 +46,9 @@ from tutor.vision.recognizer import Recognizer
 
 log = logging.getLogger(__name__)
 
+# 브라우저 클라이언트/폰 페이지 정적 파일이 들어 있는 폴더.
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+# WebSocket 포트에서 HTTP로 내려줄 파일 목록(경로 → 파일명, MIME).
 # An explicit map, not a path join: nothing outside these files is servable.
 STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -63,6 +65,7 @@ STATIC = {
 }
 
 
+# WebSocket 포트로 들어온 평범한 HTTP 요청에 정적 파일로 응답(업그레이드 요청이면 통과).
 def serve_static(connection, request):
     """Answer plain HTTP on the WebSocket port; None lets the upgrade proceed."""
     if request.headers.get("Upgrade", "").lower() == "websocket":
@@ -87,6 +90,7 @@ def serve_static(connection, request):
     )
 
 
+# 서버가 기동할 때 한 번만 만들어 모든 연결이 함께 쓰는 의존성 묶음(DB·역할별 LLM·STT·TTS).
 @dataclass
 class Shared:
     """The per-server dependencies: built once, shared by every connection.
@@ -112,6 +116,7 @@ class Shared:
     eval_second_llm: object | None
 
 
+# 서버 기동 1회: 지식 DB 열기(+필요하면 시드), 툴 레지스트리, 역할별 LLM·STT·TTS 준비.
 def build_shared(settings: Settings) -> Shared:
     """Build the per-server (shared) dependencies."""
     db = KnowledgeDB(settings.db_path)
@@ -174,6 +179,7 @@ def build_shared(settings: Settings) -> Shared:
     )
 
 
+# 매번 똑같이 나가는 붙박이 대사만 TTS 캐시로 감싼다. 힌트는 학생별·단계별이라 캐시하지 않는다.
 def wrap_with_cache(settings: Settings, speaker):
     """Memoize the lines the tutor repeats all day: the fillers and the fixed
     prompts. Hints are never cached — they belong to one student and one step."""
@@ -193,6 +199,7 @@ def wrap_with_cache(settings: Settings, speaker):
     from tutor.speech.filler import FILLER_PHRASES, WORK_CHECK_NARRATIONS, CachedSpeech
     from tutor.state.answer import SURRENDER_FEEDBACK
 
+    # 캐시 대상 문장 목록: 필러 + 고정 리액션 + 작업 확인/문제 낭독 프레임의 붙박이 대사.
     repeated = [
         *FILLER_PHRASES,
         SURRENDER_FEEDBACK,
@@ -220,12 +227,14 @@ def wrap_with_cache(settings: Settings, speaker):
     )
 
 
+# 문제지 사진을 읽을 모델을 고른다(Recognizer만 이걸 본다).
 def build_vision_llm(settings: Settings, llm):
     """Whichever model reads the worksheet. Only the Recognizer sees this."""
     return _gemini_or(settings, llm, settings.vision_provider,
                       settings.gemini_vision_model, "VISION_PROVIDER")
 
 
+# 튜터가 말할 문장을 쓰는 모델(HintGenerator 전용). 힌트 '레벨'은 여기서 정하지 않는다.
 def build_hint_llm(settings: Settings, llm):
     """Whichever model writes what the tutor says. Only HintGenerator sees this.
 
@@ -237,6 +246,7 @@ def build_hint_llm(settings: Settings, llm):
                       settings.gemini_hint_model, "HINT_PROVIDER")
 
 
+# 학생이 말한 답을 채점하는 모델(AnswerEvaluator 전용). 동치 판정을 위해 sympy 툴을 같이 준다.
 def build_eval_llm(settings: Settings, llm, registry=None):
     """Whichever model grades a spoken answer. Only AnswerEvaluator sees this.
 
@@ -252,6 +262,7 @@ def build_eval_llm(settings: Settings, llm, registry=None):
                       settings.gemini_eval_model, "EVAL_PROVIDER", registry=registry)
 
 
+# "틀렸다"고 말하기 직전 한 번 더 보는 2차 심판. 채점을 작은 모델에 맡겼을 때만 만들어진다.
 def build_eval_second_llm(settings: Settings, llm, registry=None):
     """The judge consulted before a student is told they are wrong.
 
@@ -266,6 +277,7 @@ def build_eval_second_llm(settings: Settings, llm, registry=None):
                       "GEMINI_EVAL_SECOND_MODEL", registry=registry)
 
 
+# 무엇을 그릴지 정하는 모델(Illustrator 전용). 정답 풀이는 이 모델에게 보여주지 않는다.
 def build_illustrate_llm(settings: Settings, llm):
     """Whichever model decides what to draw. Only the Illustrator sees it.
 
@@ -277,6 +289,7 @@ def build_illustrate_llm(settings: Settings, llm):
                       settings.gemini_illustrate_model, "ILLUSTRATE_PROVIDER")
 
 
+# 학생 발화의 의도를 한 단어로 분류하는 모델. 매 턴 가장 먼저 불리므로 작고 빠른 모델을 쓴다.
 def build_intent_llm(settings: Settings, llm):
     """Whichever model gates the turn. Only the intent classifier sees it.
 
@@ -291,6 +304,7 @@ def build_intent_llm(settings: Settings, llm):
                       settings.gemini_intent_model, "INTENT_PROVIDER")
 
 
+# 기준 풀이(reference solution)를 작성하는 모델(Solver 전용).
 def build_solve_llm(settings: Settings, llm, registry=None):
     """Whichever model writes the reference solution. Only the solver sees it.
 
@@ -305,6 +319,7 @@ def build_solve_llm(settings: Settings, llm, registry=None):
                       registry=registry)
 
 
+# 학생이 쓴 풀이를 진단하는 모델(StudentStateEstimator 전용).
 def build_estimate_llm(settings: Settings, llm, registry=None):
     """Whichever model diagnoses the written work. Only the estimator sees it.
 
@@ -320,6 +335,7 @@ def build_estimate_llm(settings: Settings, llm, registry=None):
                       registry=registry)
 
 
+# provider가 "gemini"면 Gemini 클라이언트를, 아니면 기본 chat 모델을 돌려주는 공통 선택기.
 def _gemini_or(settings: Settings, llm, provider: str, model: str, knob: str,
                registry=None):
     """A bad key or a missing package must not cost the student the whole
@@ -342,6 +358,7 @@ def _gemini_or(settings: Settings, llm, provider: str, model: str, knob: str,
     return FallbackLLM(chosen, llm, label=f"{knob}={model}")
 
 
+# 연결 하나마다 새로 만드는 의존성(Deps): 인식·매칭·풀이·진단·힌트·삽화·음성 컴포넌트 조립.
 def make_deps(
     settings: Settings, db, llm, transcriber, speaker, semantic=None, cameras=None,
     vision_llm=None, hint_llm=None, eval_llm=None, estimate_llm=None,
@@ -368,6 +385,7 @@ def make_deps(
     )
 
 
+# 모델 로딩에 수십 초를 쓰기 전에 포트가 비었는지 OS에 먼저 물어본다.
 def port_is_free(host: str, port: int) -> bool:
     """Ask the OS before spending 40s loading models we would then throw away."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
@@ -383,6 +401,7 @@ def port_is_free(host: str, port: int) -> bool:
     return True
 
 
+# 폰 카메라 전용 HTTPS/WSS 컨텍스트를 만든다(인증서가 없으면 None).
 def tls_context(settings: Settings) -> ssl.SSLContext | None:
     """The phone's secure context, or None.
 
@@ -397,6 +416,7 @@ def tls_context(settings: Settings) -> ssl.SSLContext | None:
     return ctx
 
 
+# 어느 포트가 물려 있는지까지 담아 두는 예외.
 class PortInUse(OSError):
     """Which port, so the advice names the one that is actually taken."""
 
@@ -405,6 +425,7 @@ class PortInUse(OSError):
         self.port = port
 
 
+# 서버 본체: 포트 확인 → 공용 의존성 준비 → 평문/TLS 리스너 기동 → 접속 안내 배너 출력.
 async def amain(settings: Settings) -> None:
     ports = [settings.ws_port]
     if settings.tls_enabled:
@@ -419,6 +440,7 @@ async def amain(settings: Settings) -> None:
 
     cameras = CameraHub()
 
+    # 붙박이 대사를 미리 TTS로 렌더해 캐시를 데워 둔다(첫 학생이 그 비용을 물지 않게).
     async def warm_fillers() -> None:
         """Render the repeated phrases before anyone asks for one.
 
@@ -433,6 +455,7 @@ async def amain(settings: Settings) -> None:
 
     warming = asyncio.create_task(warm_fillers())
 
+    # 연결 1건 처리: 경로로 디바이스 종류를 갈라 /camera · /browser · 기본 세션에 붙인다.
     async def handler(ws):
         path = ws.request.path.split("?", 1)[0]
         if path.rstrip("/") == "/camera":
@@ -459,6 +482,7 @@ async def amain(settings: Settings) -> None:
         finally:
             log.info("disconnected: %s", path)
 
+    # 평문 리스너와 TLS 리스너가 함께 쓰는 websockets 서버 옵션.
     # 16 MiB: a high-quality JPEG frame easily exceeds the 1 MiB default
     common = dict(
         max_size=16 * 1024 * 1024,
@@ -510,6 +534,7 @@ async def amain(settings: Settings) -> None:
         await asyncio.Future()
 
 
+# 포트 충돌 시 화면에 띄울 한국어 안내문.
 def port_in_use_help(settings: Settings, port: int | None = None) -> str:
     """The commonest restart mistake: the previous server is still running."""
     port = port or settings.ws_port
@@ -524,6 +549,7 @@ def port_in_use_help(settings: Settings, port: int | None = None) -> str:
     )
 
 
+# 동기 진입점: 로깅을 켜고 amain을 돌린다. 포트 충돌은 트레이스백 대신 안내문으로 끝낸다.
 def main(settings: Settings) -> None:
     soften_stdout()  # the banner must never be the reason the server fails to start
     logging.basicConfig(

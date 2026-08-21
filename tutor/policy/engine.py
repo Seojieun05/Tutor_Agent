@@ -16,9 +16,11 @@ from typing import Literal
 from tutor.state.models import StudentState
 from tutor.store.session_store import HintRecord
 
+# 정책을 부르는 계기: 힌트 요청 / 상태 갱신 / 인식 실패.
 Trigger = Literal["HINT_REQUEST", "STATE_UPDATE", "RECOGNITION_FAILED"]
 
 
+# 튜터가 취할 수 있는 행동. 기다리기부터 부분 단계 제시까지.
 class Action(str, Enum):
     WAIT = "WAIT"
     PROBE = "PROBE"
@@ -29,6 +31,7 @@ class Action(str, Enum):
     ASK_RECAPTURE = "ASK_RECAPTURE"
 
 
+# 힌트 레벨(L0~L4) → 행동 매핑. L0 침묵, L1 소크라테스 질문, L2 개념, L3 절차, L4 부분 단계.
 LEVEL_ACTIONS: dict[int, Action] = {
     0: Action.WAIT,
     1: Action.SOCRATIC_QUESTION,
@@ -37,12 +40,14 @@ LEVEL_ACTIONS: dict[int, Action] = {
     4: Action.PARTIAL_STEP,
 }
 
+# 올라갈 수 있는 최고 레벨.
 MAX_LEVEL = 4
 
 # The two things the tutor says when it cannot see the worksheet.
 BLIND_ACTIONS = frozenset({Action.ASK_RECAPTURE.value, Action.PROBE.value})
 
 
+# 정책의 결정 결과: 무슨 행동을, 몇 레벨로, 몇 단계를 겨냥해, 왜 했는지.
 @dataclass(frozen=True)
 class Decision:
     action: Action
@@ -52,6 +57,13 @@ class Decision:
     rationale: str
 
 
+# 정책 본체. 규칙을 위에서부터 검사해 처음 걸리는 것을 쓴다(first match wins).
+#   R10 인식 실패 → 재촬영 요청, 반복되면 말로 되묻기
+#   R1/R2 UNCERTAIN → 같은 처리
+#   R3/R4 상태 갱신만으로는 끼어들지 않음
+#   R5~R7 그 단계의 첫 힌트는 항상 L1
+#   R8 직전 힌트가 효과 없었으면 정확히 +1 단계 상승
+#   R9 아직 판정이 안 났으면 같은 레벨로 다시
 def decide(state: StudentState, history: list[HintRecord], trigger: Trigger) -> Decision:
     target = state.last_correct_step + 1
 

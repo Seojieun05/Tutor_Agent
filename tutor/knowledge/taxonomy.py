@@ -16,6 +16,7 @@ If we ever want them they get their own `strategy_tags` field.
 from __future__ import annotations
 
 # id → Korean name. Ordered by curriculum area so the prompt reads as a menu.
+# 문제 큰 유형 화이트리스트(id → 한국어 이름). 문제 하나에 정확히 하나.
 PROBLEM_TYPE_NAMES: dict[str, str] = {
     # 수와 연산
     "arithmetic": "사칙연산 계산",
@@ -62,15 +63,19 @@ PROBLEM_TYPE_NAMES: dict[str, str] = {
     "unknown": "분류할 수 없음",
 }
 
+# 허용된 유형 id 집합.
 ALLOWED_PROBLEM_TYPES = frozenset(PROBLEM_TYPE_NAMES)
 
+# 분류 실패 시 값.
 UNKNOWN_PROBLEM_TYPE = "unknown"
 
 
+# 화이트리스트에 있는 유형인지.
 def is_allowed_problem_type(problem_type: str) -> bool:
     return problem_type in ALLOWED_PROBLEM_TYPES
 
 
+# 목록에 없는 값은 전부 unknown으로 접는다.
 def normalize_problem_type(problem_type: str | None) -> str:
     """Anything off the whitelist (or invented) collapses to "unknown"."""
     if problem_type and problem_type.strip() in ALLOWED_PROBLEM_TYPES:
@@ -78,5 +83,6 @@ def normalize_problem_type(problem_type: str | None) -> str:
     return UNKNOWN_PROBLEM_TYPE
 
 
+# 프롬프트에 넣을 유형 메뉴.
 def problem_types_for_prompt() -> str:
     return "\n".join(f"- {k}: {v}" for k, v in PROBLEM_TYPE_NAMES.items())

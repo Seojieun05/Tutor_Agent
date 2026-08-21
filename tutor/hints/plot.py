@@ -25,24 +25,29 @@ log = logging.getLogger(__name__)
 # Drawn at the size it is actually shown at. The board is the width of the
 # page's centre column, and a 520-wide sketch stretched to fill it scaled its
 # own tick labels and legend up with it until they crowded the curve.
+# 실제로 보여지는 크기 그대로 그린다(늘려 쓰면 눈금 글씨까지 같이 커져 곡선을 가린다).
 WIDTH, HEIGHT = 900, 400
 PAD = 34                      # room for the axis numbers
 SAMPLES = 241                 # odd, so x = 0 is sampled exactly
 DEFAULT_SPAN = (-6.0, 6.0)
 # Past this the curve is a vertical wall, not a shape: clip and break the line
 # so an asymptote reads as an asymptote instead of a spike across the frame.
+# 이 값을 넘는 y는 발산으로 보고 끊는다.
 MAX_ABS_Y = 1e4
 # How much taller than wide the picture may be in UNITS before the x-axis is
 # given more room. The drawing area is about 2.5:1, so this is already a tall
 # picture; past it the two axes stop being comparable and the grid reads as a
 # mistake — which is how a live sketch ended up counting by 1 across and 50 up.
+# 가로세로 비율 상한(너무 납작하거나 길쭉한 창 방지).
 ASPECT_CAP = 3.0
 # What the question is about is drawn like it matters; what only exists to
 # get there is drawn like a construction line, so a glance sorts them.
+# 문제가 묻는 대상 곡선의 색 / 유도용 보조 곡선의 색.
 TARGETS = ("var(--accent-deep)", "var(--err)")
 SCAFFOLDS = ("var(--dim)", "var(--dim)")
 
 
+# 식을 구간에서 표본 추출한다(정의되지 않는 점은 None).
 def _sample(expr_text: str, x0: float, x1: float) -> list[tuple[float, float | None]]:
     """(x, y) with y=None where the function has nothing to draw."""
     expr = mathnorm.parse_expression(expr_text)
@@ -65,6 +70,7 @@ def _sample(expr_text: str, x0: float, x1: float) -> list[tuple[float, float | N
     return points
 
 
+# 표본들을 담을 y 범위를 정한다.
 def _window(series: list[list[tuple[float, float | None]]]) -> tuple[float, float]:
     """A y-range that shows the shape rather than one spike.
 
@@ -81,6 +87,7 @@ def _window(series: list[list[tuple[float, float | None]]]) -> tuple[float, floa
     return lo - margin, hi + margin
 
 
+# 비율이 극단으로 가지 않게 창을 넓힌다.
 def _widen_to_aspect(
     span: tuple[float, float], y0: float, y1: float
 ) -> tuple[float, float]:
@@ -100,6 +107,7 @@ def _widen_to_aspect(
     return middle - want / 2, middle + want / 2
 
 
+# 눈금 위치를 사람이 읽기 좋은 간격으로 고른다.
 def _ticks(lo: float, hi: float, want: int = 8) -> list[float]:
     span = hi - lo
     if span <= 0:
@@ -115,6 +123,7 @@ def _ticks(lo: float, hi: float, want: int = 8) -> list[float]:
     return out
 
 
+# 눈금 숫자 표기.
 def _fmt(v: float) -> str:
     return f"{v:g}" if abs(v) >= 1e-4 or v == 0 else f"{v:.1e}"
 
@@ -124,6 +133,7 @@ def _fmt(v: float) -> str:
 LEGEND_W, LEGEND_ROW = 300.0, 14.0
 
 
+# 곡선 이름표(범례)를 곡선과 겹치지 않는 자리에 그린다.
 def _legend_svg(rows, series, px, py) -> str:
     """The legend, in whichever corner the curves leave emptiest.
 
@@ -143,6 +153,7 @@ def _legend_svg(rows, series, px, py) -> str:
         ("end", WIDTH - PAD - LEGEND_W, PAD),
     ]
 
+    # 그 자리에 범례를 놓으면 얼마나 가려지는지 점수.
     def crowding(left: float, top: float) -> int:
         return sum(
             1
@@ -162,6 +173,7 @@ def _legend_svg(rows, series, px, py) -> str:
     )
 
 
+# 모든 곡선을 같은 창에서 표본 추출.
 def _sample_all(curves, window: tuple[float, float]):
     out: list[tuple[object, list[tuple[float, float | None]]]] = []
     for curve in list(curves)[:4]:
@@ -173,6 +185,7 @@ def _sample_all(curves, window: tuple[float, float]):
     return out
 
 
+# 자동 보기 창 계산: 문제가 묻는 대상 곡선이 잘 보이는 사각형.
 def compute_view(
     curves, span: tuple[float, float] = DEFAULT_SPAN, zoom: float = 1.0
 ) -> tuple[float, float, float, float] | None:
@@ -198,6 +211,7 @@ def compute_view(
     if not series:
         return None
 
+    # 이 곡선이 문제가 묻는 대상인지.
     def is_target(curve) -> bool:
         return not isinstance(curve, str) and getattr(curve, "role", "") == "target"
 
@@ -219,6 +233,7 @@ def compute_view(
     return (span[0], span[1], y0, y1)
 
 
+# 최종 SVG 생성. 축·격자·곡선만 그리는 스케치 — 근이나 넓이를 표시하면 그건 정답이다.
 def function_svg(
     curves, span: tuple[float, float] = DEFAULT_SPAN, zoom: float = 1.0,
     view: tuple[float, float, float, float] | None = None,

@@ -37,6 +37,7 @@ from tutor.speech.turn import TurnConfig, TurnDetector, TurnState, TurnTaker
 
 log = logging.getLogger("voice_device")
 
+# 턴 상태를 콘솔에 표시할 아이콘.
 STATE_ICON = {
     TurnState.LISTENING: "🎙  listening",
     TurnState.USER_SPEAKING: "🗣  you are speaking",
@@ -45,11 +46,14 @@ STATE_ICON = {
 }
 
 
+# 단조 시계(ms).
 def _now_ms() -> float:
     return time.monotonic() * 1000.0
 
 
+# 노트북 마이크·스피커를 디바이스로 쓰는 핸즈프리 모드. VAD가 이쪽(디바이스)에서 돈다.
 class VoiceDevice(DeviceSim):
+    # 마이크 스트림과 턴 감지기를 준비한다(바지인은 여기서 항상 끈다 — 스피커가 자기 마이크로 들어오므로).
     def __init__(
         self,
         server: str,
@@ -67,17 +71,20 @@ class VoiceDevice(DeviceSim):
         self.taker = TurnTaker(TurnDetector(vad=vad, config=config), on_change=self._show_state)
         self._processing_since = 0.0
 
+    # 현재 시각(테스트에서 갈아 끼울 수 있게 메서드로).
     def now_ms(self) -> float:
         """Monotonic clock for the tail guard and the response watchdog
         (overridden in tests to make the state machine deterministic)."""
         return _now_ms()
 
+    # 상태 변화를 콘솔에 한 줄로 표시.
     @staticmethod
     def _show_state(state: TurnState) -> None:
         print(f"  [{STATE_ICON[state]}]", flush=True)
 
     # --- server events drive the non-audio half of the state machine ---------
 
+    # 서버 이벤트 처리: speech_state로 튜터가 말하는 구간을 알고 그동안 마이크를 닫는다.
     def on_server_event(self, ev) -> None:
         if ev.event == "speech_state":
             if ev.data.get("state") == "speaking":
@@ -99,6 +106,7 @@ class VoiceDevice(DeviceSim):
 
     # --- the audio half: replaces device_sim's keyboard REPL -----------------
 
+    # 키 입력 대신 마이크를 계속 읽어 발화가 끝날 때마다 서버로 보낸다.
     async def _repl(self, ws) -> None:
         cfg = self.config
         print(
@@ -116,6 +124,7 @@ class VoiceDevice(DeviceSim):
                     continue
                 await self.on_frame(ws, frame)
 
+    # 서버가 보낸 TTS 오디오를 로컬 스피커로 재생한다.
     async def on_frame(self, ws, frame: bytes) -> None:
         """One mic frame through the gate; sends the turn when it ends."""
         now = self.now_ms()
@@ -132,6 +141,7 @@ class VoiceDevice(DeviceSim):
             self.taker.listen()
 
 
+# 커맨드라인 진입점.
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--server", default="ws://localhost:8765")

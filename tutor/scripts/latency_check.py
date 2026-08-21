@@ -43,9 +43,11 @@ from tutor.state.estimator import StudentStateEstimator
 from tutor.state.models import StudentState
 from tutor.tools.registry import ToolRegistry
 
+# 답변 턴 측정에 쓸 가짜 학생 발화.
 ANSWERED = "양변에서 5를 빼면 돼요"
 
 
+# 단계별 소요 시간을 재서 모아 두는 도구.
 class Timer:
     """Stage name → (seconds, model calls), in the order they ran.
 
@@ -54,12 +56,14 @@ class Timer:
     have opposite implications for what to optimise.
     """
 
+    # 빈 측정표로 시작.
     def __init__(self) -> None:
         self.marks: list[tuple[str, float, int]] = []
         # (seconds the solve took, seconds AFTER the hint it became ready) —
         # background work, deliberately outside `total`: the student never waits on it
         self.background: tuple[float, float] | None = None
 
+    # 함수 하나를 돌리며 시간을 잰다.
     def run(self, label: str, fn, *args, **kwargs):
         started, before = time.perf_counter(), timing.model_calls()
         try:
@@ -69,11 +73,13 @@ class Timer:
                 (label, time.perf_counter() - started, timing.model_calls() - before)
             )
 
+    # 전체 합계.
     @property
     def total(self) -> float:
         return sum(seconds for _, seconds, _ in self.marks)
 
 
+# 실제 모델을 붙인 파이프라인 부품을 만든다.
 def build(settings):
     # Imported here, not at module scope: build_shared loads the knowledge DB
     # and (optionally) the embedding index, which --help should not pay for.
@@ -96,6 +102,7 @@ def build(settings):
     }
 
 
+# 힌트 요청 턴을 실제로 돌려 단계별 시간을 잰다.
 def hint_request(dep, jpeg: bytes) -> tuple[Timer, object]:
     """A fresh problem, shaped exactly like the server now shapes it: the
     solver runs in the background while the first L1 hint — which needs only
@@ -130,6 +137,7 @@ def hint_request(dep, jpeg: bytes) -> tuple[Timer, object]:
     return t, (rec, match, reference)
 
 
+# 작업 확인 턴 측정.
 def work_check(dep, jpeg: bytes, ctx) -> Timer:
     """Same page: recognition also diagnoses from the cached reference."""
     rec0, match, reference = ctx
@@ -164,6 +172,7 @@ def work_check(dep, jpeg: bytes, ctx) -> Timer:
     return t
 
 
+# 답변 채점 턴 측정(사진 없음).
 def answer(dep, ctx) -> Timer:
     """Spoken reply: the transcript is the only new evidence, so no photo."""
     rec, match, reference = ctx
@@ -182,6 +191,7 @@ def answer(dep, ctx) -> Timer:
     return t
 
 
+# 측정 결과를 표로 출력(반복했으면 중앙값).
 def report(name: str, runs: list[Timer]) -> None:
     labels: list[str] = []
     for run in runs:
@@ -209,6 +219,7 @@ def report(name: str, runs: list[Timer]) -> None:
         say(f"    {'solve':<10} {total:5.1f}s   백그라운드 — 첫 힌트 이후 +{after:.1f}s에 기준 풀이 준비됨")
 
 
+# 커맨드라인 진입점. 실제 API를 쓰므로 호출 비용이 든다.
 def main() -> None:
     soften_stdout()
     # The per-call and per-round lines from tutor.llm.timing are the point of
@@ -234,6 +245,7 @@ def main() -> None:
         image = captures[0]
     jpeg = image.read_bytes()
     say(f"사진: {image}  ({len(jpeg) // 1024} KB)")
+    # 이 단계가 어느 provider·모델로 갔는지 한 줄로.
     def routed(provider: str, gemini_model: str) -> str:
         return gemini_model if provider == "gemini" else settings.chat_model
 

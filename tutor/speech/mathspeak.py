@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 
+# 숫자를 소리 내어 읽었을 때 받침이 있는지. 뒤에 붙일 조사를 고르는 데 쓴다.
 # Digits as read aloud: does the Korean word end in a consonant? "일(1)" does,
 # "오(5)" does not — it decides 이라고/라고, 은/는.
 _DIGIT_HAS_FINAL = {"0": True, "1": True, "2": False, "3": True, "4": False,
@@ -29,14 +30,17 @@ _DIGIT_HAS_FINAL = {"0": True, "1": True, "2": False, "3": True, "4": False,
 # this the parens reached the voice for the engine to read as it liked.
 # A signed number is mathematics all by itself: "기울기가 -2인 직선" has no
 # other sign of it, and left unread the engine said "기울기가 빼기 2인".
+# 이 신호가 하나도 없으면 수식이 없는 평범한 문장 — 손대지 않고 그대로 돌려준다.
 _MATH_SIGNAL = re.compile(
     r"[*^=/×÷'′²³√\\]|[A-Za-z]_\w|[A-Za-z]\s*\(|\( *-?\d+ *,|[-−]\s*\d|\blog|\bsqrt|\bDerivative"
 )
 
 # \frac{1}{5}, \dfrac{x+1}{2} — the args stay brace-free on a K-12 worksheet
+# LaTeX 분수 표기.
 _FRAC = re.compile(r"\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}")
 
 
+# LaTeX 표기를 목적지 형태로 바꾼다(귀에는 한국어 분수, 눈에는 일반 표기).
 def _latex(s: str, *, spoken: bool) -> str:
     """LaTeX, as the models actually emit it, down to the ASCII the rest of
     this module reads. \frac goes straight to its destination form — 분모-first
@@ -80,6 +84,7 @@ def _latex(s: str, *, spoken: bool) -> str:
     return s.replace("{", "").replace("}", "")
 
 
+# 마지막 글자에 받침이 있는지(조사 선택용).
 def ends_in_consonant(text: str) -> bool:
     """Does the LAST spoken syllable close on a consonant (받침)?"""
     if not text:
@@ -90,6 +95,7 @@ def ends_in_consonant(text: str) -> bool:
     return _DIGIT_HAS_FINAL.get(ch, False)
 
 
+# 은/는 중 맞는 것을 고른다.
 def _topic_particle(text: str) -> str:
     # The particle follows the SOUND, and a closing paren makes none:
     # "f(1) = -2" is read "에프 일은", so the 1 decides, not the ")".
@@ -97,6 +103,7 @@ def _topic_particle(text: str) -> str:
     return "은" if ends_in_consonant(text.rstrip().rstrip(")")) else "는"
 
 
+# 거듭제곱을 말로: x**2 → x 제곱.
 def _powers(s: str) -> str:
     def power_word(exp: str) -> str:
         return {"2": " 제곱", "3": " 세제곱"}.get(exp, f"의 {exp}제곱")
@@ -107,6 +114,7 @@ def _powers(s: str) -> str:
     return s
 
 
+# 프라임을 말로: f'(1) → f 프라임 1.
 def _primes(s: str) -> str:
     # f'(1) → "f 프라임 1"; g''(x) → "g 더블 프라임 x". The argument keeps its
     # own parentheses removed — "에프 프라임 괄호 일" helps nobody.
@@ -118,6 +126,7 @@ def _primes(s: str) -> str:
     return re.sub(r"\b([A-Za-z])\s*(['′]+)\s*\(\s*([^()]*?)\s*\)", prime, s)
 
 
+# 로그를 말로: log_3 b → 밑이 3인 로그 b.
 def _logs(s: str) -> str:
     # log_a(b), log_3 b/a, log_9 ab — "밑이 a인 로그 b"
     def log(m: re.Match) -> str:
@@ -128,6 +137,7 @@ def _logs(s: str) -> str:
     return s
 
 
+# 분수를 말로: 1/5 → 5분의 1.
 def _fractions(s: str) -> str:
     # Korean reads the denominator first: 1/2 → "2분의 1", b/a → "a분의 b".
     # A term is latin/digits, never hangul: \w matches Korean too, so
@@ -138,6 +148,7 @@ def _fractions(s: str) -> str:
     )
 
 
+# 사칙연산 기호를 말로: + → 더하기, * → 곱하기.
 def _operators(s: str) -> str:
     s = re.sub(r"\bsqrt\s*\(\s*([^()]+?)\s*\)", r"루트 \1", s)
     s = re.sub(r"√\s*", "루트 ", s)
@@ -148,6 +159,7 @@ def _operators(s: str) -> str:
     return s
 
 
+# 등호를 말로.
 def _equals(s: str) -> str:
     def eq(m: re.Match) -> str:
         left = m.group(1)
@@ -161,11 +173,13 @@ def _equals(s: str) -> str:
 # A coordinate pair is two numbers and a pause between them. Swallowing
 # the comma into ordinary punctuation is how "점 (1, 6)" came out as
 # "점 일 육" — two numbers with nothing between them, which is not a point.
+# 좌표 표기 (1, 6).
 _POINT = re.compile(
     r"\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)"
 )
 
 
+# 좌표를 말로: (1, 6) → 1 콤마 6 형태로 읽어 준다.
 def _points(s: str) -> str:
     def read(match: re.Match[str]) -> str:
         # the sign is spelled here, not left to _operators: between two
@@ -180,6 +194,7 @@ def _points(s: str) -> str:
     return _POINT.sub(read, s)
 
 
+# 음수 부호를 마이너스로(뺄셈과 구분해서).
 def _signs(s: str) -> str:
     """Minus as a SIGN unless there is something to its left to subtract.
 
@@ -193,6 +208,7 @@ def _signs(s: str) -> str:
     return re.sub(r"[-−]\s*(?=[0-9A-Za-z(])", "마이너스 ", s)
 
 
+# 괄호를 쉼표(끊어 읽기)로 바꾼다.
 def _parens(s: str) -> str:
     # A pause where the grouping was — "괄호 열고" is for dictation, not tutoring.
     s = re.sub(r"\s*\(\s*", " ", s)
@@ -213,12 +229,14 @@ def _parens(s: str) -> str:
 # cannot be moved cleanly stays as written rather than coming out half-set.
 # the operators too, because a general term is written a_{n+1}: without them
 # the brace strip turns that into "a_n + 1" — a different claim entirely
+# 아래첨자·위첨자 변환표(화면 표시용).
 _SUB_SRC = "0123456789aehklmnopstx+-=()"
 _SUBSCRIPT = str.maketrans(_SUB_SRC, "₀₁₂₃₄₅₆₇₈₉ₐₑₕₖₗₘₙₒₚₛₜₓ₊₋₌₍₎")
 _SUP_SRC = "0123456789abcdefghijklmnoprstuvwxyz"
 _SUPERSCRIPT = str.maketrans(_SUP_SRC, "⁰¹²³⁴⁵⁶⁷⁸⁹ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖʳˢᵗᵘᵛʷˣʸᶻ")
 
 
+# 화면용: log_3 → log₃.
 def _display_logs(s: str) -> str:
     def lowered(m: re.Match) -> str:
         base = m.group(1)
@@ -229,6 +247,7 @@ def _display_logs(s: str) -> str:
     return re.sub(r"\blog_\{?(\w+)\}?", lowered, s)
 
 
+# 화면용: a_10 → a₁₀.
 def _display_indices(s: str) -> str:
     """a_4 → a₄, x_n → xₙ — the sequence-term notation a worksheet lives on.
 
@@ -246,6 +265,7 @@ def _display_indices(s: str) -> str:
     return re.sub(r"\b([A-Za-z])_\{?([0-9]+|[A-Za-z])\}?(?![A-Za-z0-9])", lowered, s)
 
 
+# 화면용: x**2 → x².
 def _display_powers(s: str) -> str:
     """x**2 → x², x^10 → x¹⁰, x^n → xⁿ — raised, not careted."""
     def raised(m: re.Match) -> str:
@@ -257,6 +277,7 @@ def _display_powers(s: str) -> str:
     return re.sub(r"(?:\*\*|\^)\{?([0-9]+|[A-Za-z])\}?", raised, s)
 
 
+# 눈으로 볼 표기로 바꾼다. 수식이 없으면 원문 그대로.
 def displayable(text: str) -> str:
     """The text as it should be SEEN — real notation, not spoken Korean.
 
@@ -276,6 +297,7 @@ def displayable(text: str) -> str:
     return _display_indices(s)
 
 
+# 귀로 들을 표기로 바꾼다. 수식이 없으면 원문 그대로(TTS 캐시 키가 깨지지 않게).
 def speakable(text: str) -> str:
     """The text as it should be SPOKEN. Identity when there is no math in it."""
     if not text or not _MATH_SIGNAL.search(text):
@@ -303,6 +325,7 @@ def speakable(text: str) -> str:
 # Sino-Korean numerals, which is how a value is said out loud in a math class:
 # 칠 is 7, 이십사 is 24. STT writes what it hears, so a perfectly correct
 # "엑스는 칠에서 만날 것 같은데" reaches the grader with no digit in it at all.
+# 한자어 수사(칠=7, 이십사=24). STT가 숫자를 글자로 받아 적기 때문에 필요하다.
 _SINO_UNITS = {"영": 0, "공": 0, "일": 1, "이": 2, "삼": 3, "사": 4, "오": 5,
                "육": 6, "륙": 6, "칠": 7, "팔": 8, "구": 9}
 _SINO_SCALES = {"십": 10, "백": 100, "천": 1000}
@@ -313,15 +336,18 @@ _SINO_CHARS = "".join(_SINO_UNITS) + "".join(_SINO_SCALES)
 # 넓이, 공식이 — and rewriting those into digits would corrupt the sentence
 # the tutor is trying to read. Two rules keep them out: the run must START a
 # word (no hangul may precede it), and something grammatical must follow.
+# 수사 뒤에 흔히 붙는 어미들.
 _ENDINGS = (
     "에서", "에게", "에", "이에요", "이예요", "예요", "에요", "이요", "이야",
     "이고", "이며", "이란", "이라", "이랑", "이다", "인가", "인데", "인",
     "이", "가", "은", "는", "을", "를", "로", "으로", "하고", "랑", "도",
     "만", "쯤", "번째", "번", "요", "였", "일",
 )
+# 한자어 수사가 이어진 구간을 잡는 정규식.
 _SINO_RUN_RE = re.compile(rf"(?<![0-9A-Za-z가-힣])([{_SINO_CHARS}]+)")
 
 
+# 그 글자들이 정말 숫자인지, 아니면 보통 단어의 일부인지 가린다.
 def _stands_alone(run: str, after: str) -> bool:
     """Did this run end where a value ends, rather than mid-word?
 
@@ -337,6 +363,7 @@ def _stands_alone(run: str, after: str) -> bool:
     return after == "" or after[0].isspace() or after[0] in ",.!?…~)]"
 
 
+# 한자어 수사 문자열의 값.
 def _sino_value(run: str) -> int | None:
     """"이십사" → 24. None when the syllables do not compose a number."""
     total, current, seen_scale = 0, 0, False
@@ -355,6 +382,7 @@ def _sino_value(run: str) -> int | None:
     return total + current
 
 
+# 말로 한 숫자를 아라비아 숫자로 바꿔 준다(채점·판정이 숫자를 찾을 수 있게).
 def with_digits(text: str) -> str:
     """The utterance with spoken numerals rewritten as digits.
 
@@ -375,9 +403,11 @@ def with_digits(text: str) -> str:
     return _SINO_RUN_RE.sub(replace, text)
 
 
+# 0~9의 한자어 읽기.
 _SINO_DIGITS = ("영", "일", "이", "삼", "사", "오", "육", "칠", "팔", "구")
 
 
+# 49 → 사십구. 선생님이 소리 내어 읽는 방식.
 def sino_korean(value: int) -> str:
     """49 -> "사십구". The reading a Korean teacher says out loud.
 
@@ -399,6 +429,7 @@ def sino_korean(value: int) -> str:
     return out + (_SINO_DIGITS[value] if value else "")
 
 
+# 음성으로만 나갈 문장의 숫자를 글자로 바꾼다(TTS가 49를 사만 구로 읽는 사고 방지).
 def spell_numbers(text: str) -> str:
     """Digits read as words, for text going to a voice and nowhere else.
 

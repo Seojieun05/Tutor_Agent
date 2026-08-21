@@ -44,12 +44,14 @@ log = logging.getLogger(__name__)
 # Words that mean the hint is talking about a SHAPE. Only used to OPEN a
 # scene: once a grid exists it stays up to date every turn, because the thing
 # that changes it is often the student's answer rather than the tutor's words.
+# 힌트 문장이 그림을 부르는 말(그래프·접선·좌표 …)을 담고 있는지 보는 정규식.
 _VISUAL = re.compile(
     r"그래프|개형|곡선|그림|그려|접선|기울기|증가|감소|증감|교점|만나|넓이|면적|"
     r"영역|축|대칭|극값|극대|극소|위로|아래로|볼록|오목|범위|구간|둘러싸"
 )
 
 
+# 이 힌트가 그림을 필요로 하는 말투인지.
 def wants_a_picture(hint: str) -> bool:
     return bool(_VISUAL.search(hint or ""))
 
@@ -58,18 +60,22 @@ def wants_a_picture(hint: str) -> bool:
 # is a reason to open a scene even when the current sentence is pure algebra:
 # the student just earned a line the board can show. Sequence and scalar
 # steps (a_1*r³ = 2, g'(1) = -4) are not.
+# y = … 또는 f(x) = … 처럼 그릴 수 있는 꼴인지.
 _CURVE_LIKE = re.compile(r"\by\s*=|[A-Za-z]['′]?\s*\(\s*x\s*\)\s*=")
 
 
+# 이 식을 곡선으로 그릴 수 있는지.
 def drawable(expression: str) -> bool:
     return bool(_CURVE_LIKE.search(expression or ""))
 
 
 # "l: y = -2*(x - 1) - 6 = -2*x - 4" — a verified, LABELLED line. The last
 # piece of the chain is the finished form the board draws.
+# "l: y = …" 처럼 이름 붙은 직선.
 _LABELLED_LINE = re.compile(r"^\s*([A-Za-z])\s*:\s*y\s*=\s*(.+)$")
 
 
+# 검증된 이름 붙은 직선(l, m)은 모델 판단과 무관하게 반드시 칠판에 올린다.
 def ensure_verified_targets(
     spec: FigureSpec | None, verified: list[str] | None
 ) -> FigureSpec | None:
@@ -113,6 +119,7 @@ def ensure_verified_targets(
     return spec
 
 
+# 격자 위의 곡선 하나: 식 · 이름 · 역할(문제가 묻는 대상 target / 유도용 scaffold).
 class Curve(BaseModel):
     """One line on the grid, and why it is still there."""
 
@@ -121,6 +128,7 @@ class Curve(BaseModel):
     role: Literal["target", "scaffold"] = "scaffold"
 
 
+# 이름 붙은 점 하나. 좌표값은 화면에 절대 찍지 않는다.
 class PlotPoint(BaseModel):
     """A named construction point; its coordinates are never printed."""
 
@@ -129,6 +137,7 @@ class PlotPoint(BaseModel):
     label: str
 
 
+# 이번 턴이 끝난 뒤 칠판이 어떤 모습이어야 하는지 — 장면 전체의 선언.
 class FigureSpec(BaseModel):
     """The whole grid as it should look after this turn."""
 
@@ -142,16 +151,20 @@ class FigureSpec(BaseModel):
     why: str = ""                                # logged, never shown to the student
 
 
+# 도함수 정의 f'(x) = … 를 잡는 정규식.
 _DERIVATIVE_DEFINITION = re.compile(
     r"(?:^|,)\s*([A-Za-z])\s*['′]\s*\(\s*x\s*\)\s*="
 )
+# 함수 정의 f(x) = … 를 잡는 정규식.
 _FUNCTION_DEFINITION = re.compile(
     r"^\s*([A-Za-z])\s*\(\s*x\s*\)\s*=\s*(.+)$"
 )
 
+# y = … 형태.
 _Y_DEFINITION = re.compile(r"^\s*y\s*=\s*(.+)$", re.IGNORECASE)
 
 
+# 아직 정해지지 않은 상수를 임의의 값으로 대신 그린 상황인지(그럴 땐 눈금·범례를 숨긴다).
 def _has_unresolved_plot_parameter(
     curves: list[Curve], equations: list[str], verified: list[str] | None,
 ) -> bool:
@@ -199,6 +212,7 @@ def _has_unresolved_plot_parameter(
     return False
 
 
+# g(x)=…f(x) 처럼 다른 정의를 참조하는 함수를 실제로 그릴 수 있는 식으로 펼친다.
 def _expanded_problem_function(name: str, equations: list[str]) -> str | None:
     """Return a plottable RHS, expanding definitions such as g(x)=...f(x)."""
     definitions = {}
@@ -223,6 +237,7 @@ def _expanded_problem_function(name: str, equations: list[str]) -> str | None:
     return rhs
 
 
+# 검증된 단계들만으로 장면을 결정론적으로 구성한다(모델을 기다리지 않는 부분).
 def ensure_verified_scene(
     spec: FigureSpec | None,
     verified: list[str] | None,
@@ -294,6 +309,10 @@ def ensure_verified_scene(
     return out
 
 
+# [프롬프트] 그리기 모델용 시스템 프롬프트.
+# 핵심 판단은 target(문제가 묻는 대상) vs scaffold(유도용 보조) 구분이고,
+# 학생이 아직 도달하지 않은 결과는 절대 그리지 말라는 것이 가장 강한 금지다.
+# 장면 전체를 매 턴 다시 선언하게 해서, 칠판 하나가 문제 하나를 계속 따라간다.
 _SYSTEM = """PERSONA
 You are the drawing hand of a Korean math tutor. The tutor has just spoken and
 is still speaking; you decide what the board looks like NOW.
@@ -384,10 +403,13 @@ Return ONLY JSON:
  "caption": "...", "why": "..."}"""
 
 
+# 그리는 손. 튜터가 말하는 동안 돌기 때문에 턴을 지연시키지 않는다.
 class Illustrator:
+    # 그리기 모델을 받는다.
     def __init__(self, llm: LLMClient):
         self.llm = llm
 
+    # 완성된 힌트와 지금 칠판 상태를 보여 주고, 이번 턴의 장면(FigureSpec)을 받아 온다.
     def draw(
         self,
         *,

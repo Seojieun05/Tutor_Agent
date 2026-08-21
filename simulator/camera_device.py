@@ -22,17 +22,21 @@ from tutor.protocol.events import make_event, parse_event
 from tutor.protocol.frames import ImageHeader, encode_image
 
 
+# 폰 카메라 대역: /camera에 붙어 촬영 요청마다 현재 사진을 돌려준다.
 class CameraDevice:
+    # 서버 주소와 순서대로 보여 줄 사진들.
     def __init__(self, server: str, images: list[Path], device_id: str = "sim-camera"):
         self.server = server.rstrip("/") + "/camera"
         self.images = images
         self.device_id = device_id
         self.index = 0
 
+    # 지금 보낼 사진.
     @property
     def current(self) -> Path:
         return self.images[min(self.index, len(self.images) - 1)]
 
+    # 접속·hello 후 수신 루프와 Enter 입력 대기를 함께 돌린다.
     async def run(self) -> None:
         async with connect(self.server, max_size=16 * 1024 * 1024) as ws:
             await ws.send(
@@ -49,6 +53,7 @@ class CameraDevice:
             finally:
                 reader.cancel()
 
+    # 촬영 요청에 IMAGE 프레임으로 응답.
     async def _reader(self, ws) -> None:
         async for raw in ws:
             if not isinstance(raw, str):
@@ -66,6 +71,7 @@ class CameraDevice:
             elif ev.event == "error":
                 print(f"  [server error] {ev.data}")
 
+    # Enter를 누르면 다음 사진으로 넘어간다.
     async def _advance_on_enter(self) -> None:
         loop = asyncio.get_running_loop()
         while True:
@@ -75,6 +81,7 @@ class CameraDevice:
             print(f"  현재 이미지: {self.current.name}")
 
 
+# 커맨드라인 진입점.
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--server", default="ws://localhost:8765")

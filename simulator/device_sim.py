@@ -25,10 +25,13 @@ from tutor.console import soften_stdout
 from tutor.protocol.events import make_event, parse_event
 from tutor.protocol.frames import AudioHeader, ImageHeader, encode_audio, encode_image
 
+# 오디오를 이 길이로 잘라 보낸다.
 CHUNK_MS = 320
 
 
+# 하드웨어 없이 디바이스 프로토콜을 그대로 흉내 내는 시뮬레이터.
 class DeviceSim:
+    # 서버 주소, 순서대로 보여 줄 문제지 사진들, 보낼 음성 파일을 받는다.
     def __init__(self, server: str, images: list[Path], wav: Path | None, use_mic: bool):
         self.server = server
         self.images = images
@@ -38,10 +41,12 @@ class DeviceSim:
         self.audio_seq = 0
         self.utterance = 0
 
+    # 지금 촬영 요청에 답할 사진(= 학생 풀이의 현재 단계).
     @property
     def current_image(self) -> Path:
         return self.images[min(self.image_idx, len(self.images) - 1)]
 
+    # 접속해서 hello를 보내고, 수신 루프와 키 입력 루프를 함께 돌린다.
     async def run(self) -> None:
         async with connect(self.server, max_size=16 * 1024 * 1024) as ws:
             await ws.send(
@@ -57,6 +62,7 @@ class DeviceSim:
             finally:
                 reader.cancel()
 
+    # 서버 → 디바이스 방향 처리: 촬영 요청이 오면 현재 사진을 IMAGE 프레임으로 보낸다.
     async def _reader(self, ws) -> None:
         async for raw in ws:
             if not isinstance(raw, str):
@@ -86,10 +92,12 @@ class DeviceSim:
                 print(f"  [server error] {ev.data}")
             self.on_server_event(ev)
 
+    # 서버 이벤트를 화면에 표시(하위 클래스가 확장한다).
     def on_server_event(self, ev) -> None:
         """Hook for device variants that react to server events (see
         simulator/voice_device.py, which drives turn taking from them)."""
 
+    # 키 입력: h 힌트 요청 · n 다음 사진 · a 음성 전송 · q 종료.
     async def _repl(self, ws) -> None:
         loop = asyncio.get_running_loop()
         print("keys: [h]int  [n]ext image  [a]udio  [q]uit")
@@ -106,6 +114,7 @@ class DeviceSim:
             elif cmd == "q":
                 return
 
+    # PCM을 조각내어 AUDIO 프레임으로 보낸다(마지막 조각에 last 표시).
     async def _send_audio(self, ws, pcm: bytes | None = None, rate: int | None = None) -> None:
         if pcm is None:
             pcm, rate = self._get_audio()
@@ -132,6 +141,7 @@ class DeviceSim:
             )
         print(f"  -> sent {len(pcm)} bytes of PCM as {len(chunks)} chunks")
 
+    # WAV 파일을 읽거나 마이크로 몇 초 녹음해 PCM을 만든다.
     def _get_audio(self) -> tuple[bytes, int]:
         if self.wav is not None:
             with wave.open(str(self.wav), "rb") as w:
@@ -153,6 +163,7 @@ class DeviceSim:
         return b"", 16000
 
 
+# 커맨드라인 진입점.
 def main() -> None:
     soften_stdout()  # this docstring becomes --help, and cp949 cannot hold it
     parser = argparse.ArgumentParser(description=__doc__)

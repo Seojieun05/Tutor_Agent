@@ -28,15 +28,18 @@ from tutor.config import PROJECT_ROOT, load_settings
 from tutor.console import soften_stdout
 from tutor.scripts.live_demo import lan_ip
 
+# 자체 서명 인증서를 둘 폴더와 유효 기간.
 CERT_DIR = PROJECT_ROOT / "certs"
 DAYS = 825  # the longest a leaf certificate may live before browsers refuse it
 
 
+# 인증서에 넣을 이름들(localhost와 LAN IP).
 def san_entries(ip: str) -> list[str]:
     """localhost too: the same cert then serves a laptop test of the page."""
     return [f"IP:{ip}", "IP:127.0.0.1", "DNS:localhost"]
 
 
+# cryptography 패키지로 인증서를 만든다.
 def _with_cryptography(cert: Path, key: Path, ip: str) -> bool:
     try:
         from cryptography import x509
@@ -85,6 +88,7 @@ def _with_cryptography(cert: Path, key: Path, ip: str) -> bool:
     return True
 
 
+# openssl로 같은 인증서를 만드는 명령.
 def openssl_command(cert: Path, key: Path, ip: str) -> list[str]:
     return [
         "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
@@ -94,6 +98,7 @@ def openssl_command(cert: Path, key: Path, ip: str) -> list[str]:
     ]
 
 
+# openssl 실행으로 인증서 생성.
 def _with_openssl(cert: Path, key: Path, ip: str) -> bool:
     if shutil.which("openssl") is None:
         return False
@@ -104,12 +109,14 @@ def _with_openssl(cert: Path, key: Path, ip: str) -> bool:
     return True
 
 
+# 가능한 방법으로 자체 서명 인증서를 만든다.
 def write_selfsigned(cert: Path, key: Path, ip: str) -> bool:
     """Whichever backend this machine has. False if it has neither."""
     cert.parent.mkdir(parents=True, exist_ok=True)
     return _with_cryptography(cert, key, ip) or _with_openssl(cert, key, ip)
 
 
+# 커맨드라인 진입점: 폰 카메라용 HTTPS 인증서를 만들고 .env 설정을 안내한다.
 def main() -> None:
     soften_stdout()  # this docstring becomes --help, and cp949 cannot hold it
     parser = argparse.ArgumentParser(description=__doc__)

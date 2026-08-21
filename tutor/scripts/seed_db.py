@@ -21,9 +21,11 @@ from tutor.knowledge.models import (
     Template,
 )
 
+# 사람이 손으로 관리하는 원본 JSON 폴더.
 SEEDS_DIR = Path(__file__).resolve().parent.parent / "knowledge" / "seeds"
 
 
+# seeds/*.json을 DB에 넣는다. 정답이 sympy 검증을 통과하지 못한 문제는 검증됨으로 넣지 않는다.
 def seed_database(db: KnowledgeDB, seeds_dir: Path = SEEDS_DIR) -> list[tuple[str, bool, str]]:
     """Returns a report: (seed id, verified?, reason)."""
     from tutor.knowledge.matching import problem_hash
@@ -81,6 +83,7 @@ def seed_database(db: KnowledgeDB, seeds_dir: Path = SEEDS_DIR) -> list[tuple[st
     return report
 
 
+# 커맨드라인 진입점: DB를 만들고 시드 결과를 표로 보여 준다.
 def main() -> None:
     from tutor.config import load_settings
 

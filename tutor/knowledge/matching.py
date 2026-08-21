@@ -31,14 +31,17 @@ from tutor.vision.recognizer import Recognition
 
 log = logging.getLogger(__name__)
 
+# f(x) = ... 형태의 함수 정의를 잡는 정규식.
 _FUNCTION_DEF = re.compile(
     r"^\s*([A-Za-z][A-Za-z0-9_]*)\s*\(\s*x\s*\)\s*=\s*(.+?)\s*$"
 )
+# y = f(x) 처럼 조건을 더하지 않는 그래프 이름표.
 _GRAPH_ALIAS = re.compile(
     r"^\s*y\s*=\s*([A-Za-z][A-Za-z0-9_]*)\s*\(\s*x\s*\)\s*$"
 )
 
 
+# 같은 사진에 f(x) 정의가 있으면 y=f(x) 이름표는 뺀다(수식 개수가 달라져 매칭이 어긋나지 않게).
 def _without_graph_aliases(equations: list[str]) -> list[str]:
     """Drop ``y=f(x)`` only when the same read also defines ``f(x)=...``.
 
@@ -61,6 +64,7 @@ def _without_graph_aliases(equations: list[str]) -> list[str]:
     ]
 
 
+# 문제 정체성 해시: 본문 + 수식 + 보기 + 그림 조건. 학생 풀이는 뺀다(새 줄을 써도 같은 문제).
 def problem_hash(rec: Recognition) -> str:
     """Hash of the problem identity: text + equations + choices + diagram
     conditions. student_work is excluded so new work lines keep the cache."""
@@ -76,14 +80,18 @@ def problem_hash(rec: Recognition) -> str:
     return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()
 
 
+# 매칭 캐스케이드. EXACT → TEMPLATE → CONCEPT → SEMANTIC → NEW 순으로 내려간다.
 class Matcher:
+    # 개념 겹침이 이 이상이어야 CONCEPT 등급으로 인정.
     CONCEPT_OVERLAP_THRESHOLD = 0.5
     SEMANTIC_THRESHOLD = 0.85  # cosine on multilingual-e5; below this is noise
 
+    # 지식 DB와 (선택) 임베딩 검색기를 받는다.
     def __init__(self, db: KnowledgeDB, semantic=None):
         self.db = db
         self.semantic = semantic  # SemanticRetriever | None (index optional)
 
+    # 매칭 진입점: 위 등급부터 차례로 시도하고, 다 실패하면 NEW.
     def match(self, rec: Recognition) -> MatchResult:
         ptype = rec.problem_type or "unknown"
         concepts = set(rec.concepts)
@@ -108,6 +116,7 @@ class Matcher:
 
     # --- EXACT ---------------------------------------------------------------
 
+    # EXACT: 정규화 텍스트 해시·수식 서명으로 같은 문제를 찾고, 수식이 기호적으로 같은지까지 확인.
     def _match_exact(self, rec: Recognition) -> MatchResult | None:
         candidate = self.db.find_by_text_hash(problem_hash(rec))
         equations = _without_graph_aliases(rec.equations)
@@ -169,6 +178,7 @@ class Matcher:
 
     # --- TEMPLATE ------------------------------------------------------------
 
+    # TEMPLATE: 구조가 같고 숫자만 다른 문제. 패턴에 값을 대입해 풀이를 다시 만든다.
     def _match_template(
         self, rec: Recognition, ptype: str, concepts: set[str]
     ) -> MatchResult | None:
@@ -193,6 +203,7 @@ class Matcher:
                     )
         return None
 
+    # 템플릿에 값을 넣어 기준 풀이를 만들고, sympy로 정답을 다시 검산한다(통과해야 verified).
     def _instantiate(
         self, template: Template, bindings: dict[str, str], equation: str, concepts: set[str]
     ) -> ReferenceSolution | None:
@@ -221,6 +232,7 @@ class Matcher:
 
     # --- lookalike verification ----------------------------------------------
 
+    # 검색은 후보를 제안만 한다. 본문과 수식이 정말 같은지 확인한 뒤에야 저장된 풀이를 믿는다.
     def _verified_lookalike(
         self, rec: Recognition, hit: Problem
     ) -> MatchResult | None:
@@ -269,6 +281,7 @@ class Matcher:
 
     # --- CONCEPT -------------------------------------------------------------
 
+    # CONCEPT: 개념만 겹치는 경우. 풀이는 넘기지 않고 솔버가 채우게 둔다.
     def _match_concept(
         self, rec: Recognition, ptype: str, concepts: set[str]
     ) -> MatchResult | None:
@@ -290,6 +303,7 @@ class Matcher:
 
     # --- SEMANTIC ------------------------------------------------------------
 
+    # SEMANTIC: 마지막 수단으로 텍스트 임베딩 최근접. 근거가 약하므로 절대 풀이를 함께 주지 않는다.
     def _match_semantic(self, rec: Recognition, concepts: set[str]) -> MatchResult | None:
         """Last resort before NEW: the nearest problem by text embedding.
 

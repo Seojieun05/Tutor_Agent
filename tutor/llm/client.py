@@ -23,16 +23,19 @@ log = logging.getLogger(__name__)
 
 M = TypeVar("M", bound=BaseModel)
 
+# 학생이 대화 중 기다리는 용도들 — 여기에만 reasoning_effort를 낮춰 응답을 앞당긴다.
 # Purposes the student waits on mid-conversation. `solve` and `recognize` are
 # excluded: a wrong reference solution or a misread worksheet costs far more
 # than the seconds saved.
 FAST_PURPOSES = frozenset({"evaluate", "phrase", "estimate", "tag", "explain"})
 
 
+# 모델 호출 실패.
 class LLMError(Exception):
     pass
 
 
+# 모든 모델 호출이 지나가는 인터페이스. Grok · Gemini · Echo가 이 모양을 똑같이 구현한다.
 class LLMClient(Protocol):
     def complete_json(
         self,
@@ -68,6 +71,8 @@ class LLMClient(Protocol):
     ) -> M: ...
 
 
+# 스트리밍으로 들어오는 JSON에서 특정 문자열 필드(hint)의 내용만 실시간으로 뽑아낸다.
+# JSON 문법이나 board 같은 다른 필드는 학생에게 나가는 스트림에 절대 섞이지 않는다.
 class JsonStringFieldStream:
     """Incrementally decode one JSON string field from arbitrary SSE chunks.
 
@@ -77,11 +82,13 @@ class JsonStringFieldStream:
     never enter the student-facing stream.
     """
 
+    # JSON 문자열 이스케이프 처리표.
     _ESCAPES = {
         '"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f",
         "n": "\n", "r": "\r", "t": "\t",
     }
 
+    # 어떤 필드를 뽑을지 정하고 파서 상태를 초기화.
     def __init__(self, field: str):
         self.field = field
         self._source = ""
@@ -91,6 +98,7 @@ class JsonStringFieldStream:
         self._escaped = False
         self._unicode = ""
 
+    # 새 조각을 넣고, 그 필드 안쪽의 '보여도 되는 글자'만 돌려준다.
     def feed(self, chunk: str) -> str:
         if not chunk or self._done:
             return ""
@@ -140,6 +148,7 @@ class JsonStringFieldStream:
         return "".join(out)
 
 
+# 모델이 코드펜스로 감싼 JSON을 벗겨 낸다.
 def _strip_fences(text: str) -> str:
     text = text.strip()
     match = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
@@ -148,11 +157,14 @@ def _strip_fences(text: str) -> str:
     return text
 
 
+# 응답 문자열을 지정한 스키마로 검증·파싱.
 def parse_into(schema: type[M], text: str) -> M:
     return schema.model_validate_json(_strip_fences(text))
 
 
+# xAI(OpenAI 호환) 엔드포인트에 붙는 실제 클라이언트.
 class GrokClient:
+    # 설정과 툴 레지스트리를 받아 OpenAI 호환 클라이언트를 만든다.
     def __init__(self, settings: Settings, registry: ToolRegistry):
         from openai import OpenAI
 
@@ -160,6 +172,7 @@ class GrokClient:
         self.registry = registry
         self._client = OpenAI(api_key=settings.xai_api_key, base_url=settings.xai_base_url)
 
+    # 사용자 메시지 구성. 이미지가 있으면 base64 data URL로 함께 싣는다.
     def _user_content(self, user: str, images: Sequence[bytes]):
         if not images:
             return user
@@ -171,12 +184,14 @@ class GrokClient:
             )
         return content
 
+    # 응답 스키마를 시스템 메시지 끝에 덧붙여 JSON 형태를 강제한다.
     def _schema_reminder(self, schema: type[BaseModel]) -> str:
         return (
             "Respond with ONLY a JSON object matching this schema:\n"
             + json.dumps(schema.model_json_schema(), ensure_ascii=False)
         )
 
+    # 용도별 지연 시간 조절: 대화용 호출만 추론 강도를 낮춘다(solve·recognize는 그대로).
     def _tuning(self, purpose: str) -> dict:
         """Per-purpose latency knobs.
 
@@ -190,6 +205,7 @@ class GrokClient:
             return {"reasoning_effort": effort}
         return {}
 
+    # 툴 없이 한 번 호출해 JSON 하나를 받는다.
     def complete_json(self, *, purpose, system, user, images=(), schema):
         messages = [
             {"role": "system", "content": f"{system}\n\n{self._schema_reminder(schema)}"},
@@ -197,6 +213,7 @@ class GrokClient:
         ]
         return self._final_json(purpose, messages, schema)
 
+    # JSON 전체는 검증용으로 받되, 지정한 문자열 필드는 오는 대로 흘려보낸다(말하기를 앞당기려고).
     def complete_json_stream(
         self, *, purpose, system, user, images=(), schema, text_field, on_text_delta
     ):
@@ -228,6 +245,7 @@ class GrokClient:
         messages.append({"role": "assistant", "content": content})
         return self._parse_or_retry(purpose, messages, content, schema)
 
+    # 툴(sympy 계산·KB 검색)을 쓸 수 있는 호출. 라운드 수를 제한해 침묵이 길어지지 않게 한다.
     def run_with_tools(self, *, purpose, system, user, images=(), schema, max_rounds=6):
         tools = self.registry.openai_tools(purpose)
         if not tools:
@@ -304,6 +322,7 @@ class GrokClient:
         with timing.stage(f"{purpose}.last"):
             return self._final_json(purpose, messages, schema)
 
+    # 마지막 응답을 스키마로 파싱해 돌려준다.
     def _final_json(self, purpose: str, messages: list, schema: type[M]) -> M:
         resp = self._client.chat.completions.create(
             model=self.settings.chat_model,
@@ -316,6 +335,7 @@ class GrokClient:
         messages.append({"role": "assistant", "content": content})
         return self._parse_or_retry(purpose, messages, content, schema)
 
+    # 파싱 실패 시 형식을 다시 알려 주고 한 번 더 물어본다.
     def _parse_or_retry(self, purpose: str, messages: list, content: str, schema: type[M]) -> M:
         try:
             return parse_into(schema, content)

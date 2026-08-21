@@ -45,9 +45,11 @@ from tutor.speech.turn import TurnConfig, TurnDetector, TurnState, TurnTaker
 log = logging.getLogger(__name__)
 
 
+# 모델 스레드에서 안전 검사를 통과한 단어를, 브라우저 화면 글자와 TTS 양쪽으로 흘려보내는 다리.
 class BrowserHintStream:
     """Bridge safe hint words from a model thread to browser text and TTS."""
 
+    # 이벤트 큐와 TTS 텍스트 큐를 만들고 처리 태스크를 띄운다(paused면 오디오는 대기).
     def __init__(self, session: "BrowserSession", paused: bool = False):
         self.session = session
         self.loop = asyncio.get_running_loop()
@@ -59,18 +61,22 @@ class BrowserHintStream:
             self.active.set()
         self.task = asyncio.create_task(self._run())
 
+    # 모델 스레드에서 부르는 입구: 안전한 조각을 큐에 넣는다.
     def push(self, delta: str) -> None:
         if delta and not self.closed:
             self.loop.call_soon_threadsafe(self.events.put_nowait, ("delta", delta))
 
+    # 완성된 문장으로 마무리하고, 학생이 들었는지 여부를 돌려준다.
     async def finish(self, text: str) -> bool:
         self.closed = True
         await self.events.put(("done", str(text)))
         return await self.task
 
+    # 필러가 끝나 스피커를 넘겨받았을 때 오디오 송출을 시작한다.
     def activate(self) -> None:
         self.active.set()
 
+    # 중간에 취소(바지인 등): 남은 것을 버리고 정리한다.
     async def abort(self) -> None:
         if self.closed:
             return
@@ -79,6 +85,7 @@ class BrowserHintStream:
         await self.events.put(("abort", ""))
         await self.task
 
+    # TTS에 넣을 텍스트 조각들을 순서대로 내보내는 제너레이터(말하기 표기로 변환).
     def _text_parts(self):
         while True:
             part = self.tts_text.get()
@@ -88,6 +95,7 @@ class BrowserHintStream:
             # existing mathspeak boundary for any notation that still appears.
             yield mathspeak.speakable(part)
 
+    # 스트림 본체: 델타를 화면에 붙이고 TTS로 넘기며, done/abort로 끝맺는다.
     async def _run(self) -> bool:
         started = False
         audio_task = None
@@ -144,7 +152,10 @@ class BrowserHintStream:
             return await audio_task
 
 
+# 브라우저를 디바이스로 쓰는 세션. VAD가 서버에서 돌고, 오디오는 소켓으로 오간다.
+# 파이프라인 자체는 Session 그대로이고, 말하기·듣기 입출력만 갈아 끼운다.
 class BrowserSession(Session):
+    # 턴 설정·재생 타임아웃·바지인 관련 플래그를 준비한다.
     def __init__(self, ws, deps: Deps, vad=None, playback_timeout_s: float = 120.0):
         super().__init__(ws, deps)
         self.config = TurnConfig.from_settings(deps.settings)
@@ -164,10 +175,12 @@ class BrowserSession(Session):
         # returns without speaking. Cleared when the next turn starts.
         self._interrupted = False
 
+    # 단조 시계(ms).
     @staticmethod
     def _now_ms() -> float:
         return time.monotonic() * 1000.0
 
+    # 첫 오디오가 올 때 Silero VAD와 TurnTaker를 준비한다(로딩은 이벤트 루프 밖에서).
     async def _ensure_taker(self) -> TurnTaker:
         if self.taker is None:
             # loading Silero takes a moment: keep it off the event loop
@@ -181,6 +194,7 @@ class BrowserSession(Session):
 
     # --- barge-in ------------------------------------------------------------
 
+    # 학생이 말을 끊고 들어온 순간: 브라우저 재생 중단 → 남은 발화 포기 → 그 말이 다음 턴이 된다.
     def _barged_in(self) -> None:
         """The student took the floor. Called from inside the VAD, so it must
         not await — it schedules the stop and returns."""
@@ -194,6 +208,7 @@ class BrowserSession(Session):
             self._playback.set_result(False)
         self._spawn(self._stop_playback())
 
+    # 발언권이 정리될 때까지 잠깐 기다린다.
     async def _wait_for_the_floor(self, timeout_s: float = 3.0) -> None:
         """Let the abandoned turn finish unwinding before starting the new one.
 
@@ -210,6 +225,7 @@ class BrowserSession(Session):
         if self._busy:
             log.warning("previous turn is still running after %.0fs", timeout_s)
 
+    # 브라우저에 재생 중단과 큐 비우기를 지시한다.
     async def _stop_playback(self) -> None:
         try:
             async with self._speech_send_lock:
@@ -218,6 +234,7 @@ class BrowserSession(Session):
         except Exception:
             log.debug("could not tell the browser to stop (connection gone)")
 
+    # 현재 턴 상태를 브라우저에 알린다(마이크 표시·마스코트 연출용).
     async def _push_state(self) -> None:
         """Mirror the turn state to the browser (UI + its own mic gate)."""
         if self.taker is None or self.taker.state is self._sent_state:
@@ -232,6 +249,7 @@ class BrowserSession(Session):
 
     # --- device events ------------------------------------------------------
 
+    # 브라우저에서 온 이벤트 처리(재생 완료 등) 후 나머지는 기본 세션에 넘긴다.
     async def _on_event(self, raw: str) -> None:
         ev = parse_event(raw)
         if ev.event == "playback_done":
@@ -255,6 +273,7 @@ class BrowserSession(Session):
 
     # --- mic audio: VAD here instead of on the device -----------------------
 
+    # 마이크 PCM을 정확한 프레임 크기로 잘라 VAD에 먹이고, 발화가 끝나면 파이프라인으로.
     async def _on_audio(self, frame: AudioFrame) -> None:
         taker = await self._ensure_taker()
         if frame.header.sample_rate != self.config.sample_rate:
@@ -280,6 +299,7 @@ class BrowserSession(Session):
                 self._spawn(self._handle_utterance(utterance, frame.header.sample_rate))
         await self._push_state()
 
+    # 발화 처리 동안 마이크를 닫아 두고, 끝나면 다시 연다.
     async def _handle_utterance(self, pcm: bytes, sample_rate: int) -> None:
         # A fresh turn: the tutor may speak again. Cleared here rather than at
         # the barge-in, so everything still unwinding from the abandoned turn
@@ -291,6 +311,7 @@ class BrowserSession(Session):
         finally:
             await self._reopen_mic()
 
+    # 턴 뒷정리가 끝난 뒤에야 발언권을 학생에게 돌려준다.
     async def _turn_finished(self) -> None:
         """Open the floor only after Session has cleared `_busy`."""
         # Let an answer already waiting on `_turn_idle` claim the next turn
@@ -300,6 +321,7 @@ class BrowserSession(Session):
         await asyncio.sleep(0)
         await self._reopen_mic()
 
+    # 생각 중 상태로 남아 있으면 다시 듣기로 — 아무 말도 안 한 턴이 귀머거리로 끝나지 않게.
     async def _reopen_mic(self) -> None:
         """The floor back to the student, if the turn left it in PROCESSING —
         which also covers a turn that spoke nothing at all (no hint wanted,
@@ -318,9 +340,11 @@ class BrowserSession(Session):
 
     # --- tutor speech: to the browser, never to the server's speaker --------
 
+    # 이 세션은 실시간 스트리밍 싱크를 제공한다(기본 세션은 None).
     def _new_hint_stream(self, paused: bool = False):
         return BrowserHintStream(self, paused=paused)
 
+    # 블로킹 TTS 스트림을 스레드에서 돌려 오디오 조각을 비동기 큐로 넘긴다.
     def _pump_tts(self, spoken: str) -> tuple[asyncio.Queue, "threading.Event", asyncio.Task]:
         """Run the blocking TTS stream in a thread, chunks into an async queue.
 
@@ -332,6 +356,7 @@ class BrowserSession(Session):
         queue: asyncio.Queue = asyncio.Queue()
         stop = threading.Event()
 
+        # 스레드 본체: 조각을 큐에 넣고, 중단 신호가 오면 멈춘다.
         def pump() -> None:
             try:
                 for chunk in self.deps.speaker.synthesize_stream(spoken):
@@ -346,12 +371,14 @@ class BrowserSession(Session):
 
         return queue, stop, asyncio.create_task(asyncio.to_thread(pump))
 
+    # 아직 완성되지 않은 텍스트 조각을 그대로 TTS에 흘려 넣는 버전(최단 지연).
     def _pump_tts_deltas(self, parts) -> tuple[asyncio.Queue, "threading.Event", asyncio.Task]:
         """The same audio pump, with a blocking iterator as TTS text input."""
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
         stop = threading.Event()
 
+        # 스레드 본체: 텍스트 조각을 보내고 오디오를 받아 큐에 넣는다.
         def pump() -> None:
             try:
                 stream = getattr(self.deps.speaker, "synthesize_text_stream", None)
@@ -369,6 +396,7 @@ class BrowserSession(Session):
 
         return queue, stop, asyncio.create_task(asyncio.to_thread(pump))
 
+    # 받은 오디오 조각을 순서대로 TTS_AUDIO 프레임으로 보내고, 재생이 끝날 때까지 기다린다.
     async def _play_live_tts(self, queue, stop, pump_task, utterance_id: str) -> bool:
         """Ship audio produced while hint words are still arriving."""
         taker = await self._ensure_taker()
@@ -440,6 +468,7 @@ class BrowserSession(Session):
             await self._push_state()
         return True
 
+    # 서버 스피커 대신 브라우저로 오디오를 보낸다. 학생이 들었는지 여부를 돌려준다.
     async def _say(self, text: str, final: bool = False) -> bool:
         """Returns whether the student heard any of this line — see _speak.
 

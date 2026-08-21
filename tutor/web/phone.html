@@ -143,6 +143,7 @@ let track = null;
 let shots = 0;
 
 // --- the project's binary framing (same 15 lines as index.html) -------------
+// 바이너리 프레임 만들기(서버와 같은 규격).
 function encodeFrame(type, header, payload) {
   const head = new TextEncoder().encode(JSON.stringify(header));
   const out = new Uint8Array(5 + head.length + payload.length);
@@ -153,16 +154,19 @@ function encodeFrame(type, header, payload) {
   return out;
 }
 
+// EVENT 한 건 전송.
 const sendEvent = (event, data = {}) => {
   if (ws && ws.readyState === WebSocket.OPEN)
     ws.send(JSON.stringify({ type: "EVENT", event, data, ts: Date.now() }));
 };
 
+// 지금 트랙이 지원하는 카메라 기능 목록.
 const caps = () => (track && track.getCapabilities ? track.getCapabilities() : {});
 
 // --- 1. the camera ---------------------------------------------------------
 const REAR = /back|rear|environment|후면/i;
 
+// 안드로이드 카메라 라벨("camera2 0, facing back")에서 렌즈 번호를 뽑는다.
 function lensIndex(label) {
   // Android labels read "camera2 0, facing back" — the number before the comma
   // is the camera index. parseInt() on the whole string reads NaN (it starts
@@ -171,6 +175,7 @@ function lensIndex(label) {
   return match ? parseInt(match[1], 10) : 99;
 }
 
+// 후면 카메라 중 번호가 가장 낮은 것 = 문제지 거리에 초점이 맞는 메인 렌즈.
 function rearLensId(cams) {
   // "camera2 0, facing back" — the lowest-numbered rear camera is the main lens
   // on Android, and the only one here that focuses at worksheet distance.
@@ -181,12 +186,14 @@ function rearLensId(cams) {
   return rear.length ? rear[0].deviceId : null;
 }
 
+// 카메라를 연다(한 번에 하나만).
 async function open(video) {
   if (stream) stream.getTracks().forEach((t) => t.stop());   // one camera at a time
   stream = await navigator.mediaDevices.getUserMedia({ video, audio: false });
   track = stream.getVideoTracks()[0];
 }
 
+// 권한 요청 → 후면 메인 렌즈 선택 → 미리보기 시작. HTTPS가 아니면 여기서 안내하고 끝.
 async function startCamera() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     // The single most likely failure, and it is silent otherwise: on plain HTTP
@@ -226,6 +233,7 @@ async function startCamera() {
   return true;
 }
 
+// 연속 자동초점을 실제로 적용한다(getUserMedia 안의 제약은 조용히 무시되므로 트랙에 직접).
 async function applyAutofocus() {
   // Advanced constraints are silently dropped inside getUserMedia; they only
   // take effect through applyConstraints on the live track.
@@ -236,6 +244,7 @@ async function applyAutofocus() {
   } catch (e) { /* the phone keeps whatever it was already doing */ }
 }
 
+// 화면을 탭한 지점으로 초점 이동 — 자동초점이 책상에 걸릴 때 "여기"라고 말하는 방법.
 async function focusAt(nx, ny) {
   // Continuous AF often locks onto the desk rather than the page; this is how
   // the student says "here".
@@ -260,6 +269,7 @@ async function focusAt(nx, ny) {
   }
 }
 
+// 실제 해상도·초점 모드를 화면에 표시(안 맞는다는 말이 추측이 되지 않게).
 function showDiagnostics() {
   // What the phone actually handed over, so "안 맞는다"는 말이 추측이 되지 않게.
   const s = track.getSettings ? track.getSettings() : {};
@@ -271,12 +281,14 @@ function showDiagnostics() {
   ].join(" · ");
 }
 
+// 화면 잠금 방지. 잠들면 촬영 요청에 검은 화면이 간다.
 async function keepAwake() {
   // A screen that sleeps mid-lesson answers capture_request with a black frame.
   try { await navigator.wakeLock.request("screen"); } catch (e) { /* optional */ }
 }
 
 // --- 2. one frame, on demand ----------------------------------------------
+// 지금 미리보기 화면을 JPEG 한 장으로 캡처.
 function grabJpeg() {
   const video = $("preview");
   if (!video.videoWidth) return null;          // preview not running yet
@@ -287,6 +299,7 @@ function grabJpeg() {
   return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", JPEG_QUALITY));
 }
 
+// 서버의 촬영 요청 처리: JPEG을 IMAGE 프레임으로 보내거나 실패를 알린다.
 async function onCaptureRequest(captureId) {
   const blob = await grabJpeg();
   if (!blob) {                                 // the server falls back gracefully
@@ -312,6 +325,7 @@ async function onCaptureRequest(captureId) {
 }
 
 // --- 3. the socket ---------------------------------------------------------
+// /camera 경로로 접속하고 촬영 요청을 기다린다.
 function connect() {
   const scheme = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${scheme}://${location.host}/camera`);
@@ -335,6 +349,7 @@ function connect() {
   };
 }
 
+// 연결 상태 표시.
 function setLive(on) {
   $("live").className = on ? "on" : "";
   $("live").textContent = on ? "튜터와 연결됨" : "연결 안 됨";

@@ -70,6 +70,7 @@ from tutor.knowledge.taxonomy import (
 
 log = logging.getLogger(__name__)
 
+# 예전 방식의 개념 id 접두사와, 매핑 결과 캐시 파일.
 LEGACY_CONCEPT_PREFIX = "curriculum:"
 DEFAULT_CACHE = Path("data/aihub_concept_map.json")
 
@@ -82,6 +83,7 @@ DEFAULT_CACHE = Path("data/aihub_concept_map.json")
 # UNMAPPED below rather than guessed — they contribute nothing and the legacy
 # value gets its chance instead.
 # --------------------------------------------------------------------------
+# 개념 → 큰 유형 대응표. 유형은 모델 없이 이 표만으로 정한다.
 CONCEPT_TO_PROBLEM_TYPE: dict[str, str] = {
     # 수와 연산
     "natural_number": "arithmetic",
@@ -275,11 +277,13 @@ CONCEPT_TO_PROBLEM_TYPE: dict[str, str] = {
 
 # Concepts that genuinely do not pin down a coarse type: 규칙성/대응 appear in
 # every area, |x| and 증명 are techniques, 행렬 has no whitelisted type.
+# 어떤 유형에도 넣지 않는 개념들.
 UNMAPPED_CONCEPTS = frozenset(
     {"pattern", "correspondence", "absolute_value", "proof", "matrix", "matrix_operations"}
 )
 
 
+# 매핑된 개념들로 큰 유형을 정한다(안 되면 화이트리스트에 있는 기존 값만 인정).
 def derive_problem_type(concepts: list[str], legacy: str) -> tuple[str, str]:
     """Return (problem_type, why). Deterministic — no model involved.
 
@@ -305,10 +309,12 @@ def derive_problem_type(concepts: list[str], legacy: str) -> tuple[str, str]:
 # --------------------------------------------------------------------------
 
 
+# 성취기준 하나에 대한 개념 매핑 결과.
 class StandardMapping(BaseModel):
     concepts: list[str] = []
 
 
+# [프롬프트] 성취기준 한 건을 개념 화이트리스트로 옮기는 매핑용. 애매하면 빈 목록이 낫다고 못 박는다.
 def _system_prompt() -> str:
     return f"""You map ONE Korean curriculum achievement standard (성취기준) to the
 curriculum concepts a student needs in order to solve problems carrying it.
@@ -329,6 +335,7 @@ Hard rules:
 Return ONLY the JSON object."""
 
 
+# 서로 다른 성취기준마다 한 번씩만 모델을 부르고 결과를 디스크에 캐시한다(16k 문제 → 수백 회 호출).
 class StandardMapper:
     """One Grok call per distinct standard, memoised on disk.
 
@@ -337,6 +344,7 @@ class StandardMapper:
     mappings that point at ids which no longer exist.
     """
 
+    # 캐시 경로와 화이트리스트 지문을 잡는다(개념 목록이 바뀌면 캐시가 자동 무효화).
     def __init__(self, llm, cache_path: Path, allow_llm: bool = True):
         self.llm = llm
         self.cache_path = cache_path
@@ -351,6 +359,7 @@ class StandardMapper:
         self.failures = 0
         self._load()
 
+    # 캐시 읽기.
     def _load(self) -> None:
         if not self.cache_path.exists():
             return
@@ -361,6 +370,7 @@ class StandardMapper:
         self.cache = {k: v for k, v in data.items() if not k.startswith("_")}
         log.info("loaded %d cached standard mappings from %s", len(self.cache), self.cache_path)
 
+    # 캐시 저장.
     def save(self) -> None:
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {"_fingerprint": self.fingerprint, **self.cache}
@@ -368,6 +378,7 @@ class StandardMapper:
             json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8"
         )
 
+    # 성취기준 하나를 개념 목록으로 매핑(모델 호출).
     def _map_one(self, concept_id: str, name: str) -> list[str]:
         raw = self.llm.complete_json(
             purpose="tag",  # same whitelist job as the tagger, same latency knob
@@ -377,6 +388,7 @@ class StandardMapper:
         )
         return normalize_concepts(raw.concepts)  # whitelist enforced in Python
 
+    # 여러 성취기준을 병렬로 매핑한다.
     def map_all(self, standards: list[tuple[str, str]], workers: int = 4) -> dict[str, list[str]]:
         todo = [(cid, name) for cid, name in standards if cid not in self.cache]
         log.info(
@@ -414,6 +426,7 @@ class StandardMapper:
 # --------------------------------------------------------------------------
 
 
+# 마이그레이션 통계.
 @dataclass
 class Stats:
     problems_scanned: int = 0
@@ -437,6 +450,7 @@ class Stats:
     off_whitelist_types: int = -1
 
 
+# 손대기 전에 DB를 복사해 둔다.
 def backup_db(db_path: Path) -> Path:
     """Consistent copy via sqlite's backup API (safe even if a server is up)."""
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -453,6 +467,7 @@ def backup_db(db_path: Path) -> Path:
     return dest
 
 
+# DB에 남아 있는 옛 방식 개념 id 목록.
 def legacy_standards(conn: sqlite3.Connection) -> list[tuple[str, str]]:
     """Distinct achievement standards actually referenced by a problem."""
     rows = conn.execute(
@@ -469,6 +484,7 @@ def legacy_standards(conn: sqlite3.Connection) -> list[tuple[str, str]]:
     return [(r[0], r[1]) for r in rows]
 
 
+# 마이그레이션 후 상태 점검.
 def verify(conn: sqlite3.Connection, stats: Stats) -> None:
     """Re-read the DB and prove the legacy taxonomy is gone from every place."""
     like = LEGACY_CONCEPT_PREFIX + "%"
@@ -486,6 +502,7 @@ def verify(conn: sqlite3.Connection, stats: Stats) -> None:
     ).fetchone()[0]
 
 
+# 바꿔야 할 문제들을 뽑는다.
 def _target_problems(conn: sqlite3.Connection) -> list[tuple[str, str, str]]:
     """Problems still carrying the legacy taxonomy (id, problem_type, body)."""
     return conn.execute(
@@ -500,6 +517,7 @@ def _target_problems(conn: sqlite3.Connection) -> list[tuple[str, str, str]]:
     ).fetchall()
 
 
+# 본체: 유형 컬럼·문제 본문·풀이 본문·개념 조인 테이블을 한 트랜잭션에서 함께 고친다.
 def migrate(
     db_path: Path,
     *,
@@ -616,6 +634,7 @@ def migrate(
     return stats
 
 
+# 매핑에 쓸 모델 클라이언트.
 def _grok_client():
     settings = load_settings()
     if settings.echo_mode:
@@ -636,6 +655,7 @@ def _grok_client():
 # --------------------------------------------------------------------------
 
 
+# 결과 보고서 출력.
 def print_report(stats: Stats, dry_run: bool) -> None:
     print(f"\n[{'DRY RUN' if dry_run else 'MIGRATED'}] AI Hub legacy taxonomy → whitelists")
     print(f"  achievement standards : {stats.standards} "
@@ -671,6 +691,7 @@ def print_report(stats: Stats, dry_run: bool) -> None:
         print(f"    {key:<22}{before:>8}{after:>8}{flag}")
 
 
+# 커맨드라인 옵션 정의.
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--db", type=Path, default=None, help="SQLite DB (default: DB_PATH setting)")
@@ -687,6 +708,7 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
+# 커맨드라인 진입점(--dry-run으로 미리 볼 수 있다).
 def main(argv: list[str] | None = None) -> None:
     args = _parser().parse_args(argv)
     logging.basicConfig(

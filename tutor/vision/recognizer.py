@@ -29,11 +29,14 @@ from tutor.state.models import StudentState
 
 log = logging.getLogger(__name__)
 
+# 연산자·등호가 들어 있는지 = 주장하는 식인지, 묻는 대상(a_10)일 뿐인지 가르는 기준.
 # Something is being related or operated on — as opposed to "a_10", which is
 # the quantity the question asks for, not a claim about it.
 _OPERATOR = re.compile(r"[=<>≤≥+\-*/^√]")
 
 
+# 사진 한 장에서 읽어 낸 결과: 문제 텍스트·수식·보기·그림 조건·학생 풀이·못 읽은 부분·신뢰도,
+# 그리고 같은 호출에서 함께 받은 문제 유형/개념 태그와 (있으면) 진단 결과.
 class Recognition(BaseModel):
     problem_text: str
     equations: list[str] = []
@@ -55,6 +58,10 @@ class Recognition(BaseModel):
     state_estimate: StudentState | None = None
 
 
+# [프롬프트] 사진 읽기용 시스템 프롬프트를 만든다.
+# 기본 두 가지 일 — (1) 쓰인 그대로 옮겨 적기 (2) 문제 유형·개념 분류 —
+# 그리고 이미 풀고 있던 문제면 세 번째로 손글씨 진단(state_estimate)까지 한 번에 시킨다.
+# 태그 화이트리스트는 프롬프트로만 부탁하고, 실제 강제는 아래 recognize()의 파이썬 코드가 한다.
 def _system_prompt(with_diagnosis: bool = False) -> str:
     diagnosis = """
 
@@ -121,13 +128,16 @@ CLASSIFICATION rules:
 Return ONLY the JSON object."""
 
 
+# 문제지 사진을 읽는 인식기(VLM 한 번 호출).
 class Recognizer:
+    # 비전 모델과 설정(크롭 옵션)을 받는다.
     def __init__(self, llm: LLMClient, settings: Settings | None = None):
         self.llm = llm
         # Optional so tests and scripts can build a recognizer with nothing but
         # a model. Without settings the frame is sent exactly as photographed.
         self.settings = settings
 
+    # 사진 → Recognition. 호출 뒤에 항목 없는 식을 걸러 내고, 태그를 화이트리스트로 강제한다.
     def recognize(
         self, jpeg: bytes, *, diagnosis_context: str | None = None
     ) -> Recognition:
@@ -172,6 +182,7 @@ class Recognizer:
             )
         return rec
 
+    # 모델이 책상 사진에 타일 예산을 쓰지 않도록, 문제지 영역만 잘라서 넘긴다.
     def _framed(self, jpeg: bytes) -> bytes:
         """Crop the desk away before the model spends its tile budget on it."""
         settings = self.settings

@@ -30,22 +30,27 @@ from tutor.state.models import Status
 
 log = logging.getLogger(__name__)
 
+# 채점 결과: 맞음 / 부분 진전 / 틀림 / 판단 불가.
 Verdict = Literal["CORRECT", "PARTIAL", "INCORRECT", "UNCLEAR"]
 
+# 모르겠다고 한 학생에게 돌려주는 고정 문장(TTS 캐시에 미리 올려 둔다).
 # What a student who just said "모르겠어요" hears — warmth, never "think more".
 # A module constant so the TTS cache can pre-render it like the other fixed
 # lines: this is the one reaction that should never keep anyone waiting.
 SURRENDER_FEEDBACK = "괜찮아요, 어려울 수 있어요. 같이 짚어 볼게요."
 
+# 시도 없이 도움만 청한 발화를 가려내는 패턴. 힌트 생성기도 같은 판단을 쓴다.
 # "잘 모르겠는데" — surrender, not an attempt. Module-level because the HINT
 # GENERATOR needs the same judgement: an escalation after a surrender has no
 # student error to point at, which changes which shelf the hint comes from.
 _SURRENDER_WORDS_RE = re.compile(
     r"모르겠|모르는|힌트|도와|도움|어떻게 하는지|hint|help", re.I
 )
+# 숫자·연산자·변수 = 채점할 만한 시도가 담겨 있다는 신호.
 _ATTEMPT_RE = re.compile(r"\d|[=+*/^√]|(?<![가-힣])[a-zA-Z](?![a-zA-Z])")
 
 
+# 채점할 시도 없이 도움만 요청했는지.
 def is_surrender(text: str) -> bool:
     """They asked for help without attempting anything gradable."""
     stripped = (text or "").strip()
@@ -54,12 +59,17 @@ def is_surrender(text: str) -> bool:
         and _SURRENDER_WORDS_RE.search(stripped)
         and not _ATTEMPT_RE.search(stripped)
     )
+# 문장이 중간에 끊겼을 때 돌려주는 고정 반응. 조각을 채점하지 않고 다시 묻는다.
 # What an utterance that DIED mid-phrase hears. "응, 레이 와이 절편은" is not
 # an answer to grade — the sentence never arrived — and grading the fragment
 # confirmed work the student had not said. The re-asked question follows.
 CUTOFF_FEEDBACK = "앗, 말이 중간에 끊긴 것 같아요."
+# 이 발화가 답인지, 질문인지, 풀이 확인 요청인지.
 Intent = Literal["ANSWER", "QUESTION", "WORK_CHECK"]
 
+# [프롬프트] 말로 한 답을 채점하는 시스템 프롬프트. 문제·기준 풀이 단계·튜터의 질문·STT 결과를 주고
+# verdict / feedback / error_focus / reached_step 등을 JSON으로 받는다.
+# sympy 툴은 산술로 갈리는 답에만 쓰도록, 호출 횟수까지 제한해 둔다(침묵이 곧 지연이라서).
 _SYSTEM = """You grade a student's SPOKEN answer to a tutor's Socratic question.
 
 You are given the problem, the reference solution steps, the question the tutor
@@ -163,6 +173,7 @@ beat of silence the student sits through, so at most one or two, then decide.
 Return ONLY the JSON object."""
 
 
+# 채점 결과 한 장: 의도·판정·학생에게 할 말·(비공개) 오류 초점·앞서 나간 단계 제안.
 class AnswerVerdict(BaseModel):
     # default ANSWER: a model that omits the field must not break the turn —
     # grading a question as an answer is recoverable, crashing is not
@@ -185,7 +196,9 @@ class AnswerVerdict(BaseModel):
     reached_claim: str = ""
 
 
+# 말로 한 답을 채점하는 판정기. 사진을 다시 찍지 않는 것이 이 턴의 핵심이다.
 class AnswerEvaluator:
+    # 채점 모델과, 틀렸다고 말하기 직전에만 부르는 2차 심판을 받는다.
     def __init__(self, llm: LLMClient, db=None, second_opinion: LLMClient | None = None):
         self.llm = llm
         self.db = db
@@ -197,6 +210,7 @@ class AnswerEvaluator:
         # and it is the one judgement worth paying twice for.
         self.second_opinion = second_opinion
 
+    # 채점 본체: 끊긴 말·포기 발화를 먼저 걸러 내고, 남은 것만 모델에게 채점시킨다.
     def evaluate(
         self,
         *,
@@ -266,6 +280,7 @@ class AnswerEvaluator:
                 return better
         return verdict
 
+    # 목표 단계가 명확히 가려 줄 때만 좁게 STT 오인식을 고친다(Minus e → -2 등).
     @staticmethod
     def normalize_transcript(
         reference: ReferenceSolution, target_step: int, transcript: str
@@ -313,11 +328,13 @@ class AnswerEvaluator:
             return "-2"
         return normalized
 
+    # "대입하면 될 것 같아요"처럼 계획만 말하고 끝난 문장 패턴.
     _UNFINISHED_PLAN_RE = re.compile(
         r"(?:대입|계산|정리|구하|쓰).{0,40}(?:하면|해서|해)\s*"
         r"(?:될\s*것\s*같|되겠|돼요|볼(?:게|까|래)).*?[?.!~ ]*$"
     )
 
+    # 복합 단계의 마지막 수치까지 말했는지 확인(숫자로 끝나는 단계만 판정).
     @staticmethod
     def _final_piece_spoken(expression: str, transcript: str) -> bool | None:
         """Did the transcript say the composite step's final numeric piece?
@@ -351,6 +368,7 @@ class AnswerEvaluator:
                 continue
         return False
 
+    # 부분 진전 반응은 해낸 데까지만 인정하고 조언은 하지 않도록 문구를 고정한다.
     @staticmethod
     def _normalize_partial_feedback(
         verdict: AnswerVerdict,
@@ -370,6 +388,7 @@ class AnswerEvaluator:
         )
         return verdict.model_copy(update={"feedback": feedback})
 
+    # 계획만 말하고 실행하지 않은 답은 CORRECT에서 PARTIAL로 낮춘다.
     @classmethod
     def _downgrade_unfinished_plan(
         cls,
@@ -429,8 +448,10 @@ class AnswerEvaluator:
     # out on purpose: 이/가/과/로/고 are also how ordinary nouns end (넓이,
     # 차이, 결과, 그리고), and eating a valid answer costs more than missing
     # a fragment the UNCLEAR path would shrug at anyway.
+    # 이 조사로 끝났다면 서술어에 닿지 못한 문장 = 중간에 끊긴 말.
     _DANGLING_JOSA = ("은", "는", "을", "를", "의", "와", "에", "에서", "부터", "까지")
 
+    # 중간에 끊긴 발화면 채점하지 않고 UNCLEAR로 되묻는다.
     def _cut_off(self, transcript: str) -> AnswerVerdict | None:
         text = transcript.strip().rstrip(" ?.!…~,")
         if not text:
@@ -462,6 +483,7 @@ class AnswerEvaluator:
     _SURRENDER_RE = _SURRENDER_WORDS_RE
     _CARRIES_AN_ATTEMPT = _ATTEMPT_RE
 
+    # 포기 발화면 모델을 부르지 않고 바로 INCORRECT(= 같은 단계, 한 레벨 위)로 처리한다.
     def _gave_up(self, transcript: str) -> AnswerVerdict | None:
         text = transcript.strip()
         if not text or not self._SURRENDER_RE.search(text):
@@ -475,6 +497,7 @@ class AnswerEvaluator:
             feedback=SURRENDER_FEEDBACK,
         )
 
+    # 실제 채점 모델 호출. 툴 호출 라운드를 2회로 묶어 학생의 침묵을 늘리지 않는다.
     def _judge(self, llm: LLMClient, context: str) -> AnswerVerdict:
         # The prompt asks for "at most one or two" tool calls; the budget now
         # says the same thing, because a small routed model does not hold that
@@ -488,6 +511,7 @@ class AnswerEvaluator:
             schema=AnswerVerdict, max_rounds=2,
         )
 
+    # 채점 모델에 넘길 사용자 메시지 조립: 문제 · 기준 풀이 단계 · 튜터 질문 · 학생 발화.
     def _context(
         self,
         problem_text: str,

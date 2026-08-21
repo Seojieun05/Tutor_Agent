@@ -11,8 +11,10 @@ import struct
 import wave
 from pathlib import Path
 
+# 시뮬레이터가 쓸 이미지·음성 자산 폴더.
 ASSETS_DIR = Path(__file__).resolve().parent.parent.parent / "simulator" / "assets"
 
+# 학생 풀이가 단계별로 달라지는 가짜 문제지 장면들.
 SCENES = {
     # lin_001 progression: wrong sign (sign_flip_on_move) → corrected → solved
     "lin_001_problem": ("Solve: 3x + 5 = 20", []),
@@ -30,6 +32,7 @@ SCENES = {
 }
 
 
+# 장면들을 JPEG로 그려 낸다.
 def render_images() -> list[Path]:
     from PIL import Image, ImageDraw
 
@@ -58,6 +61,7 @@ def render_images() -> list[Path]:
     return out
 
 
+# "힌트 주세요" 음성 파일을 만든다(TTS가 있으면 합성, 없으면 무음).
 def render_hint_wav() -> Path:
     """1s 440Hz placeholder tone, 16kHz/16-bit/mono. In echo mode any
     utterance counts as a hint request; for live STT record real speech."""
@@ -74,6 +78,7 @@ def render_hint_wav() -> Path:
     return path
 
 
+# 커맨드라인 진입점.
 def main() -> None:
     images = render_images()
     wav = render_hint_wav()

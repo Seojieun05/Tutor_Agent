@@ -34,9 +34,11 @@ from tutor.server.camera import CameraConnection, CameraHub
 
 log = logging.getLogger("camera_check")
 
+# 받은 프레임을 저장할 폴더.
 SAVE_DIR = PROJECT_ROOT / "data" / "captures"
 
 
+# 받은 JPEG의 크기·해상도를 한 줄로 설명.
 def describe_jpeg(jpeg: bytes) -> str:
     """Dimensions if Pillow is around; never fail the diagnostic over it."""
     try:
@@ -50,6 +52,7 @@ def describe_jpeg(jpeg: bytes) -> str:
         return "크기 불명 (pillow 없음)"
 
 
+# 카메라가 붙을 때까지 기다린다.
 async def wait_for_camera(hub: CameraHub, timeout: float) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -59,6 +62,7 @@ async def wait_for_camera(hub: CameraHub, timeout: float) -> bool:
     return False
 
 
+# 한 장 촬영하고 결과를 저장·보고한다.
 async def one_capture(hub: CameraHub, timeout: float, index: int, budget: float) -> bytes | None:
     print(f"\n[{index}] capture_request 전송 (최대 {timeout:.0f}초 대기)...", flush=True)
     started = time.monotonic()
@@ -87,6 +91,7 @@ async def one_capture(hub: CameraHub, timeout: float, index: int, budget: float)
     return jpeg
 
 
+# 받은 사진을 실제 VLM에 넣어 무엇을 읽었는지 보여 준다.
 def recognize(jpeg: bytes) -> None:
     """The real Recognizer, on the real photo. No DB: `recognize` has no tools."""
     settings = load_settings()
@@ -121,10 +126,12 @@ def recognize(jpeg: bytes) -> None:
     print(f"      판정: {verdict}")
 
 
+# /camera만 띄우는 최소 서버를 열고 촬영을 반복한다.
 async def amain(args) -> int:
     settings = load_settings()
     hub = CameraHub()
 
+    # 카메라 연결 처리.
     async def handler(ws):
         path = ws.request.path.split("?", 1)[0]
         if path.rstrip("/") != "/camera":
@@ -163,6 +170,7 @@ async def amain(args) -> int:
         return 0 if ok else 1
 
 
+# 커맨드라인 진입점.
 def main() -> None:
     parser = argparse.ArgumentParser(description="카메라 사진 한 장 받아보기")
     parser.add_argument("--port", type=int, default=load_settings().ws_port)

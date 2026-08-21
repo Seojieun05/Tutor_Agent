@@ -27,6 +27,12 @@ produces the intended ladder: correct → next step L1, wrong → same step L2,
 unclear → same step, same level, re-asked.
 """
 
+# [한국어 요약]
+# 이 파일은 연결 하나(= 학생 한 명)의 대화 전체를 지휘한다.
+#   발화 → 의도 분류 → (힌트 요청·작업 확인이면) 촬영·인식·진단 / (답변이면) 채점
+#   → 교육 정책 결정 → 힌트 생성 → 말하기
+# 앞부분은 붙박이 대사와 발화 판정 도우미 함수, 뒷부분은 Session 클래스 본체다.
+
 from __future__ import annotations
 
 import asyncio
@@ -67,6 +73,7 @@ from tutor.vision.recognizer import Recognition, Recognizer
 
 log = logging.getLogger(__name__)
 
+# 알아듣지 못한 발화에 되묻는 문구. 힌트가 아니므로 힌트 이력에도 정책에도 들어가지 않는다.
 # What the tutor says instead of running the pipeline on an unusable utterance.
 # Neither counts as a hint, so neither enters the hint history or the policy.
 RETRY_PROMPTS = {
@@ -74,15 +81,18 @@ RETRY_PROMPTS = {
     "filler_only": "괜찮아요, 이어서 말해 줄래요?",
 }
 
+# 마지막 단계까지 맞혔을 때 덧붙이는 마무리 인사.
 # Said after the evaluator's own "맞아요!" when the last step lands.
 PROBLEM_DONE = "문제를 끝까지 풀었네요! 또 모르는 문제가 있으면 알려주세요."
 
+# 풀이가 맞느냐는 물음의 답이 ‘맞다’일 때 쓰는 문장. 힌트 대신 확인만 해 주고 턴을 닫는다.
 # The student asked about their own work ("풀이 맞아?"), and the answer to that
 # question is yes or no — not a hint. When the work IS right, say so and stop:
 # a hint would push them at a step they have not reached, and the student asked
 # to be checked, not helped.
 WORK_CONFIRMED = "맞아요! 이대로 하면 돼요. 또 궁금한 게 있으면 물어봐 주세요."
 
+# 작업 확인 턴의 첫 반응. 틀렸다는 사실만 말하고 무엇이 틀렸는지는 절대 말하지 않는다.
 # "풀이 맞아?" is a yes/no question, so the VERDICT comes first — before any
 # hint, before any question back. Fixed text, never generated: it may say THAT
 # the work is wrong, never WHAT is wrong. Naming the mistake is the hint's
@@ -90,6 +100,7 @@ WORK_CONFIRMED = "맞아요! 이대로 하면 돼요. 또 궁금한 게 있으�
 # estimate) claim none: saying 맞아요/틀려요 without evidence is worse than
 # a neutral "let's look".
 WORK_CHECK_WRONG = "앗, 함께 다시 생각해 볼까요?"
+# 진단 status → 첫 반응 문장 매핑.
 WORK_CHECK_REACTIONS: dict[str, str] = {
     "UNCERTAIN": "",  # ASK_RECAPTURE already says it cannot see the page
     "CALCULATION_ERROR": WORK_CHECK_WRONG,
@@ -99,6 +110,7 @@ WORK_CHECK_REACTIONS: dict[str, str] = {
 }
 
 
+# 한 단계에 연쇄 등식이 들어 있을 때, 비교 가능한 등식 쌍들로 쪼개 준다.
 def _step_claim_variants(expression: str) -> list[str]:
     """Comparable claims contained in a stored step expression.
 
@@ -122,6 +134,7 @@ def _step_claim_variants(expression: str) -> list[str]:
     return variants
 
 
+# 학생이 말한 식이 그 단계의 식과 (연쇄 등식 변형까지 포함해) 수학적으로 같은지 검사.
 def _claim_matches_step(claim: str, expression: str) -> bool:
     if mathnorm.equations_equivalent(claim, expression):
         return True
@@ -131,6 +144,7 @@ def _claim_matches_step(claim: str, expression: str) -> bool:
     )
 
 
+# 말로 한 일차식(마이너스 2엑스 마이너스 4)을 조심스럽게 수식으로 복원한다.
 def _spoken_linear_claim(transcript: str, expression: str) -> str | None:
     """Conservatively recover a spoken linear expression such as ``-2x-4``."""
     text = (transcript or "").lower().replace("−", "-")
@@ -150,8 +164,10 @@ def _spoken_linear_claim(transcript: str, expression: str) -> str | None:
     return rhs
 
 
+# 맞다·틀리다를 주장할 근거가 없을 때 쓰는 중립 반응.
 WORK_CHECK_DEFAULT = "음, 지금 쓴 줄을 같이 볼까요?"
 
+# 작업 확인 턴의 오프닝 필러. 고정 문장이라 캐시된 TTS가 즉시 재생된다(돌려 가며 쓴다).
 # The filler openers for a work check: fixed, so their TTS is cached and one
 # plays the instant the delay elapses — while the camera is still being asked.
 # A tuple because the same student asks "풀이 맞아?" many times in one lesson,
@@ -162,6 +178,7 @@ WORK_CHECK_OPENERS: tuple[str, ...] = (
     "네, 풀이를 같이 확인해 볼게요.",
 )
 
+# 문제 낭독 프레임: 여는 말은 고정, 닫는 말(READOUT_CLOSERS)은 기본적으로 말하지 않는다.
 # The readout frame: the opener is fixed (pre-rendered TTS), so the only
 # synthesis the narration waits for is the one line that is different every
 # time — the problem itself.
@@ -181,12 +198,14 @@ READOUT_CLOSERS: dict[bool, str] = {
     True: "이" + _READOUT_QUESTION,
 }
 
+# 값 뒤에 붙는 존댓말 어미 목록. 답에서 이 꼬리를 떼어내려고 쓴다.
 # Spoken sentence endings that are the STUDENT'S politeness, not their answer.
 # "5예요" quotes back as the stilted "5예요라고 했네요"; a teacher hears the 5,
 # drops the ending, and says "5… 어디 보자". Longest first, stripped once.
 _POLITE_TAILS = ("입니다", "이에요", "이예요", "예요", "에요", "이요", "요")
 
 
+# 발화 끝에서 결과로 제시된 숫자를 잡아내는 정규식.
 # The number an utterance PRESENTS as its result: the one at the tail, wearing
 # at most a particle and a politeness ending. Shared by every check that has to
 # tell "the answer is 98" from a working value said along the way.
@@ -197,6 +216,7 @@ _TAIL_ASSERTION_RE = re.compile(
 )
 
 
+# 이 발화가 최종 답에 대해 무엇을 주장하는지 판정한다: said / wrong / mentioned / none / unknown.
 def final_value_claim(transcript: str, answer, question: str = "") -> str:
     """What the transcript claims about the final value.
 
@@ -268,6 +288,7 @@ def final_value_claim(transcript: str, answer, question: str = "") -> str:
     return "none"
 
 
+# 숫자를 ‘계산 결과’로 제시하는 표현들(답은·정답은·곱하면 …).
 # "곱하면 …", "답은 …" — the words that present a number as the RESULT of a
 # computation rather than as part of an expression being read out loud.
 _RESULT_MARKER_RE = re.compile(
@@ -276,6 +297,7 @@ _RESULT_MARKER_RE = re.compile(
 )
 
 
+# 문제 어디에도 없는 숫자를 결과라고 주장했는지 검사한다(틀린 값에 맞장구치는 사고 방지).
 def foreign_value_assertion(
     transcript: str,
     reference,
@@ -338,6 +360,7 @@ def foreign_value_assertion(
     return tail.group(1)
 
 
+# 그 숫자가 기준 풀이의 괄호식 안에서 실제로 나오는 중간값인지 확인.
 def _derived_from_step(value, reference, target_step) -> bool:
     """Is this number a sub-result the reference itself writes down?
 
@@ -359,6 +382,7 @@ def _derived_from_step(value, reference, target_step) -> bool:
     return False
 
 
+# 식 안의 괄호 묶음을 중첩된 것까지 전부 뽑아낸다.
 def _balanced_groups(expression: str) -> list[str]:
     """Every parenthesised sub-expression, nested ones included."""
     groups, stack = [], []
@@ -370,6 +394,7 @@ def _balanced_groups(expression: str) -> list[str]:
     return groups
 
 
+# 변수가 없는 산술식을 sympy로 계산한다(변수가 있으면 예외).
 def eval_arithmetic(expression: str):
     """Evaluate a symbol-free arithmetic string with sympy, or raise."""
     from tutor.knowledge import mathnorm
@@ -380,11 +405,13 @@ def eval_arithmetic(expression: str):
     return result
 
 
+# 발화가 문제의 최종 값을 실제로 입에 올렸는지.
 def names_the_final_value(transcript: str, answer) -> bool:
     """Did the transcript actually SAY the problem's final value?"""
     return final_value_claim(transcript, answer) in ("said", "mentioned", "unknown")
 
 
+# 말한 답에서 값만 뽑아낸다. 값이 아닌 긴 설명이면 None — 그대로 따라 읽지 않기 위해.
 def answer_core(transcript: str) -> str | None:
     """The VALUE inside a spoken answer, or None when there is no clean one.
 
@@ -428,14 +455,17 @@ def answer_core(transcript: str) -> str | None:
     return None
 
 
+# 등호·부등호가 있는지 = 무언가를 주장하는 식인지, 그냥 항 하나인지 구분.
 # Does this string claim anything, or is it a lone term?
 _RELATES = re.compile(r"[=<>≤≥]")
+# Area(AOC)=8 꼴을 잡는 정규식.
 _AREA_EQUATION = re.compile(
     r"area\s*\(\s*([a-z]{3,})\s*\)\s*=\s*(-?\d+(?:\.\d+)?)",
     re.IGNORECASE,
 )
 
 
+# 문제 문장에 이미 있는 내용을 수식으로 되풀이할 뿐인지 판단(문제 카드 중복 표시 방지).
 def _repeats_area_from_statement(equation: str, problem_text: str) -> bool:
     """True when ``Area(AOC)=8`` only restates Korean prose already shown."""
     match = _AREA_EQUATION.search(equation or "")
@@ -450,6 +480,7 @@ def _repeats_area_from_statement(equation: str, problem_text: str) -> bool:
     )
 
 
+# 처음 만나는 개념이라 DB에 문장이 없을 때 대신 쓰는 일반적인 오프닝.
 def preflight_fallback(concept_name: str) -> str:
     """Said the first time a concept is met, while its own line is written.
 
@@ -460,6 +491,7 @@ def preflight_fallback(concept_name: str) -> str:
     return f"{concept_name} 문제군요. 어떤 조건이 주어졌는지 먼저 정리해 볼까요?"
 
 
+# 기다릴 만한 백그라운드 풀이가 없는 상태인지(아예 안 돌았거나, 돌다 실패했거나).
 def _solve_dead(task: asyncio.Task | None) -> bool:
     """True when there is no live solve to wait for — never ran, or ran and lost."""
     return task is None or (
@@ -467,6 +499,7 @@ def _solve_dead(task: asyncio.Task | None) -> bool:
     )
 
 
+# 지금 붙잡고 있는 문제 하나의 모든 맥락: 인식 결과 · 매칭 · 기준 풀이 · 칠판 장면 · 보기 창.
 @dataclass
 class ProblemContext:
     hash: str
@@ -495,6 +528,7 @@ class ProblemContext:
     show_scale: bool = True
     show_legend: bool = True
 
+    # 지금 당장 준비돼 있는 기준 풀이만 돌려준다. 절대 기다리지 않는다.
     def reference_if_ready(self) -> ReferenceSolution | None:
         """The reference if it exists RIGHT NOW; never waits.
 
@@ -509,6 +543,7 @@ class ProblemContext:
             self.solving = None
         return self.reference
 
+    # 기준 풀이를 기다려서 돌려준다. 답 채점 턴은 이게 없으면 시작할 수 없다.
     async def reference_ready(self) -> ReferenceSolution:
         """The reference, waiting out the background solver if it is running.
 
@@ -524,6 +559,7 @@ class ProblemContext:
         return self.reference
 
 
+# 연결 하나가 쓰는 부품 모음: 인식·매칭·풀이·진단·힌트·삽화·STT/TTS·의도 분류·세션 저장소.
 @dataclass
 class Deps:
     settings: Settings
@@ -545,7 +581,9 @@ class Deps:
     store: SessionStore = field(default_factory=SessionStore)
 
 
+# 대화 흐름 전체를 지휘하는 오케스트레이터. SessionStore에 쓰기를 하는 곳은 이 클래스뿐이다.
 class Session:
+    # 세션 상태 초기화: 현재 문제 맥락, 캡처 대기표, 오디오 버퍼, 턴 점유 플래그, 필러 상태.
     def __init__(self, ws, deps: Deps):
         self.ws = ws
         self.deps = deps
@@ -577,6 +615,7 @@ class Session:
         # asking the camera again — see _continue_confirmed.
         self._continue_from: tuple[str, float] | None = None
 
+    # 수신 루프와 나란히 도는 작업을 띄운다(캡처 프레임이 바로 그 루프로 들어오기 때문).
     def _spawn(self, coro) -> None:
         """Run the hint flow concurrently with the receive loop — it awaits
         capture frames that arrive through that same loop."""
@@ -584,6 +623,7 @@ class Session:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    # 수신 루프: 프레임을 계속 받아 처리하고, 연결이 끊기면 남은 백그라운드 작업을 정리한다.
     async def run(self) -> None:
         try:
             async for raw in self.ws:
@@ -609,6 +649,7 @@ class Session:
             if self._tasks:
                 await asyncio.gather(*self._tasks, return_exceptions=True)
 
+    # 프레임 한 개를 갈라 보낸다: 텍스트면 EVENT, 바이너리면 IMAGE(촬영 응답) 또는 AUDIO.
     async def on_frame(self, raw: bytes | str) -> None:
         if isinstance(raw, str):
             await self._on_event(raw)
@@ -623,6 +664,7 @@ class Session:
         elif isinstance(frame, AudioFrame):
             await self._on_audio(frame)
 
+    # EVENT 처리: hello, 힌트 요청, 촬영 실패, 그림 확대·이동·리셋.
     async def _on_event(self, raw: str) -> None:
         ev = parse_event(raw)
         if ev.event == "hello":
@@ -644,8 +686,10 @@ class Session:
         else:
             log.warning("unknown event %r", ev.event)
 
+    # 발화 한 건의 최대 크기. 넘으면 통째로 버린다.
     MAX_UTTERANCE_BYTES = 2 * 1024 * 1024  # ~64s of 16kHz/16-bit mono
 
+    # 오디오 조각을 발화 단위로 모으고, last 플래그가 오면 STT로 넘긴다.
     async def _on_audio(self, frame: AudioFrame) -> None:
         stream_id = frame.header.stream_id
         if stream_id not in self._audio_buffers:
@@ -666,6 +710,7 @@ class Session:
             # frame delivery (pending capture futures resolve through this loop)
             self._spawn(self._handle_utterance(pcm, frame.header.sample_rate))
 
+    # 발화 한 건 처리: STT → 품질 검사 → 의도 분류 → 답변 / 작업 확인 / 힌트 요청 턴으로 분기.
     async def _handle_utterance(self, pcm: bytes, sample_rate: int) -> None:
         heard = ""
         try:
@@ -737,6 +782,7 @@ class Session:
         else:
             await self.handle_hint_request()
 
+    # 인식된 말과, 답이 갈 테니 마이크를 닫고 있으라는 플래그를 디바이스에 알린다.
     async def _send_transcript(self, text: str, responding: bool) -> None:
         try:
             await self.ws.send(
@@ -747,6 +793,7 @@ class Session:
         except Exception:
             log.debug("could not send transcript event (connection gone)")
 
+    # 처음 보는 유형에 먼저 던지는 개념별 한 줄. DB에서 찾아 쓰고, 즉석 생성은 하지 않는다.
     def _preflight_line(self, rec: Recognition) -> str:
         """"등비수열 문제군요. 공비와 항 번호의 관계를 확인하셨나요?"
 
@@ -768,6 +815,7 @@ class Session:
             return preflight_fallback(name)
         return ""
 
+    # 다음번을 위해 그 개념의 프리플라이트 문장을 백그라운드에서 써 둔다.
     async def _write_preflight(self, concept: str, name: str) -> None:
         """Write this concept's line for NEXT time. Never awaited by a turn."""
         try:
@@ -781,6 +829,7 @@ class Session:
         self._remember_phrase(line)
         log.info("preflight line written for %s: %s", concept, line)
 
+    # 고정 문장을 TTS 캐시에 등록한다 — 한 번만 합성하고 이후로는 재생만.
     def _remember_phrase(self, text: str) -> None:
         """Register a fixed line with the TTS cache, so it is rendered once and
         replayed forever after (the same treatment the fillers get)."""
@@ -788,6 +837,7 @@ class Session:
         if callable(register):
             register(text)
 
+    # 파이프라인이 지금 뭘 하는 중인지 화면에만 표시한다(음성으로는 말하지 않음).
     async def _stage(self, text: str) -> None:
         """What the pipeline is doing right now, for the SCREEN, not the voice.
 
@@ -801,6 +851,7 @@ class Session:
         except Exception:
             log.debug("could not send stage event (connection gone)")
 
+    # 읽어 낸 문제 텍스트·수식을 브라우저 문제 카드로 보낸다. 풀이나 정답 쪽은 절대 싣지 않는다.
     async def _send_problem(self, rec: Recognition) -> None:
         """What the tutor read off the page, for the browser's problem card.
 
@@ -834,6 +885,7 @@ class Session:
 
     # --- capture --------------------------------------------------------------
 
+    # 지금 페이지를 볼 수 있는 눈에서 사진 한 장을 받는다(카메라 모드면 폰 우선, 아니면 업로드).
     async def _request_capture(self) -> bytes | None:
         """The student's worksheet, from whichever eye can see it NOW.
 
@@ -887,6 +939,7 @@ class Session:
             )
         return jpeg
 
+    # SAVE_CAPTURES_DIR이 지정돼 있으면 받은 프레임을 파일로 남긴다(무엇을 봤는지 확인용).
     def _save_capture(self, jpeg: bytes) -> None:
         """SAVE_CAPTURES_DIR=... to see what the camera actually sent."""
         directory = self.deps.settings.save_captures_dir
@@ -900,6 +953,7 @@ class Session:
         except OSError as e:  # a full disk must not end the lesson
             log.warning("could not save the frame: %s", e)
 
+    # 세션 디바이스에 capture_request를 보내고 IMAGE 프레임이 올 때까지 기다린다.
     async def _capture_from_device(self) -> bytes | None:
         self._capture_seq += 1
         capture_id = f"cap-{self._capture_seq}"
@@ -917,6 +971,7 @@ class Session:
 
     # --- the main flow --------------------------------------------------------
 
+    # [진입점] 힌트 요청 / 작업 확인 턴. 턴 점유·오프닝 필러·시간 측정을 감싸고 본체를 부른다.
     async def handle_hint_request(self, question: str | None = None) -> None:
         if self._busy:
             log.info("hint request ignored: already handling one")
@@ -960,6 +1015,7 @@ class Session:
                 self._turn_idle.set()
                 await self._turn_finished()
 
+    # [진입점] 학생이 튜터의 질문에 말로 답한 턴. 진행 중인 턴이 끝날 때까지 기다렸다가 처리한다.
     async def handle_answer(self, transcript: str, pending: HintRecord) -> None:
         """The student answered the tutor's question out loud."""
         if self._busy:
@@ -1002,10 +1058,12 @@ class Session:
                 self._turn_idle.set()
                 await self._turn_finished()
 
+    # 턴 뒷정리가 끝난 뒤의 발언권 넘기기. 디바이스별 동작은 BrowserSession이 덮어쓴다.
     async def _turn_finished(self) -> None:
         """Device-specific floor handoff after all turn bookkeeping is done."""
         return None
 
+    # 답변 턴 본체: 기준 풀이로 채점 → 상태·힌트 이력 갱신 → 정책 결정 → 리액션 + 다음 힌트.
     async def _handle_answer(self, transcript: str, pending: HintRecord) -> None:
         ctx = self.ctx
         assert ctx is not None  # a pending hint implies a problem context
@@ -1300,6 +1358,7 @@ class Session:
             decision, text, ctx.hash, board, said, already_spoken=streamed
         )
 
+    # 학생이 실제로 증명해 보인 단계 번호. 앞서 나간 경우 sympy로 검증된 만큼만 인정한다.
     @staticmethod
     def _reached_step(
         verdict, reference: ReferenceSolution, asked: int, transcript: str = ""
@@ -1348,6 +1407,7 @@ class Session:
                 return step.idx
         return asked
 
+    # 왜냐고 물었을 때는 설명만 하고 턴을 돌려준다. 힌트가 아니므로 이력·레벨을 건드리지 않는다.
     async def _answer_question(
         self, ctx: ProblemContext, pending: HintRecord, question: str
     ) -> None:
@@ -1388,6 +1448,7 @@ class Session:
         if not streamed:
             await self._speak(text, final=True)
 
+    # 마지막 단계까지 맞혔을 때: 축하하고 문제 맥락을 닫는다(힌트 기록은 남기지 않음).
     async def _finish_problem(self, ctx: ProblemContext, verdict, target_step: int) -> None:
         """The last step was answered correctly: congratulate and close.
 
@@ -1421,6 +1482,7 @@ class Session:
             self.last_transcript = None
             self.store.clear_state()
 
+    # 힌트가 아직 생성 중일 때 리액션을 먼저 말한다. 정답을 흘릴 문장이면 아예 말하지 않는다.
     async def _react(self, feedback: str | None, decision: Decision) -> bool:
         """Speak the turn's reaction NOW, while the hint is still being written.
 
@@ -1445,11 +1507,13 @@ class Session:
         # barge-in was not heard, so the hint after it keeps its own opening.
         return await self._speak(feedback)
 
+    # 작업 확인 직후 이어서 하기가 유효한 시간(초).
     # How long a confirmed work check keeps its follow-through open. Long
     # enough for "네, 다음은 어떻게 해요?" to be spoken and transcribed; short
     # enough that a page revisited after real thinking time is photographed.
     CONTINUE_WINDOW_S = 90.0
 
+    # 방금 내린 진단을 그대로 이어써서, 사진을 다시 찍지 않고 바로 다음 단계를 힌트한다.
     async def _continue_confirmed(self, marker: tuple[str, float] | None) -> bool:
         """The follow-through: hint at the next step straight from a diagnosis
         made seconds ago, without asking the camera again.
@@ -1492,6 +1556,7 @@ class Session:
         )
         return True
 
+    # 힌트 요청 본체: 촬영 → 인식 → 문제 맥락 확보 → 진단 → 정책 결정 → 힌트 생성·전달.
     async def _handle_hint_request(self, question: str | None = None) -> None:
         """Capture → recognize → diagnose → hint, over a fresh photo.
 
@@ -1809,6 +1874,7 @@ class Session:
             decision, text, ctx.hash, board, already_spoken=streamed
         )
 
+    # 힌트 한 개 생성. 브라우저 세션에서는 안전 검사를 통과한 단어부터 곧바로 말하기 시작한다.
     async def _generate_hint(
         self, decision, match, reference, rec, history, student_answer,
         *, live: bool = False,
@@ -1845,15 +1911,18 @@ class Session:
                 await sink.abort()
             raise
 
+    # 실시간 스트리밍 싱크(브라우저 세션 전용). 기본 세션은 None = 완성된 문장만 말한다.
     def _new_hint_stream(self, paused: bool = False):
         """BrowserSession supplies the live eye/ear sink."""
         return None
 
+    # 진단 결과에 따른 첫 반응 문장 선택. 무엇이 틀렸는지는 여기서 말하지 않는다.
     @staticmethod
     def _work_reaction(state: StudentState) -> str:
         """What the tutor says it saw, before it hints. Never what is wrong."""
         return WORK_CHECK_REACTIONS.get(state.status, WORK_CHECK_DEFAULT)
 
+    # 확인 직후 이어서 열어 줄 다음 단계의 미리 쓰인 L1 질문(EXACT 매칭일 때만).
     def _forward_invite(self, ctx: ProblemContext, next_step: int) -> str | None:
         """The prewritten L1 for the step a confirmation is about to open.
 
@@ -1875,6 +1944,7 @@ class Session:
             return None
         return written
 
+    # 여기까지 잘했다는 확인 + 다음 단계를 여는 질문 한 줄을 조립한다.
     @staticmethod
     def _confirmed_line(
         state: StudentState, reference, invite: str | None = None
@@ -1912,6 +1982,7 @@ class Session:
             return WORK_CONFIRMED, None
         return f"맞아요! 여기까지 잘했어요. {guided_step_question(name, nxt.idx)}", nxt.idx
 
+    # 지금 찍힌 사진이 이미 풀던 그 문제인지. 해시가 어긋나도 수식·텍스트로 다시 판단한다.
     def _same_problem(self, rec: Recognition) -> bool:
         """Is this the worksheet we are already working on?
 
@@ -1943,6 +2014,7 @@ class Session:
         shorter, longer = sorted((a, b), key=len)
         return len(shorter) >= 20 and longer.startswith(shorter)
 
+    # 학생이 이미 끝낸 단계들의 기준 식 목록 — 칠판에 그려도 되는 범위.
     def _verified_steps(self, ctx: ProblemContext) -> list[str]:
         """Reference expressions for the steps the student has COMPLETED.
 
@@ -1962,6 +2034,7 @@ class Session:
             if s.idx <= state.last_correct_step and s.expression
         ]
 
+    # 다른 문제라는 적극적 증거가 있는지. 재인식 흔들림과 구분하기 위한 문턱.
     def _clearly_different_problem(self, rec: Recognition) -> bool:
         """POSITIVE evidence that this is another problem: equations that
         parse on both sides, compare pair by pair, and disagree. Anything
@@ -1987,6 +2060,7 @@ class Session:
             for a, b in zip(rec.equations, cached.equations)
         )
 
+    # 이번 사진에 맞는 ProblemContext를 얻는다: 같은 문제면 재사용, 새 문제면 매칭 + 백그라운드 풀이 시작.
     async def _problem_context(
         self, rec: Recognition, keep_current: bool = False
     ) -> ProblemContext:
@@ -2040,9 +2114,11 @@ class Session:
         )
         return self.ctx
 
+    # 학생이 첫 힌트를 듣는 동안, 백그라운드에서 기준 풀이를 쓰게 한다.
     def _start_solve(self, rec: Recognition, h: str) -> asyncio.Task:
         """Write the reference solution while the student hears the first hint."""
 
+        # 실제 풀이 호출 + 소요 시간 기록.
         async def solve() -> ReferenceSolution:
             started = time.monotonic()
             result = await asyncio.to_thread(self.deps.solver.solve, rec, h)
@@ -2052,6 +2128,7 @@ class Session:
         task = asyncio.create_task(solve())
         self._tasks.add(task)
 
+        # 실패해도 로그만 남기고 세션은 계속(회수되지 않은 예외 방지).
         def done(t: asyncio.Task) -> None:
             self._tasks.discard(t)
             # retrieve the exception so a student who never answers does not
@@ -2062,6 +2139,7 @@ class Session:
         task.add_done_callback(done)
         return task
 
+    # 필러를 정리한 뒤 한 문장 말한다. 반환값은 학생이 들었는지 여부(통째로 잘리면 False).
     async def _speak(self, text: str, *, final: bool = False) -> bool:
         """Say something to the student, after the filler has had its say.
 
@@ -2085,6 +2163,7 @@ class Session:
 
     # --- filling the thinking silence ----------------------------------------
 
+    # 생각이 길어질 때만 재생되는 필러를 건다. 답이 빨리 나오면 아무 말도 하지 않는다.
     def _start_filler(self, opener: str | None = None) -> None:
         """Begin a filler that will play only if the thinking outlasts it.
 
@@ -2105,6 +2184,7 @@ class Session:
         self._filler_lines = asyncio.Queue()
         self._filler = asyncio.create_task(self._fill_silence(bank, opener))
 
+    # 턴 중간에 끼워 넣을 한 줄(문제 낭독)을 필러 큐에 넣는다.
     def _narrate(self, text: str) -> None:
         """Queue a mid-turn line — the problem read back once recognition knows
         it. Spoken only while the turn is still thinking: the moment the real
@@ -2113,6 +2193,7 @@ class Session:
             return
         self._filler_lines.put_nowait(text)
 
+    # 필러 본체: 지연 시간이 지나면 오프닝을 말하고, 이어서 큐에 쌓인 낭독을 순서대로 말한다.
     async def _fill_silence(self, bank, opener: str | None = None) -> None:
         try:
             await asyncio.sleep(max(0.0, self.deps.settings.filler_delay_ms / 1000))
@@ -2138,6 +2219,7 @@ class Session:
         except Exception:  # noqa: BLE001 — a filler failure is not a lesson failure
             log.exception("filler playback failed; continuing in silence")
 
+    # 필러 마무리: 아직 말을 안 했으면 취소, 말하는 중이면 그 문장만 끝내고 나머지는 버린다.
     async def _settle_filler(self) -> None:
         """Never talk over the filler, and never make the student wait for one
         that has not started — or for narrations it never got to."""
@@ -2154,6 +2236,7 @@ class Session:
         except (asyncio.CancelledError, Exception):  # noqa: BLE001
             pass
 
+    # 실제 발화. 서버가 도는 기계의 스피커로 낸다(BrowserSession은 디바이스로 보내도록 덮어씀).
     async def _say(self, text: str, final: bool = False) -> None:
         """Say it on the machine running the server (same room as the student).
 
@@ -2172,6 +2255,7 @@ class Session:
             except Exception:
                 pass
 
+    # 검증된 식(예: 접선 l)은 그리기 모델을 기다리지 않고 즉시 칠판에 올린다.
     async def _publish_verified_scene(
         self,
         decision: Decision,
@@ -2276,6 +2360,7 @@ class Session:
         log.info("verified scene drawn immediately: %s", [c.label for c in spec.curves])
         return True
 
+    # 힌트를 말하는 동안 그림을 다시 그린다. 턴은 이걸 기다리지 않는다 — 그림은 있으면 좋은 것.
     async def _illustrate(
         self, decision: Decision, hint: str, board: tuple, problem_hash: str,
         student_said: str | None = None,
@@ -2408,6 +2493,7 @@ class Session:
             f", wiped {gone}" if gone else "", spec.why[:60],
         )
 
+    # 학생이 그림을 확대·이동·리셋했을 때, 같은 장면을 새 창(view)으로 다시 그려 보낸다.
     async def _adjust_view(self, event: str, data: dict) -> None:
         """The same scene through the window the student is choosing.
 
@@ -2486,12 +2572,14 @@ class Session:
             log.debug("could not send the adjusted figure (connection gone)")
         log.info("figure view %s -> %s", event, ctx.view or "auto")
 
+    # 대기 중이던 힌트에 효과 여부를 기록한다(되돌릴 수 있게 id도 기억).
     def _resolve_hint(self, hint_id: int, effective: bool) -> None:
         """Answer a pending hint, remembering which one — so a turn the student
         never hears can put it back."""
         self.store.mark_hint_effective(hint_id, effective)
         self._resolved_hint = hint_id
 
+    # 힌트 전달 마무리: 칠판 표시 → 그림 예약 → 말하기 → 힌트 이력 기록 → hint_issued 이벤트.
     async def _deliver(
         self, decision: Decision, text: str, problem_hash: str = "",
         board: tuple[str, ...] = (), student_said: str | None = None,
